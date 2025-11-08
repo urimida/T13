@@ -14,6 +14,8 @@ let navigationBar; // 네비게이션 바 이미지
 let bgImage; // 배경 이미지
 let searchInput; // 검색 입력 필드
 let bubbleCap; // 버블 캡 이미지
+let bubbleImages = []; // 버블 이미지들
+let bubbleData = []; // 버블 제목/태그 데이터
 
 // ---------- CONFIG ----------
 const BG_COLOR = "#1a1b1f";
@@ -69,6 +71,9 @@ let dragOffsetX = 0; // 드래그 시작 시 오프셋 X
 let dragOffsetY = 0; // 드래그 시작 시 오프셋 Y
 let panVelocityX = 0; // X 방향 이동 속도 (관성)
 let panVelocityY = 0; // Y 방향 이동 속도 (관성)
+let snapTargetX = null; // 스냅 타겟 X 오프셋
+let snapTargetY = null; // 스냅 타겟 Y 오프셋
+const SNAP_SPEED = 0.15; // 스냅 애니메이션 속도 (낮을수록 느림)
 
 // ---------- CLASSES ----------
 class FrameCircle {
@@ -90,7 +95,7 @@ class FrameCircle {
 }
 
 class Bubble {
-  constructor(gridX, gridY, hueSeed) {
+  constructor(gridX, gridY, hueSeed, imageIndex = null) {
     this.gridX = gridX; // 그리드 X 좌표
     this.gridY = gridY; // 그리드 Y 좌표
     this.hueSeed = hueSeed; // 색상 시드
@@ -100,11 +105,17 @@ class Bubble {
     this.r = BASE_BUBBLE_RADIUS; // 반지름
     this.copies = []; // 토러스 래핑 복사본 위치
     this.alpha = 1.0; // 투명도 (페이드아웃 효과용)
+    this.imageIndex = imageIndex; // 사용할 이미지 인덱스 (null이면 색상 사용)
     // 버블 설명 정보
-    this.name = `버블 ${
-      gridX + gridY * Math.ceil(Math.sqrt(TOTAL_BUBBLES)) + 1
-    }`;
-    this.description = `이것은 ${gridX}, ${gridY} 위치의 버블입니다.`;
+    if (imageIndex !== null && bubbleData[imageIndex]) {
+      this.name = bubbleData[imageIndex].title;
+      this.tags = bubbleData[imageIndex].tags;
+    } else {
+      this.name = `버블 ${
+        gridX + gridY * Math.ceil(Math.sqrt(TOTAL_BUBBLES)) + 1
+      }`;
+      this.tags = ["#버블", "#색상", "#기본"];
+    }
   }
 
   update(
@@ -300,7 +311,7 @@ class Bubble {
     if (this.alpha < 0.01) return;
 
     // 스프라이트 캐시 사용 (성능 최적화)
-    const { g, size } = getBubbleSprite(this.r, this.hueSeed);
+    const { g, size } = getBubbleSprite(this.r, this.hueSeed, this.imageIndex);
     push();
     drawingContext.save();
     drawingContext.globalAlpha = this.alpha; // 투명도 적용
@@ -340,9 +351,12 @@ function bubbleColor(seed) {
 }
 
 // 스프라이트 캐시 시스템 (성능 최적화)
-function getBubbleSprite(r, hueSeed) {
+function getBubbleSprite(r, hueSeed, imageIndex = null) {
   const bucket = Math.max(6, Math.round(r / SPRITE_STEP) * SPRITE_STEP);
-  const h = Math.floor((hueSeed * 137.5) % 360);
+  const h =
+    imageIndex !== null
+      ? `img${imageIndex}`
+      : Math.floor((hueSeed * 137.5) % 360);
   const key = `${bucket}|${h}`;
 
   if (SPRITES.has(key)) return SPRITES.get(key);
@@ -351,34 +365,76 @@ function getBubbleSprite(r, hueSeed) {
   const g = createGraphics(size, size);
   g.noStroke();
 
-  // 색상
-  const base = bubbleColor(hueSeed);
-  const outer = base.outer;
-  const inner = base.inner;
+  // 이미지가 있으면 이미지 사용, 없으면 색상 사용
+  if (
+    imageIndex !== null &&
+    bubbleImages[imageIndex] &&
+    bubbleImages[imageIndex].width > 0
+  ) {
+    // 이미지 사용
+    g.push();
+    g.imageMode(g.CENTER);
+    g.ellipseMode(g.CENTER);
 
-  // 그림자(오프스크린에서 한 번만)
-  g.drawingContext.save();
-  g.drawingContext.shadowBlur = 24;
-  g.drawingContext.shadowColor = "rgba(0,0,0,0.35)";
-  g.fill(outer);
-  g.circle(bucket, bucket, size);
-  g.drawingContext.restore();
+    // 클리핑 마스크로 원형으로 자르기
+    g.drawingContext.save();
+    g.drawingContext.beginPath();
+    g.drawingContext.arc(bucket, bucket, bucket, 0, Math.PI * 2);
+    g.drawingContext.clip();
 
-  // 글로스 그라디언트
-  if (BUBBLE_GLOSS) {
-    const grd = g.drawingContext.createRadialGradient(
-      bucket - bucket * 0.35,
-      bucket - bucket * 0.35,
-      bucket * 0.1,
-      bucket,
-      bucket,
-      bucket
-    );
-    grd.addColorStop(0, "rgba(255,255,255,0.45)");
-    grd.addColorStop(0.25, "rgba(255,255,255,0.20)");
-    grd.addColorStop(1, inner);
-    g.drawingContext.fillStyle = grd;
+    // 이미지 그리기 (크롭 및 스케일)
+    const img = bubbleImages[imageIndex];
+    const imgRatio = img.width / img.height;
+    const targetRatio = 1;
+
+    let drawW, drawH, offsetX, offsetY;
+    if (imgRatio > targetRatio) {
+      // 이미지가 더 넓음
+      drawH = size;
+      drawW = imgRatio * drawH;
+      offsetX = (size - drawW) / 2;
+      offsetY = 0;
+    } else {
+      // 이미지가 더 높음
+      drawW = size;
+      drawH = drawW / imgRatio;
+      offsetX = 0;
+      offsetY = (size - drawH) / 2;
+    }
+
+    g.image(img, bucket, bucket, drawW, drawH);
+    g.drawingContext.restore();
+    g.pop();
+  } else {
+    // 색상 사용
+    const base = bubbleColor(hueSeed);
+    const outer = base.outer;
+    const inner = base.inner;
+
+    // 그림자(오프스크린에서 한 번만)
+    g.drawingContext.save();
+    g.drawingContext.shadowBlur = 24;
+    g.drawingContext.shadowColor = "rgba(0,0,0,0.35)";
+    g.fill(outer);
     g.circle(bucket, bucket, size);
+    g.drawingContext.restore();
+
+    // 글로스 그라디언트
+    if (BUBBLE_GLOSS) {
+      const grd = g.drawingContext.createRadialGradient(
+        bucket - bucket * 0.35,
+        bucket - bucket * 0.35,
+        bucket * 0.1,
+        bucket,
+        bucket,
+        bucket
+      );
+      grd.addColorStop(0, "rgba(255,255,255,0.45)");
+      grd.addColorStop(0.25, "rgba(255,255,255,0.20)");
+      grd.addColorStop(1, inner);
+      g.drawingContext.fillStyle = grd;
+      g.circle(bucket, bucket, size);
+    }
   }
 
   // 캡 이미지(있다면)까지 합성해서 완성 스프라이트로 캐시
@@ -458,8 +514,8 @@ function stopAnim() {
 // 중앙 버블 설명창 그리기
 function drawBubbleInfo(bubble, centerX, centerY) {
   const infoY = bubble.pos.y + bubble.r + 30; // 버블 아래 30px
-  const infoWidth = 280;
-  const infoHeight = 80;
+  const infoWidth = 320;
+  const infoHeight = 90;
   const infoX = bubble.pos.x - infoWidth / 2;
 
   // 설명창 배경 (둥근 모서리)
@@ -522,13 +578,17 @@ function drawBubbleInfo(bubble, centerX, centerY) {
   textAlign(CENTER);
   textSize(18);
   textStyle(BOLD);
-  // TOP 대신 수동으로 Y 위치 조정
-  text(bubble.name, bubble.pos.x, infoY + 15);
+  // 제목
+  text(bubble.name, bubble.pos.x, infoY + 20);
 
-  fill(255, 255, 255, 0.7);
-  textSize(14);
-  textStyle(NORMAL);
-  text(bubble.description, bubble.pos.x, infoY + 40);
+  // 태그 3개
+  if (bubble.tags && bubble.tags.length > 0) {
+    fill(255, 255, 255, 0.7);
+    textSize(14);
+    textStyle(NORMAL);
+    const tagsText = bubble.tags.slice(0, 3).join("  "); // 최대 3개 태그, 공백으로 구분
+    text(tagsText, bubble.pos.x, infoY + 50);
+  }
   pop();
 }
 
@@ -545,6 +605,51 @@ function preload() {
     }
   });
   bubbleCap = loadImage("assets/public-imgs/bubble-cap.png");
+
+  // 버블 이미지 데이터 정의
+  const imageFiles = [
+    "akihabara.png",
+    "cafe.jpg",
+    "home.jpg",
+    "kyeongbokgung.png",
+    "paris.png",
+    "park.jpg",
+    "pool.jpg",
+    "Praha.png",
+    "rainy.png",
+    "school.jpg",
+    "seoul.jpg",
+    "street.png",
+    "terrace.jpg",
+    "town.png",
+    "work.jpg",
+  ];
+
+  bubbleData = [
+    {
+      title: "일본 도쿄 아키하바라",
+      tags: ["#밝은 분위기", "#감성적인", "#도시"],
+    },
+    { title: "카페 공간", tags: ["#따뜻한", "#편안한", "#모던"] },
+    { title: "집 안 공간", tags: ["#아늑한", "#편안한", "#일상"] },
+    { title: "경복궁", tags: ["#전통적인", "#우아한", "#역사"] },
+    { title: "파리 거리", tags: ["#로맨틱한", "#예술적인", "#유럽"] },
+    { title: "공원 풍경", tags: ["#자연", "#평화로운", "#푸른"] },
+    { title: "수영장", tags: ["#시원한", "#밝은", "#활기찬"] },
+    { title: "프라하", tags: ["#고풍스러운", "#아름다운", "#유럽"] },
+    { title: "비 오는 날", tags: ["#감성적인", "#차분한", "#몽환적인"] },
+    { title: "학교 공간", tags: ["#활기찬", "#젊은", "#학습"] },
+    { title: "서울 도시", tags: ["#현대적인", "#활기찬", "#도시"] },
+    { title: "도시 거리", tags: ["#활기찬", "#다채로운", "#도시"] },
+    { title: "테라스", tags: ["#편안한", "#자연", "#야외"] },
+    { title: "마을 풍경", tags: ["#평화로운", "#전원적인", "#자연"] },
+    { title: "작업 공간", tags: ["#집중", "#모던", "#프로페셔널"] },
+  ];
+
+  // 버블 이미지 로드
+  for (let i = 0; i < imageFiles.length; i++) {
+    bubbleImages.push(loadImage(`assets/bubble-imgs/${imageFiles[i]}`));
+  }
 }
 
 function setup() {
@@ -618,19 +723,46 @@ function draw() {
     background(BG_COLOR);
   }
 
-  // 패닝 애니메이션 업데이트 (관성)
+  // 패닝 애니메이션 업데이트 (관성 및 스냅)
   if (!isDragging) {
-    // 관성 이동
-    panVelocityX *= 0.95; // 감쇠
-    panVelocityY *= 0.95;
-    offsetX += panVelocityX;
-    offsetY += panVelocityY;
+    // 스냅 타겟이 있으면 부드럽게 스냅
+    if (snapTargetX !== null && snapTargetY !== null) {
+      const dx = snapTargetX - offsetX;
+      const dy = snapTargetY - offsetY;
+      const dist = sqrt(dx * dx + dy * dy);
 
-    // 속도가 매우 작아지면 정지
-    if (abs(panVelocityX) < 0.1 && abs(panVelocityY) < 0.1) {
-      panVelocityX = 0;
-      panVelocityY = 0;
-      stopAnim(); // 완전히 정지하면 렌더 멈춤
+      // 목표 위치에 충분히 가까우면 스냅 완료
+      if (dist < 0.1) {
+        offsetX = snapTargetX;
+        offsetY = snapTargetY;
+        snapTargetX = null;
+        snapTargetY = null;
+        panVelocityX = 0;
+        panVelocityY = 0;
+        stopAnim(); // 완전히 정지하면 렌더 멈춤
+      } else {
+        // 부드럽게 타겟으로 이동
+        offsetX = lerp(offsetX, snapTargetX, SNAP_SPEED);
+        offsetY = lerp(offsetY, snapTargetY, SNAP_SPEED);
+        panVelocityX = 0; // 스냅 중에는 관성 무시
+        panVelocityY = 0;
+      }
+    } else {
+      // 관성 이동
+      panVelocityX *= 0.95; // 감쇠
+      panVelocityY *= 0.95;
+      offsetX += panVelocityX;
+      offsetY += panVelocityY;
+
+      // 속도가 매우 작아지면 스냅 시작
+      if (abs(panVelocityX) < 0.1 && abs(panVelocityY) < 0.1) {
+        panVelocityX = 0;
+        panVelocityY = 0;
+        // 스냅 타겟이 없으면 스냅 시작
+        if (snapTargetX === null && snapTargetY === null) {
+          snapToCenterBubble();
+        }
+      }
     }
   }
 
@@ -642,7 +774,7 @@ function draw() {
     BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
 
   const centerX = width * CENTER_X_RATIO;
-  const centerY = BUBBLE_AREA_CENTER; // 검색창 아래 영역의 중앙
+  const centerY = BUBBLE_AREA_CENTER - 20; // 검색창 아래 영역의 중앙에서 20픽셀 위
 
   // 버블 업데이트 및 그리기 (화면에 보이는 것만)
   // 먼저 모든 버블 업데이트하여 중앙 버블 찾기 (1차 업데이트)
@@ -756,6 +888,105 @@ function getSearchMetrics() {
   const X = (width - W) / 2;
   const Y = SEARCH_Y;
   return { W, H, X, Y, bottom: Y + H };
+}
+
+// 중앙 버블을 화면 중앙에 고정하는 함수 (타겟만 설정)
+function snapToCenterBubble() {
+  // 중심 위치 계산
+  const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
+  const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
+  const BUBBLE_AREA_BOTTOM = height - 10;
+  const BUBBLE_AREA_CENTER =
+    BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
+
+  const centerX = width * CENTER_X_RATIO;
+  const centerY = BUBBLE_AREA_CENTER - 20; // 검색창 아래 영역의 중앙에서 20픽셀 위
+
+  // 모든 버블 업데이트하여 현재 위치 계산
+  bubbles.forEach((b) => {
+    b.update(centerX, centerY, offsetX, offsetY, null);
+  });
+
+  // 중앙에 가장 가까운 버블 찾기
+  let centerBubble = null;
+  let minDistToCenter = Infinity;
+  bubbles.forEach((b) => {
+    const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
+    if (distToCenter < minDistToCenter) {
+      minDistToCenter = distToCenter;
+      centerBubble = b;
+    }
+  });
+
+  // 중앙 버블이 있으면 그 버블이 화면 중앙에 오도록 타겟 오프셋 계산
+  if (centerBubble) {
+    // 피시아이 효과를 고려하여 반복적으로 정확한 오프셋 계산
+    let hexX = centerBubble.gridX * HEX_SPACING * 1.5;
+    let hexY =
+      centerBubble.gridY * HEX_SPACING * sqrt(3) +
+      ((centerBubble.gridX % 2) * HEX_SPACING * sqrt(3)) / 2;
+
+    // 현재 오프셋을 기준으로 타겟 오프셋 계산
+    let targetOffsetX = offsetX;
+    let targetOffsetY = offsetY;
+
+    // 반복적으로 조정하여 정확한 위치 찾기 (최대 5회)
+    for (let iter = 0; iter < 5; iter++) {
+      // 타겟 오프셋으로 버블 위치 계산
+      const worldWidth = WORLD_W;
+      const worldHeight = WORLD_H;
+      let worldX = hexX + targetOffsetX;
+      let worldY = hexY + targetOffsetY;
+
+      // 토러스 래핑
+      worldX = ((worldX % worldWidth) + worldWidth) % worldWidth;
+      worldY = ((worldY % worldHeight) + worldHeight) % worldHeight;
+
+      // 화면 중심 기준 상대 위치
+      let screenX = worldX - centerX;
+      let screenY = worldY - centerY;
+
+      // 토러스 래핑
+      if (abs(screenX) > worldWidth / 2) {
+        screenX = screenX > 0 ? screenX - worldWidth : screenX + worldWidth;
+      }
+      if (abs(screenY) > worldHeight / 2) {
+        screenY = screenY > 0 ? screenY - worldHeight : screenY + worldHeight;
+      }
+
+      // 피시아이 효과 적용 전 거리
+      const distFromCenter = sqrt(screenX * screenX + screenY * screenY);
+      const maxDist = sqrt(width * width + height * height) / 2;
+      const normalizedDist = min(distFromCenter / maxDist, 1);
+      const fisheyeFactor = 1 + (1 - normalizedDist) * FISHEYE_STRENGTH;
+
+      // 피시아이 효과 적용 후 화면상 위치
+      const displayX = centerX + screenX * fisheyeFactor;
+      const displayY = centerY + screenY * fisheyeFactor;
+
+      // 목표 위치와의 차이
+      const dx = centerX - displayX;
+      const dy = centerY - displayY;
+
+      // 차이가 충분히 작으면 종료
+      if (abs(dx) < 0.1 && abs(dy) < 0.1) break;
+
+      // 피시아이 효과를 역계산하여 타겟 오프셋 조정
+      const reverseScreenX = dx / fisheyeFactor;
+      const reverseScreenY = dy / fisheyeFactor;
+
+      // 타겟 오프셋 업데이트
+      targetOffsetX += reverseScreenX;
+      targetOffsetY += reverseScreenY;
+    }
+
+    // 타겟 오프셋 설정 (부드럽게 이동하도록)
+    snapTargetX = targetOffsetX;
+    snapTargetY = targetOffsetY;
+
+    // 애니메이션 시작
+    startAnim();
+  }
 }
 
 function clampBubbleToCanvas(b) {
@@ -910,11 +1141,14 @@ function buildBubbles() {
   // 35개 버블 생성 (헥사곤 그리드 패턴)
   const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES)); // 대략 6x6 그리드
   let count = 0;
+  const maxImageIndex = Math.min(bubbleImages.length, TOTAL_BUBBLES);
 
   for (let y = 0; y < gridSize && count < TOTAL_BUBBLES; y++) {
     for (let x = 0; x < gridSize && count < TOTAL_BUBBLES; x++) {
       const hueSeed = count + 1;
-      bubbles.push(new Bubble(x, y, hueSeed));
+      // 이미지가 있으면 이미지 인덱스 사용, 없으면 null (색상 사용)
+      const imageIndex = count < maxImageIndex ? count : null;
+      bubbles.push(new Bubble(x, y, hueSeed, imageIndex));
       count++;
     }
   }
@@ -941,6 +1175,9 @@ function mousePressed() {
   dragOffsetY = offsetY;
   panVelocityX = 0;
   panVelocityY = 0;
+  // 드래그 시작 시 스냅 타겟 취소
+  snapTargetX = null;
+  snapTargetY = null;
 }
 
 function mouseDragged() {
@@ -962,6 +1199,11 @@ function mouseDragged() {
 function mouseReleased() {
   if (!isDragging) return;
   isDragging = false;
+
+  // 드래그가 끝난 직후 바로 중앙 버블로 스냅
+  // 관성이 시작되기 전에 스냅하여 버블이 흐르지 않도록 함
+  snapToCenterBubble();
+
   // 관성은 draw()에서 처리됨
 }
 
@@ -977,6 +1219,9 @@ function touchStarted() {
     dragOffsetY = offsetY;
     panVelocityX = 0;
     panVelocityY = 0;
+    // 드래그 시작 시 스냅 타겟 취소
+    snapTargetX = null;
+    snapTargetY = null;
     return false; // 기본 동작 방지
   }
   return false;
@@ -1004,6 +1249,11 @@ function touchMoved() {
 function touchEnded() {
   if (!isDragging) return false;
   isDragging = false;
+
+  // 드래그가 끝난 직후 바로 중앙 버블로 스냅
+  // 관성이 시작되기 전에 스냅하여 버블이 흐르지 않도록 함
+  snapToCenterBubble();
+
   return false; // 기본 동작 방지
 }
 
