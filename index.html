@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>T13 프로젝트 통합</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        background: linear-gradient(135deg, #0f0f10 0%, #1a1b1f 100%);
+        color: #ffffff;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        overflow-x: hidden;
+      }
+
+      .container {
+        max-width: 1200px;
+        width: 100%;
+        text-align: center;
+      }
+
+      h1 {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+        background: linear-gradient(135deg, #ffffff 0%, #a0a0a0 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        font-weight: 700;
+      }
+
+      .subtitle {
+        font-size: 1.2rem;
+        color: rgba(255, 255, 255, 0.7);
+        margin-bottom: 3rem;
+      }
+
+      .projects-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 2rem;
+        margin-top: 2rem;
+      }
+
+      .project-card {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        padding: 2.5rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        backdrop-filter: blur(10px);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .project-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(
+          135deg,
+          rgba(255, 255, 255, 0.1) 0%,
+          rgba(255, 255, 255, 0.05) 100%
+        );
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+
+      .project-card:hover {
+        transform: translateY(-8px);
+        border-color: rgba(255, 255, 255, 0.3);
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+      }
+
+      .project-card:hover::before {
+        opacity: 1;
+      }
+
+      .project-icon {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+        display: block;
+      }
+
+      .project-title {
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+        position: relative;
+        z-index: 1;
+      }
+
+      .project-description {
+        font-size: 1rem;
+        color: rgba(255, 255, 255, 0.7);
+        line-height: 1.6;
+        position: relative;
+        z-index: 1;
+      }
+
+      .project-badge {
+        display: inline-block;
+        background: rgba(59, 130, 246, 0.2);
+        color: #60a5fa;
+        padding: 0.25rem 0.75rem;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        margin-top: 1rem;
+        position: relative;
+        z-index: 1;
+      }
+
+      .project-status {
+        display: inline-block;
+        padding: 0.5rem 1rem;
+        border-radius: 12px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        margin-top: 1rem;
+        position: relative;
+        z-index: 1;
+      }
+
+      .project-status.ready {
+        background: rgba(34, 197, 94, 0.2);
+        color: #4ade80;
+      }
+
+      .project-status.not-ready {
+        background: rgba(239, 68, 68, 0.2);
+        color: #f87171;
+      }
+
+      .build-instructions {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-top: 2rem;
+        text-align: left;
+        max-width: 600px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      .build-instructions h3 {
+        font-size: 1.1rem;
+        margin-bottom: 1rem;
+        color: #ffffff;
+      }
+
+      .build-instructions code {
+        background: rgba(0, 0, 0, 0.3);
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        font-family: "Courier New", monospace;
+        font-size: 0.9rem;
+        color: #60a5fa;
+      }
+
+      .build-instructions ol {
+        margin-left: 1.5rem;
+        margin-top: 0.5rem;
+        line-height: 2;
+      }
+
+      .build-instructions li {
+        margin-bottom: 0.5rem;
+        color: rgba(255, 255, 255, 0.8);
+      }
+
+      @media (max-width: 768px) {
+        h1 {
+          font-size: 2rem;
+        }
+
+        .subtitle {
+          font-size: 1rem;
+        }
+
+        .projects-grid {
+          grid-template-columns: 1fr;
+          gap: 1.5rem;
+        }
+
+        .project-card {
+          padding: 2rem;
+        }
+      }
+
+      /* 로딩 애니메이션 */
+      .loading {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(15, 15, 16, 0.95);
+        z-index: 9999;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+      }
+
+      .loading.active {
+        display: flex;
+      }
+
+      .spinner {
+        width: 50px;
+        height: 50px;
+        border: 4px solid rgba(255, 255, 255, 0.1);
+        border-top-color: #ffffff;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .loading-text {
+        margin-top: 1rem;
+        color: rgba(255, 255, 255, 0.8);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>T13 프로젝트</h1>
+      <p class="subtitle">세 가지 인터랙티브 프로젝트를 탐색하세요</p>
+
+      <div class="projects-grid">
+        <div class="project-card" data-project="analyze" id="analyze-card">
+          <span class="project-icon">📊</span>
+          <h2 class="project-title">분석</h2>
+          <p class="project-description">
+            React 기반의 인터랙티브 분석 도구입니다. 동적 프레임 레이아웃과
+            다양한 UI 컴포넌트를 제공합니다.
+          </p>
+          <span class="project-badge">React + Vite</span>
+          <div
+            class="project-status not-ready"
+            id="analyze-status"
+            style="display: none"
+          >
+            빌드 필요
+          </div>
+        </div>
+
+        <div class="project-card" data-project="circle-to-capture">
+          <span class="project-icon">⭕</span>
+          <h2 class="project-title">서클 투 캡쳐</h2>
+          <p class="project-description">
+            p5.js를 활용한 인터랙티브 시각화 프로젝트입니다. 원형 요소와 캡쳐
+            기능을 제공합니다.
+          </p>
+          <span class="project-badge">p5.js</span>
+        </div>
+
+        <div class="project-card" data-project="explorer">
+          <span class="project-icon">🔍</span>
+          <h2 class="project-title">익스플로러</h2>
+          <p class="project-description">
+            헥사곤 패턴의 인터랙티브 버블 탐색기입니다. 스와이프로 배경을
+            이동하며 탐색할 수 있습니다.
+          </p>
+          <span class="project-badge">p5.js</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <p class="loading-text">프로젝트를 불러오는 중...</p>
+    </div>
+
+    <div
+      class="build-instructions"
+      id="build-instructions"
+      style="display: none"
+    >
+      <h3>🔧 분석 프로젝트 빌드 방법</h3>
+      <ol>
+        <li>
+          <strong>자동 빌드 (권장):</strong><br />
+          Windows: <code>build-all.bat</code> 파일을 더블클릭<br />
+          Mac/Linux: 터미널에서 <code>node build-all.js</code> 실행
+        </li>
+        <li>
+          <strong>수동 빌드:</strong><br />
+          <code>cd analyze</code> → <code>npm install</code> →
+          <code>npm run build</code>
+        </li>
+        <li>빌드 완료 후 페이지를 새로고침하세요.</li>
+      </ol>
+    </div>
+
+    <script>
+      const projectCards = document.querySelectorAll(".project-card");
+      const loading = document.getElementById("loading");
+      const analyzeStatus = document.getElementById("analyze-status");
+      const buildInstructions = document.getElementById("build-instructions");
+
+      // 페이지 로드 시 빌드 상태 확인
+      window.addEventListener("DOMContentLoaded", async () => {
+        await checkBuildStatus();
+      });
+
+      async function checkBuildStatus() {
+        try {
+          const response = await fetch("analyze/dist/index.html", {
+            method: "HEAD",
+          });
+          if (response.ok) {
+            analyzeStatus.textContent = "✅ 준비됨";
+            analyzeStatus.className = "project-status ready";
+            analyzeStatus.style.display = "inline-block";
+            buildInstructions.style.display = "none";
+          } else {
+            analyzeStatus.style.display = "inline-block";
+            buildInstructions.style.display = "block";
+          }
+        } catch (error) {
+          analyzeStatus.style.display = "inline-block";
+          buildInstructions.style.display = "block";
+        }
+      }
+
+      projectCards.forEach((card) => {
+        card.addEventListener("click", function () {
+          const project = this.dataset.project;
+          navigateToProject(project);
+        });
+      });
+
+      function navigateToProject(project) {
+        loading.classList.add("active");
+
+        // 짧은 딜레이 후 이동 (로딩 애니메이션 표시)
+        setTimeout(() => {
+          let path = "";
+
+          switch (project) {
+            case "analyze":
+              // React 앱은 빌드 후 dist 폴더에 있음
+              path = "analyze/dist/index.html";
+              break;
+            case "circle-to-capture":
+              path = "circle-to-capture/index.html";
+              break;
+            case "explorer":
+              path = "explorer/index.html";
+              break;
+          }
+
+          // 파일 존재 여부 확인 후 이동
+          fetch(path, { method: "HEAD" })
+            .then((response) => {
+              if (response.ok) {
+                window.location.href = path;
+              } else {
+                if (project === "analyze") {
+                  const message = `분석 프로젝트가 빌드되지 않았습니다.\n\n빌드 방법:\n\n1. 자동 빌드 (권장):\n   - Windows: build-all.bat 파일 더블클릭\n   - Mac/Linux: 터미널에서 "node build-all.js" 실행\n\n2. 수동 빌드:\n   - analyze 폴더로 이동\n   - npm install 실행\n   - npm run build 실행\n\n빌드 완료 후 페이지를 새로고침하세요.`;
+                  alert(message);
+                  // 빌드 안내 표시
+                  buildInstructions.scrollIntoView({ behavior: "smooth" });
+                } else {
+                  alert("프로젝트를 찾을 수 없습니다.");
+                }
+                loading.classList.remove("active");
+              }
+            })
+            .catch(() => {
+              if (project === "analyze") {
+                const message = `분석 프로젝트가 빌드되지 않았습니다.\n\n빌드 방법:\n\n1. 자동 빌드 (권장):\n   - Windows: build-all.bat 파일 더블클릭\n   - Mac/Linux: 터미널에서 "node build-all.js" 실행\n\n2. 수동 빌드:\n   - analyze 폴더로 이동\n   - npm install 실행\n   - npm run build 실행\n\n빌드 완료 후 페이지를 새로고침하세요.`;
+                alert(message);
+                // 빌드 안내 표시
+                buildInstructions.scrollIntoView({ behavior: "smooth" });
+              } else {
+                alert("프로젝트를 찾을 수 없습니다.");
+              }
+              loading.classList.remove("active");
+            });
+        }, 300);
+      }
+    </script>
+  </body>
+</html>

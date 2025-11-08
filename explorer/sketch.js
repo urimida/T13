@@ -534,17 +534,17 @@ function drawBubbleInfo(bubble, centerX, centerY) {
 
 // ---------- p5 LIFECYCLE ----------
 function preload() {
-  searchIcon = loadImage("assets/imgs/lucide_search.svg");
-  captureButton = loadImage("assets/imgs/capture-button.png");
-  workroomButton = loadImage("assets/imgs/workroom-button.png");
-  navigationBar = loadImage("assets/imgs/navigation-bar.png");
-  bgImage = loadImage("assets/imgs/bg.png", () => {
+  searchIcon = loadImage("assets/public-imgs/lucide_search.svg");
+  captureButton = loadImage("assets/public-imgs/capture-button.png");
+  workroomButton = loadImage("assets/public-imgs/workroom-button.png");
+  navigationBar = loadImage("assets/public-imgs/navigation-bar.png");
+  bgImage = loadImage("assets/public-imgs/bg.png", () => {
     // 이미지 로드 후 배경 버퍼 생성
     if (typeof width !== "undefined" && width > 0) {
       redrawBackgroundBuffer();
     }
   });
-  bubbleCap = loadImage("assets/imgs/bubble-cap.png");
+  bubbleCap = loadImage("assets/public-imgs/bubble-cap.png");
 }
 
 function setup() {
