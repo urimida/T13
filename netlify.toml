@@ -9,6 +9,13 @@
   NODE_VERSION = "20"
 
 # 리다이렉트 규칙: 모든 경로를 index.html로 리다이렉트 (SPA 지원)
+# React 앱 SPA 라우팅 지원 (더 구체적인 경로를 먼저 처리)
+[[redirects]]
+  from = "/analyze/dist/*"
+  to = "/analyze/dist/index.html"
+  status = 200
+
+# 메인 페이지
 [[redirects]]
   from = "/*"
   to = "/index.html"

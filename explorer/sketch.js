@@ -16,6 +16,10 @@ let searchInput; // 검색 입력 필드
 let bubbleCap; // 버블 캡 이미지
 let bubbleImages = []; // 버블 이미지들
 let bubbleData = []; // 버블 제목/태그 데이터
+let pretendardFont; // Pretendard 폰트
+let showModal = false; // 모달 표시 여부
+let showToggles = false; // 토글 표시 여부
+let selectedToggles = []; // 선택된 토글들 (1~5)
 
 // ---------- CONFIG ----------
 const BG_COLOR = "#1a1b1f";
@@ -73,6 +77,7 @@ let panVelocityX = 0; // X 방향 이동 속도 (관성)
 let panVelocityY = 0; // Y 방향 이동 속도 (관성)
 let snapTargetX = null; // 스냅 타겟 X 오프셋
 let snapTargetY = null; // 스냅 타겟 Y 오프셋
+let snapCompleted = false; // 스냅이 완료되었는지 여부
 const SNAP_SPEED = 0.15; // 스냅 애니메이션 속도 (낮을수록 느림)
 
 // ---------- CLASSES ----------
@@ -106,15 +111,20 @@ class Bubble {
     this.copies = []; // 토러스 래핑 복사본 위치
     this.alpha = 1.0; // 투명도 (페이드아웃 효과용)
     this.imageIndex = imageIndex; // 사용할 이미지 인덱스 (null이면 색상 사용)
+    this.isPopping = false; // 팡 터지는 애니메이션 중인지
+    this.popProgress = 0; // 팡 터지는 진행도 (0~1)
+    this.popStartTime = 0; // 팡 터지기 시작 시간
     // 버블 설명 정보
     if (imageIndex !== null && bubbleData[imageIndex]) {
       this.name = bubbleData[imageIndex].title;
       this.tags = bubbleData[imageIndex].tags;
+      this.attributes = bubbleData[imageIndex].attributes || []; // 속성 추가
     } else {
       this.name = `버블 ${
         gridX + gridY * Math.ceil(Math.sqrt(TOTAL_BUBBLES)) + 1
       }`;
       this.tags = ["#버블", "#색상", "#기본"];
+      this.attributes = []; // 기본 속성 없음
     }
   }
 
@@ -282,27 +292,34 @@ class Bubble {
     this.pos.set(displayX, displayY);
 
     // 페이드아웃 효과: 버블이 화면 밖으로 나가거나 허용 영역 밖으로 나갈 때 투명도 감소
-    const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
-    const bubbleTop = displayY - this.r;
-    const bubbleBottom = displayY + this.r;
+    // 단, 팡 터지는 중이 아니고 필터링된 버블이 아닐 때만 적용
+    // 필터링된 버블은 _isFiltered 플래그로 확인
+    if (!this.isPopping && !this._isFiltered) {
+      const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
+      const bubbleTop = displayY - this.r;
+      const bubbleBottom = displayY + this.r;
 
-    const isOnScreen =
-      displayX + this.r > 0 &&
-      displayX - this.r < width &&
-      displayY + this.r > 0 &&
-      displayY - this.r < height;
+      const isOnScreen =
+        displayX + this.r > 0 &&
+        displayX - this.r < width &&
+        displayY + this.r > 0 &&
+        displayY - this.r < height;
 
-    const isInAllowedArea =
-      bubbleTop >= SEARCH_BOTTOM && // 검색창 아래
-      bubbleBottom <= height - 10; // 화면 하단 위
+      const isInAllowedArea =
+        bubbleTop >= SEARCH_BOTTOM && // 검색창 아래
+        bubbleBottom <= height - 10; // 화면 하단 위
 
-    // 버블이 보여야 할 때는 alpha를 1.0으로 복원, 사라져야 할 때는 감소
-    if (isOnScreen && isInAllowedArea) {
-      // 보이는 상태: 서서히 나타남
-      this.alpha = lerp(this.alpha, 1.0, 0.2);
-    } else {
-      // 사라지는 상태: 서서히 사라짐
-      this.alpha = lerp(this.alpha, 0.0, 0.15);
+      // 버블이 보여야 할 때는 alpha를 1.0으로 복원, 사라져야 할 때는 감소
+      if (isOnScreen && isInAllowedArea) {
+        // 보이는 상태: 서서히 나타남
+        this.alpha = lerp(this.alpha, 1.0, 0.2);
+      } else {
+        // 사라지는 상태: 서서히 사라짐
+        this.alpha = lerp(this.alpha, 0.0, 0.15);
+      }
+    } else if (this._isFiltered && !this.isPopping) {
+      // 필터링된 버블은 항상 alpha를 1.0으로 유지 (페이드아웃 로직 건너뛰기)
+      this.alpha = 1.0;
     }
   }
 
@@ -314,9 +331,21 @@ class Bubble {
     const { g, size } = getBubbleSprite(this.r, this.hueSeed, this.imageIndex);
     push();
     drawingContext.save();
-    drawingContext.globalAlpha = this.alpha; // 투명도 적용
-    imageMode(CENTER);
-    image(g, x, y, size, size); // 매 프레임 경량 복사만
+
+    // 팡 터지는 애니메이션
+    if (this.isPopping && this.popProgress < 1.0) {
+      const scale = 1.0 + this.popProgress * 1.5; // 1.0에서 2.5배까지
+      const scaledSize = size * scale;
+      drawingContext.globalAlpha = this.alpha; // 투명도 적용
+      imageMode(CENTER);
+      image(g, x, y, scaledSize, scaledSize); // 크기가 커지면서 그리기
+    } else {
+      // 일반 버블 그리기
+      drawingContext.globalAlpha = this.alpha; // 투명도 적용
+      imageMode(CENTER);
+      image(g, x, y, size, size); // 매 프레임 경량 복사만
+    }
+
     drawingContext.restore();
     pop();
   }
@@ -511,6 +540,257 @@ function stopAnim() {
   }
 }
 
+// 중앙 버블 이미지/색상만 그리기 (캡 없이)
+function drawCenterBubbleImage(bubble) {
+  if (bubble.alpha < 0.01) return;
+
+  const x = bubble.pos.x;
+  const y = bubble.pos.y;
+  const r = bubble.r;
+  const size = r * 2;
+
+  push();
+  drawingContext.save();
+  drawingContext.globalAlpha = bubble.alpha;
+
+  // 클리핑 마스크로 원형으로 자르기
+  drawingContext.beginPath();
+  drawingContext.arc(x, y, r, 0, Math.PI * 2);
+  drawingContext.clip();
+
+  // 이미지가 있으면 이미지 사용, 없으면 색상 사용
+  if (
+    bubble.imageIndex !== null &&
+    bubbleImages[bubble.imageIndex] &&
+    bubbleImages[bubble.imageIndex].width > 0
+  ) {
+    // 이미지 사용
+    imageMode(CENTER);
+    const img = bubbleImages[bubble.imageIndex];
+    const imgRatio = img.width / img.height;
+
+    let drawW, drawH;
+    if (imgRatio > 1) {
+      drawH = size;
+      drawW = imgRatio * drawH;
+    } else {
+      drawW = size;
+      drawH = drawW / imgRatio;
+    }
+
+    image(img, x, y, drawW, drawH);
+  } else {
+    // 색상 사용
+    const base = bubbleColor(bubble.hueSeed);
+    const outer = base.outer;
+    const inner = base.inner;
+
+    // 그림자
+    drawingContext.shadowBlur = 24;
+    drawingContext.shadowColor = "rgba(0,0,0,0.35)";
+    fill(outer);
+    circle(x, y, size);
+
+    // 글로스 그라디언트
+    if (BUBBLE_GLOSS) {
+      const grd = drawingContext.createRadialGradient(
+        x - r * 0.35,
+        y - r * 0.35,
+        r * 0.1,
+        x,
+        y,
+        r
+      );
+      grd.addColorStop(0, "rgba(255,255,255,0.45)");
+      grd.addColorStop(0.25, "rgba(255,255,255,0.20)");
+      grd.addColorStop(1, inner);
+      drawingContext.fillStyle = grd;
+      circle(x, y, size);
+    }
+  }
+
+  drawingContext.restore();
+  pop();
+}
+
+// 중앙 버블에 빛 효과 그리기 (캡과 사진 사이)
+function drawBubbleLightEffect(bubble) {
+  push();
+  drawingContext.save();
+
+  // 버블 중심과 반지름
+  const x = bubble.pos.x;
+  const y = bubble.pos.y;
+  const r = bubble.r;
+
+  // 시간에 따라 빛이 왼쪽 위에서 오른쪽 위로 이동 (0~1 사이 값)
+  const time = (millis() / 3000) % 1; // 3초 주기
+
+  // 각도 범위: 왼쪽 위(-135도)에서 오른쪽 위(-45도)로, 약 20픽셀 아래로 이동
+  // -135도 = -3π/4, -45도 = -π/4
+  // 20픽셀 아래로 이동하기 위해 각도를 약간 조정
+  const offsetPixels = 20; // 아래로 이동할 픽셀 수
+  const angleOffset = Math.asin(offsetPixels / r); // 반지름 대비 각도 오프셋
+
+  const startAngle = (-Math.PI * 3) / 4 + angleOffset; // 왼쪽 위에서 약간 아래
+  const endAngle = -Math.PI / 4 + angleOffset; // 오른쪽 위에서 약간 아래
+  const angleRange = endAngle - startAngle;
+  const lightAngle = startAngle + time * angleRange; // 왼쪽 위에서 오른쪽 위로 이동
+
+  // 빛의 위치 (원 둘레를 거꾸로 따라 이동 - 원의 바깥쪽 경로)
+  // 반지름을 반전시켜서 원의 바깥쪽 경로를 따라 이동
+  const innerRadius = r * 0.7; // 안쪽 반지름
+  const outerRadius = r * 0.95; // 바깥쪽 반지름
+  const lightRadius = outerRadius - time * (outerRadius - innerRadius); // 시간에 따라 바깥에서 안으로
+  const lightX = x + Math.cos(lightAngle) * lightRadius;
+  let lightY = y + Math.sin(lightAngle) * lightRadius;
+
+  // 사라질 때(끝 부분) 10픽셀 위로 이동
+  const fadeOutDurationForY = 0.15; // 끝 부분 15% 구간
+  if (time > 1 - fadeOutDurationForY) {
+    const fadeOutProgress =
+      (time - (1 - fadeOutDurationForY)) / fadeOutDurationForY; // 0~1
+    lightY -= 10 * fadeOutProgress; // 점진적으로 위로 이동
+  }
+
+  // 클리핑 마스크로 원형으로 자르기
+  drawingContext.beginPath();
+  drawingContext.arc(x, y, r, 0, Math.PI * 2);
+  drawingContext.clip();
+
+  // 빛의 크기: 중간(-90도 + 오프셋)에서 가장 크고, 양 끝에서 작게
+  const centerAngle = -Math.PI / 2 + angleOffset; // 위쪽 중앙 (-90도)에서 약간 아래
+  const angleDiff = Math.abs(lightAngle - centerAngle); // 중앙으로부터의 각도 차이
+  const maxAngleDiff = Math.PI / 4; // 최대 각도 차이 (45도)
+  const sizeFactor = 1 - (angleDiff / maxAngleDiff) * 0.5; // 중간에서 1.0, 양 끝에서 0.5
+  const baseLightSize = r * 0.6 * 1.5; // 기본 빛 크기 (1.5배 증가)
+  const lightSize = baseLightSize * sizeFactor;
+
+  // 시작과 끝 부분에서 페이드 인/아웃 효과 (부드러운 전환)
+  const fadeInDuration = 0.15; // 시작 부분 15% 구간에서 페이드 인
+  const fadeOutDuration = 0.15; // 끝 부분 15% 구간에서 페이드 아웃
+  let fadeFactor = 1.0;
+
+  if (time < fadeInDuration) {
+    // 시작 부분: 페이드 인
+    fadeFactor = time / fadeInDuration;
+  } else if (time > 1 - fadeOutDuration) {
+    // 끝 부분: 페이드 아웃
+    fadeFactor = (1 - time) / fadeOutDuration;
+  }
+
+  // 빛 효과 그리기 (자연스러운 노출값 집중 효과)
+  // 중심부가 매우 밝고 강렬한 빛
+  const coreGradient = drawingContext.createRadialGradient(
+    lightX,
+    lightY,
+    0,
+    lightX,
+    lightY,
+    lightSize * 0.3
+  );
+
+  // 빛의 강도가 시간에 따라 변하도록 (펄스 효과)
+  const pulse = (Math.sin(millis() / 800) + 1) / 2; // 0~1 사이 값
+  const baseOpacity = 0.7 + pulse * 0.25; // 0.7~0.95 사이 (외곽 빛용)
+  const lightOpacity = baseOpacity * fadeFactor; // 페이드 효과 적용
+
+  // 안쪽 빛(중심부)만 희미하게
+  const innerLightOpacity = baseOpacity * 0.4 * fadeFactor; // 안쪽 빛은 40%만
+
+  // 중심부: 매우 밝은 흰색 (노출값 과다 느낌, 희미하게)
+  coreGradient.addColorStop(0, `rgba(255, 255, 255, ${innerLightOpacity})`);
+  coreGradient.addColorStop(
+    0.3,
+    `rgba(255, 255, 240, ${innerLightOpacity * 0.9})`
+  );
+  coreGradient.addColorStop(
+    0.6,
+    `rgba(255, 250, 200, ${innerLightOpacity * 0.6})`
+  );
+  coreGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+
+  drawingContext.fillStyle = coreGradient;
+  drawingContext.fillRect(x - r, y - r, r * 2, r * 2);
+
+  // 색수차 효과 (무지개색 스펙트럼) - 빛 번짐
+  const chromaticGradient = drawingContext.createRadialGradient(
+    lightX,
+    lightY,
+    lightSize * 0.2,
+    lightX,
+    lightY,
+    lightSize * 1.2
+  );
+
+  // 색수차 색상 (무지개 스펙트럼)
+  const chromaticOpacity = lightOpacity * 0.4 * fadeFactor; // 원래대로
+  chromaticGradient.addColorStop(
+    0,
+    `rgba(255, 200, 150, ${chromaticOpacity * 0.3})`
+  ); // 주황
+  chromaticGradient.addColorStop(
+    0.2,
+    `rgba(255, 150, 200, ${chromaticOpacity * 0.4})`
+  ); // 분홍
+  chromaticGradient.addColorStop(
+    0.4,
+    `rgba(200, 150, 255, ${chromaticOpacity * 0.5})`
+  ); // 보라
+  chromaticGradient.addColorStop(
+    0.6,
+    `rgba(150, 200, 255, ${chromaticOpacity * 0.4})`
+  ); // 파랑
+  chromaticGradient.addColorStop(
+    0.8,
+    `rgba(150, 255, 200, ${chromaticOpacity * 0.3})`
+  ); // 청록
+  chromaticGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+
+  drawingContext.fillStyle = chromaticGradient;
+  drawingContext.fillRect(x - r, y - r, r * 2, r * 2);
+
+  // 외곽 빛 번짐 (더 넓은 범위)
+  const bloomGradient = drawingContext.createRadialGradient(
+    lightX,
+    lightY,
+    lightSize * 0.5,
+    lightX,
+    lightY,
+    lightSize * 1.5
+  );
+
+  const bloomOpacity = lightOpacity * 0.2 * fadeFactor; // 원래대로
+  bloomGradient.addColorStop(0, `rgba(255, 255, 255, ${bloomOpacity})`);
+  bloomGradient.addColorStop(0.5, `rgba(255, 255, 240, ${bloomOpacity * 0.5})`);
+  bloomGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+
+  drawingContext.fillStyle = bloomGradient;
+  drawingContext.fillRect(x - r, y - r, r * 2, r * 2);
+
+  drawingContext.restore();
+  pop();
+}
+
+// 중앙 버블 캡 그리기
+function drawCenterBubbleCap(bubble) {
+  if (!bubbleCap || bubbleCap.width <= 0) return;
+  if (bubble.alpha < 0.01) return;
+
+  const x = bubble.pos.x;
+  const y = bubble.pos.y;
+  const r = bubble.r;
+  const size = r * 2;
+
+  push();
+  imageMode(CENTER);
+  drawingContext.save();
+  drawingContext.globalAlpha = bubble.alpha;
+  image(bubbleCap, x, y, size, size);
+  drawingContext.restore();
+  pop();
+}
+
 // 중앙 버블 설명창 그리기
 function drawBubbleInfo(bubble, centerX, centerY) {
   const infoY = bubble.pos.y + bubble.r + 30; // 버블 아래 30px
@@ -539,8 +819,8 @@ function drawBubbleInfo(bubble, centerX, centerY) {
   gradient.addColorStop(1, "rgba(255, 255, 255, 0.08)");
   drawingContext.fillStyle = gradient;
 
-  // 둥근 사각형
-  const radius = 12;
+  // 둥근 사각형 (더 둥글게)
+  const radius = 50;
   drawingContext.beginPath();
   drawingContext.moveTo(infoX + radius, infoY);
   drawingContext.lineTo(infoX + infoWidth - radius, infoY);
@@ -574,20 +854,36 @@ function drawBubbleInfo(bubble, centerX, centerY) {
 
   // 텍스트 그리기
   push();
-  fill(255, 255, 255, 0.9);
-  textAlign(CENTER);
+  noStroke();
+  textAlign(CENTER, CENTER); // 가로, 세로 모두 중앙 정렬
+
+  // Pretendard 폰트 적용
+  if (pretendardFont) {
+    textFont(pretendardFont);
+  }
+
+  // 제목 (위쪽) - 더 굵게
+  fill(255, 255, 255, 230); // 0.9 * 255 ≈ 230
   textSize(18);
   textStyle(BOLD);
-  // 제목
-  text(bubble.name, bubble.pos.x, infoY + 20);
+  const titleY = infoY + 25;
+  // 텍스트를 약간 오프셋을 두고 두 번 그려서 더 굵게 보이게
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowOffsetX = 0;
+  drawingContext.shadowOffsetY = 0;
+  text(bubble.name, bubble.pos.x, titleY);
+  // 약간의 오프셋으로 한 번 더 그려서 굵게
+  text(bubble.name, bubble.pos.x + 0.5, titleY);
+  text(bubble.name, bubble.pos.x, titleY + 0.5);
 
-  // 태그 3개
+  // 태그 (아래쪽)
   if (bubble.tags && bubble.tags.length > 0) {
-    fill(255, 255, 255, 0.7);
+    fill(255, 255, 255, 180); // 0.7 * 255 ≈ 180
     textSize(14);
     textStyle(NORMAL);
     const tagsText = bubble.tags.slice(0, 3).join("  "); // 최대 3개 태그, 공백으로 구분
-    text(tagsText, bubble.pos.x, infoY + 50);
+    const tagsY = infoY + 55;
+    text(tagsText, bubble.pos.x, tagsY);
   }
   pop();
 }
@@ -605,6 +901,9 @@ function preload() {
     }
   });
   bubbleCap = loadImage("assets/public-imgs/bubble-cap.png");
+
+  // Pretendard 폰트 로드
+  pretendardFont = loadFont("assets/fonts/PretendardVariable.ttf");
 
   // 버블 이미지 데이터 정의
   const imageFiles = [
@@ -629,21 +928,78 @@ function preload() {
     {
       title: "일본 도쿄 아키하바라",
       tags: ["#밝은 분위기", "#감성적인", "#도시"],
+      attributes: [1, 2, 5], // 여행자, 20대 여성, 10대 여성
     },
-    { title: "카페 공간", tags: ["#따뜻한", "#편안한", "#모던"] },
-    { title: "집 안 공간", tags: ["#아늑한", "#편안한", "#일상"] },
-    { title: "경복궁", tags: ["#전통적인", "#우아한", "#역사"] },
-    { title: "파리 거리", tags: ["#로맨틱한", "#예술적인", "#유럽"] },
-    { title: "공원 풍경", tags: ["#자연", "#평화로운", "#푸른"] },
-    { title: "수영장", tags: ["#시원한", "#밝은", "#활기찬"] },
-    { title: "프라하", tags: ["#고풍스러운", "#아름다운", "#유럽"] },
-    { title: "비 오는 날", tags: ["#감성적인", "#차분한", "#몽환적인"] },
-    { title: "학교 공간", tags: ["#활기찬", "#젊은", "#학습"] },
-    { title: "서울 도시", tags: ["#현대적인", "#활기찬", "#도시"] },
-    { title: "도시 거리", tags: ["#활기찬", "#다채로운", "#도시"] },
-    { title: "테라스", tags: ["#편안한", "#자연", "#야외"] },
-    { title: "마을 풍경", tags: ["#평화로운", "#전원적인", "#자연"] },
-    { title: "작업 공간", tags: ["#집중", "#모던", "#프로페셔널"] },
+    {
+      title: "카페 공간",
+      tags: ["#따뜻한", "#편안한", "#모던"],
+      attributes: [2, 4],
+    }, // 20대 여성, 주부
+    {
+      title: "집 안 공간",
+      tags: ["#아늑한", "#편안한", "#일상"],
+      attributes: [4],
+    }, // 주부
+    {
+      title: "경복궁",
+      tags: ["#전통적인", "#우아한", "#역사"],
+      attributes: [1, 3],
+    }, // 여행자, 50대 남성
+    {
+      title: "파리 거리",
+      tags: ["#로맨틱한", "#예술적인", "#유럽"],
+      attributes: [1, 2],
+    }, // 여행자, 20대 여성
+    {
+      title: "공원 풍경",
+      tags: ["#자연", "#평화로운", "#푸른"],
+      attributes: [3, 4],
+    }, // 50대 남성, 주부
+    {
+      title: "수영장",
+      tags: ["#시원한", "#밝은", "#활기찬"],
+      attributes: [2, 5],
+    }, // 20대 여성, 10대 여성
+    {
+      title: "프라하",
+      tags: ["#고풍스러운", "#아름다운", "#유럽"],
+      attributes: [1, 3],
+    }, // 여행자, 50대 남성
+    {
+      title: "비 오는 날",
+      tags: ["#감성적인", "#차분한", "#몽환적인"],
+      attributes: [2, 5],
+    }, // 20대 여성, 10대 여성
+    {
+      title: "학교 공간",
+      tags: ["#활기찬", "#젊은", "#학습"],
+      attributes: [5],
+    }, // 10대 여성
+    {
+      title: "서울 도시",
+      tags: ["#현대적인", "#활기찬", "#도시"],
+      attributes: [1, 2, 3],
+    }, // 여행자, 20대 여성, 50대 남성
+    {
+      title: "도시 거리",
+      tags: ["#활기찬", "#다채로운", "#도시"],
+      attributes: [1, 2],
+    }, // 여행자, 20대 여성
+    {
+      title: "테라스",
+      tags: ["#편안한", "#자연", "#야외"],
+      attributes: [3, 4],
+    }, // 50대 남성, 주부
+    {
+      title: "마을 풍경",
+      tags: ["#평화로운", "#전원적인", "#자연"],
+      attributes: [3, 4],
+    }, // 50대 남성, 주부
+    {
+      title: "작업 공간",
+      tags: ["#집중", "#모던", "#프로페셔널"],
+      attributes: [3],
+    }, // 50대 남성
   ];
 
   // 버블 이미지 로드
@@ -701,7 +1057,7 @@ function createSearchInput() {
   const textWidth = W - (textStartX - X) - 24 * SEARCH_SCALE;
 
   searchInput = createInput("");
-  searchInput.attribute("placeholder", "검색하기");
+  searchInput.attribute("placeholder", "");
   searchInput.position(textStartX, Y);
   searchInput.size(textWidth, H);
   searchInput.style("background", "transparent");
@@ -739,7 +1095,9 @@ function draw() {
         snapTargetY = null;
         panVelocityX = 0;
         panVelocityY = 0;
-        stopAnim(); // 완전히 정지하면 렌더 멈춤
+        snapCompleted = true; // 스냅 완료 표시
+        // 중앙 버블이 있으면 빛 효과를 위해 애니메이션 계속 실행
+        // stopAnim()은 나중에 중앙 버블 확인 후 호출
       } else {
         // 부드럽게 타겟으로 이동
         offsetX = lerp(offsetX, snapTargetX, SNAP_SPEED);
@@ -754,12 +1112,12 @@ function draw() {
       offsetX += panVelocityX;
       offsetY += panVelocityY;
 
-      // 속도가 매우 작아지면 스냅 시작
+      // 속도가 매우 작아지면 스냅 시작 (한 번만)
       if (abs(panVelocityX) < 0.1 && abs(panVelocityY) < 0.1) {
         panVelocityX = 0;
         panVelocityY = 0;
-        // 스냅 타겟이 없으면 스냅 시작
-        if (snapTargetX === null && snapTargetY === null) {
+        // 스냅 타겟이 없고, 아직 스냅이 완료되지 않았을 때만 스냅 시작
+        if (snapTargetX === null && snapTargetY === null && !snapCompleted) {
           snapToCenterBubble();
         }
       }
@@ -776,16 +1134,85 @@ function draw() {
   const centerX = width * CENTER_X_RATIO;
   const centerY = BUBBLE_AREA_CENTER - 20; // 검색창 아래 영역의 중앙에서 20픽셀 위
 
-  // 버블 업데이트 및 그리기 (화면에 보이는 것만)
-  // 먼저 모든 버블 업데이트하여 중앙 버블 찾기 (1차 업데이트)
+  // 버블 필터링 (선택된 토글이 있으면 해당 속성을 가진 버블만 표시)
+  let filteredBubbles = bubbles;
+  if (selectedToggles.length > 0) {
+    filteredBubbles = bubbles.filter((b) => {
+      // 버블의 속성 중 하나라도 선택된 토글에 포함되면 표시
+      return (
+        b.attributes &&
+        b.attributes.some((attr) => selectedToggles.includes(attr))
+      );
+    });
+
+    // 필터링된 버블을 전역 변수에 저장 (snapToCenterBubble에서 사용)
+    currentFilteredBubbles = filteredBubbles;
+
+    // 필터링되지 않은 버블들 팡 터지기 시작
+    bubbles.forEach((b) => {
+      const isFiltered = filteredBubbles.includes(b);
+      if (!isFiltered && !b.isPopping) {
+        b.isPopping = true;
+        b.popStartTime = millis();
+        b.popProgress = 0;
+      }
+    });
+  } else {
+    // 토글이 선택되지 않았으면 모든 팡 터지는 애니메이션 중지
+    bubbles.forEach((b) => {
+      if (b.isPopping) {
+        b.isPopping = false;
+        b.popProgress = 0;
+        b.alpha = 1.0;
+      }
+    });
+    // 필터링되지 않았으므로 모든 버블 사용
+    currentFilteredBubbles = bubbles;
+  }
+
+  // 팡 터지는 애니메이션 업데이트
+  const POP_DURATION = 400; // 0.4초 동안 팡 터짐
   bubbles.forEach((b) => {
-    b.update(centerX, centerY, offsetX, offsetY, null);
+    if (b.isPopping) {
+      const elapsed = millis() - b.popStartTime;
+      b.popProgress = Math.min(elapsed / POP_DURATION, 1.0);
+
+      if (b.popProgress >= 1.0) {
+        b.alpha = 0; // 완전히 사라짐
+      } else {
+        // 팡 터지는 효과: 커지면서 투명해짐
+        const scale = 1.0 + b.popProgress * 1.5; // 1.0에서 2.5배까지
+        b.alpha = 1.0 - b.popProgress; // 투명도 감소
+        // 실제 반지름은 업데이트하지 않고 그릴 때만 스케일 적용
+      }
+    }
   });
 
-  // 중앙에 가장 가까운 버블 찾기
+  // 버블 업데이트 및 그리기 (화면에 보이는 것만)
+  // 먼저 모든 버블 업데이트하여 중앙 버블 찾기 (1차 업데이트)
+  // 필터링된 버블들은 alpha를 1.0으로 보장하고 페이드아웃 로직 건너뛰기
+  filteredBubbles.forEach((b) => {
+    // 필터링된 버블은 팡 터지는 중이 아니면 alpha를 1.0으로 강제 설정
+    if (!b.isPopping) {
+      b.alpha = 1.0;
+    }
+    // 필터링된 버블임을 표시하기 위해 임시 속성 추가 (update에서 사용)
+    b._isFiltered = true;
+    b.update(centerX, centerY, offsetX, offsetY, null);
+    b._isFiltered = false; // 업데이트 후 제거
+  });
+
+  // 팡 터지는 버블도 위치 업데이트 (애니메이션을 위해)
+  bubbles.forEach((b) => {
+    if (b.isPopping && b.alpha > 0.01) {
+      b.update(centerX, centerY, offsetX, offsetY, null);
+    }
+  });
+
+  // 중앙에 가장 가까운 버블 찾기 (필터링된 버블 중에서)
   let centerBubble = null;
   let minDistToCenter = Infinity;
-  bubbles.forEach((b) => {
+  filteredBubbles.forEach((b) => {
     const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
     if (distToCenter < minDistToCenter) {
       minDistToCenter = distToCenter;
@@ -798,8 +1225,8 @@ function draw() {
     // 부드럽게 최대 크기로 변화 (1.2배 더 크게)
     centerBubble.r = lerp(centerBubble.r, MAX_BUBBLE_RADIUS * 1.2, 0.2);
 
-    // 중앙 버블 위치를 전달하여 주변 버블들이 작아지도록 재업데이트
-    bubbles.forEach((b) => {
+    // 중앙 버블 위치를 전달하여 주변 버블들이 작아지도록 재업데이트 (필터링된 버블만)
+    filteredBubbles.forEach((b) => {
       if (b !== centerBubble) {
         b.update(centerX, centerY, offsetX, offsetY, centerBubble.pos);
       }
@@ -812,21 +1239,28 @@ function draw() {
   const NAV_BOTTOM = NAV_Y + NAV_H;
 
   // LOD: 보이는 버블만 수집하고 가까운 순으로 정렬 (성능 최적화)
+  // 필터링된 버블과 팡 터지는 버블 모두 포함
   const visible = [];
   for (const b of bubbles) {
     // alpha가 너무 작으면 스킵
     if (b.alpha < 0.01) continue;
 
+    // 팡 터지는 버블은 스케일을 고려한 크기로 확인
+    const effectiveR =
+      b.isPopping && b.popProgress < 1.0
+        ? b.r * (1.0 + b.popProgress * 1.5)
+        : b.r;
+
     // 버블이 화면에 보이는지 확인
     const isOnScreen =
-      b.pos.x + b.r > -50 &&
-      b.pos.x - b.r < width + 50 &&
-      b.pos.y + b.r > -50 &&
-      b.pos.y - b.r < height + 50;
+      b.pos.x + effectiveR > -50 &&
+      b.pos.x - effectiveR < width + 50 &&
+      b.pos.y + effectiveR > -50 &&
+      b.pos.y - effectiveR < height + 50;
 
     // 버블이 검색창 아래 영역에만 있는지 확인
-    const bubbleTop = b.pos.y - b.r;
-    const bubbleBottom = b.pos.y + b.r;
+    const bubbleTop = b.pos.y - effectiveR;
+    const bubbleBottom = b.pos.y + effectiveR;
     const isInAllowedArea =
       bubbleTop >= SEARCH_BOTTOM - 50 && bubbleBottom <= height - 10 + 50;
 
@@ -844,14 +1278,40 @@ function draw() {
   // 큰 버블부터 그리기 (오버드로우 감소)
   visible.sort((a, b) => b[1].r - a[1].r);
 
-  // 상위 MAX_DRAW개만 그리기
+  // 상위 MAX_DRAW개만 그리기 (중앙 버블 제외)
   for (let i = 0; i < Math.min(MAX_DRAW, visible.length); i++) {
-    visible[i][1].draw();
+    if (visible[i][1] !== centerBubble) {
+      visible[i][1].draw();
+    }
   }
 
-  // 중앙 버블 설명창 그리기
+  // 중앙 버블은 별도로 그리기 (이미지 -> 빛 -> 캡 순서)
   if (centerBubble) {
-    drawBubbleInfo(centerBubble, centerX, centerY);
+    // 1. 버블 이미지/색상만 그리기 (캡 없이)
+    drawCenterBubbleImage(centerBubble);
+    // 2. 빛 효과 그리기 (캡과 사진 사이)
+    drawBubbleLightEffect(centerBubble);
+    // 3. 캡 그리기
+    drawCenterBubbleCap(centerBubble);
+
+    // 중앙 버블이 있으면 빛 효과를 위해 애니메이션 계속 실행
+    startAnim();
+  } else {
+    // 중앙 버블이 없고 모든 움직임이 멈췄으면 애니메이션 정지
+    // 단, 모달이 열려있으면 애니메이션 계속 실행
+    if (
+      snapTargetX === null &&
+      snapTargetY === null &&
+      abs(panVelocityX) < 0.1 &&
+      abs(panVelocityY) < 0.1 &&
+      !isDragging &&
+      !showModal
+    ) {
+      stopAnim();
+    } else if (showModal) {
+      // 모달이 열려있으면 애니메이션 계속 실행
+      startAnim();
+    }
   }
 
   vignette();
@@ -859,6 +1319,21 @@ function draw() {
   // 검색창과 네비게이션 바를 가장 위에 그리기 (버블 위에 표시)
   drawNavBar();
   drawSearchBar();
+
+  // 토글 표시
+  if (showToggles) {
+    drawToggles();
+  }
+
+  // 설명창은 가장 마지막에 그리기 (다른 요소 위에 표시)
+  if (centerBubble) {
+    drawBubbleInfo(centerBubble, centerX, centerY);
+  }
+
+  // 모달 표시
+  if (showModal) {
+    drawModal();
+  }
 }
 
 function windowResized() {
@@ -891,6 +1366,9 @@ function getSearchMetrics() {
 }
 
 // 중앙 버블을 화면 중앙에 고정하는 함수 (타겟만 설정)
+// filteredBubbles를 전역에서 접근할 수 있도록 변수로 저장
+let currentFilteredBubbles = [];
+
 function snapToCenterBubble() {
   // 중심 위치 계산
   const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
@@ -902,15 +1380,19 @@ function snapToCenterBubble() {
   const centerX = width * CENTER_X_RATIO;
   const centerY = BUBBLE_AREA_CENTER - 20; // 검색창 아래 영역의 중앙에서 20픽셀 위
 
-  // 모든 버블 업데이트하여 현재 위치 계산
-  bubbles.forEach((b) => {
+  // 필터링된 버블만 사용 (없으면 모든 버블 사용)
+  const bubblesToUse =
+    currentFilteredBubbles.length > 0 ? currentFilteredBubbles : bubbles;
+
+  // 필터링된 버블만 업데이트하여 현재 위치 계산
+  bubblesToUse.forEach((b) => {
     b.update(centerX, centerY, offsetX, offsetY, null);
   });
 
-  // 중앙에 가장 가까운 버블 찾기
+  // 중앙에 가장 가까운 버블 찾기 (필터링된 버블 중에서)
   let centerBubble = null;
   let minDistToCenter = Infinity;
-  bubbles.forEach((b) => {
+  bubblesToUse.forEach((b) => {
     const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
     if (distToCenter < minDistToCenter) {
       minDistToCenter = distToCenter;
@@ -1167,6 +1649,41 @@ function buildBubbles() {
 
 // ---------- PANNING (스와이프) ----------
 function mousePressed() {
+  // 네비게이션 바 클릭 확인
+  if (navigationBar && checkNavBarClick(mouseX, mouseY)) {
+    showModal = true;
+    showToggles = false; // 모달 열릴 때 토글 닫기
+    startAnim(); // 모달 애니메이션을 위해 애니메이션 시작
+    return;
+  }
+
+  // 모달이 열려있으면 닫기
+  if (showModal) {
+    showModal = false;
+    return;
+  }
+
+  // 토글이 열려있으면 토글 클릭 확인
+  if (showToggles) {
+    const clickedToggle = checkToggleClick(mouseX, mouseY);
+    if (clickedToggle !== null) {
+      // 토글 클릭 시 바로 적용
+      toggleSelect(clickedToggle);
+      return;
+    }
+    // 토글 외부 클릭 시 닫기
+    if (!checkSearchBarClick(mouseX, mouseY)) {
+      showToggles = false;
+    }
+  }
+
+  // 검색창 클릭 확인
+  if (checkSearchBarClick(mouseX, mouseY)) {
+    showToggles = !showToggles;
+    startAnim();
+    return;
+  }
+
   startAnim(); // 애니메이션 시작
   isDragging = true;
   dragStartX = mouseX;
@@ -1175,9 +1692,10 @@ function mousePressed() {
   dragOffsetY = offsetY;
   panVelocityX = 0;
   panVelocityY = 0;
-  // 드래그 시작 시 스냅 타겟 취소
+  // 드래그 시작 시 스냅 타겟 취소 및 스냅 완료 플래그 리셋
   snapTargetX = null;
   snapTargetY = null;
+  snapCompleted = false;
 }
 
 function mouseDragged() {
@@ -1210,8 +1728,44 @@ function mouseReleased() {
 // ---------- TOUCH EVENTS (모바일 지원) ----------
 function touchStarted() {
   if (touches.length > 0) {
-    startAnim(); // 애니메이션 시작
     const touch = touches[0];
+
+    // 네비게이션 바 클릭 확인
+    if (navigationBar && checkNavBarClick(touch.x, touch.y)) {
+      showModal = true;
+      showToggles = false; // 모달 열릴 때 토글 닫기
+      startAnim(); // 모달 애니메이션을 위해 애니메이션 시작
+      return false;
+    }
+
+    // 모달이 열려있으면 닫기
+    if (showModal) {
+      showModal = false;
+      return false;
+    }
+
+    // 토글이 열려있으면 토글 클릭 확인
+    if (showToggles) {
+      const clickedToggle = checkToggleClick(touch.x, touch.y);
+      if (clickedToggle !== null) {
+        // 토글 클릭 시 바로 적용
+        toggleSelect(clickedToggle);
+        return false;
+      }
+      // 토글 외부 클릭 시 닫기
+      if (!checkSearchBarClick(touch.x, touch.y)) {
+        showToggles = false;
+      }
+    }
+
+    // 검색창 클릭 확인
+    if (checkSearchBarClick(touch.x, touch.y)) {
+      showToggles = !showToggles;
+      startAnim();
+      return false;
+    }
+
+    startAnim(); // 애니메이션 시작
     isDragging = true;
     dragStartX = touch.x;
     dragStartY = touch.y;
@@ -1219,9 +1773,10 @@ function touchStarted() {
     dragOffsetY = offsetY;
     panVelocityX = 0;
     panVelocityY = 0;
-    // 드래그 시작 시 스냅 타겟 취소
+    // 드래그 시작 시 스냅 타겟 취소 및 스냅 완료 플래그 리셋
     snapTargetX = null;
     snapTargetY = null;
+    snapCompleted = false;
     return false; // 기본 동작 방지
   }
   return false;
@@ -1284,6 +1839,141 @@ function drawNavBar() {
   image(navigationBar, navBarX, Y, NAV_W, NAV_H);
 }
 
+// 네비게이션 바 클릭 확인
+function checkNavBarClick(x, y) {
+  if (!navigationBar) return false;
+
+  const BUTTON_W = captureButton ? captureButton.width * 0.5 : 0;
+  const NAV_W = navigationBar.width * 0.375;
+  const NAV_H = navigationBar.height * 0.375;
+  const Y = 20;
+  const navBarX = (width - NAV_W) / 2;
+
+  // 네비게이션 바 영역 확인
+  return x >= navBarX && x <= navBarX + NAV_W && y >= Y && y <= Y + NAV_H;
+}
+
+// 글래스모피즘 스타일 모달 그리기
+function drawModal() {
+  push();
+  drawingContext.save();
+
+  // 배경 오버레이 (어둡게)
+  fill(0, 0, 0, 180);
+  noStroke();
+  rect(0, 0, width, height);
+
+  // 모달 크기
+  const modalWidth = 420;
+  const modalHeight = 180;
+  const modalX = (width - modalWidth) / 2;
+  const modalY = (height - modalHeight) / 2;
+  const radius = 32;
+
+  // 모달 배경 (글래스모피즘)
+  // 배경 그라데이션
+  const gradient = drawingContext.createLinearGradient(
+    modalX,
+    modalY,
+    modalX,
+    modalY + modalHeight
+  );
+  gradient.addColorStop(0, "rgba(255, 255, 255, 0.2)");
+  gradient.addColorStop(0.5, "rgba(255, 255, 255, 0.15)");
+  gradient.addColorStop(1, "rgba(255, 255, 255, 0.1)");
+  drawingContext.fillStyle = gradient;
+
+  // 그림자 효과
+  drawingContext.shadowBlur = 30;
+  drawingContext.shadowColor = "rgba(0, 0, 0, 0.5)";
+  drawingContext.shadowOffsetX = 0;
+  drawingContext.shadowOffsetY = 8;
+
+  // 둥근 사각형
+  drawingContext.beginPath();
+  drawingContext.moveTo(modalX + radius, modalY);
+  drawingContext.lineTo(modalX + modalWidth - radius, modalY);
+  drawingContext.quadraticCurveTo(
+    modalX + modalWidth,
+    modalY,
+    modalX + modalWidth,
+    modalY + radius
+  );
+  drawingContext.lineTo(modalX + modalWidth, modalY + modalHeight - radius);
+  drawingContext.quadraticCurveTo(
+    modalX + modalWidth,
+    modalY + modalHeight,
+    modalX + modalWidth - radius,
+    modalY + modalHeight
+  );
+  drawingContext.lineTo(modalX + radius, modalY + modalHeight);
+  drawingContext.quadraticCurveTo(
+    modalX,
+    modalY + modalHeight,
+    modalX,
+    modalY + modalHeight - radius
+  );
+  drawingContext.lineTo(modalX, modalY + radius);
+  drawingContext.quadraticCurveTo(modalX, modalY, modalX + radius, modalY);
+  drawingContext.closePath();
+  drawingContext.fill();
+
+  // 테두리 효과 (글래스모피즘)
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowOffsetX = 0;
+  drawingContext.shadowOffsetY = 0;
+  drawingContext.strokeStyle = "rgba(255, 255, 255, 0.4)";
+  drawingContext.lineWidth = 1.5;
+  drawingContext.stroke();
+
+  // 내부 하이라이트 (글래스모피즘 효과 - 상단)
+  const highlightGradient = drawingContext.createLinearGradient(
+    modalX,
+    modalY,
+    modalX,
+    modalY + radius * 1.5
+  );
+  highlightGradient.addColorStop(0, "rgba(255, 255, 255, 0.3)");
+  highlightGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+  drawingContext.fillStyle = highlightGradient;
+  drawingContext.beginPath();
+  drawingContext.moveTo(modalX + radius, modalY);
+  drawingContext.lineTo(modalX + modalWidth - radius, modalY);
+  drawingContext.quadraticCurveTo(
+    modalX + modalWidth,
+    modalY,
+    modalX + modalWidth,
+    modalY + radius
+  );
+  drawingContext.lineTo(modalX + modalWidth, modalY + radius * 1.5);
+  drawingContext.lineTo(modalX, modalY + radius * 1.5);
+  drawingContext.lineTo(modalX, modalY + radius);
+  drawingContext.quadraticCurveTo(modalX, modalY, modalX + radius, modalY);
+  drawingContext.closePath();
+  drawingContext.fill();
+
+  drawingContext.restore();
+
+  // 텍스트 그리기
+  push();
+  noStroke();
+  textAlign(CENTER, CENTER);
+
+  // Pretendard 폰트 적용
+  if (pretendardFont) {
+    textFont(pretendardFont);
+  }
+
+  // 메시지 텍스트
+  fill(255, 255, 255, 255);
+  textSize(18);
+  textStyle(NORMAL);
+  text("현재 탐색 탭만 체험 가능합니다.", width / 2, height / 2);
+
+  pop();
+  pop();
+}
+
 function drawSearchBar() {
   const W = 1205 * SEARCH_SCALE;
   const H = 75 * SEARCH_SCALE;
@@ -1336,6 +2026,269 @@ function drawSearchBar() {
 
   // 플레이스홀더는 input의 placeholder로 처리되므로 제거
   // 입력 필드가 있으면 텍스트를 그리지 않음
+
+  // 선택된 토글이 있으면 검색창에 표시 (짧은 형식)
+  if (!showToggles) {
+    push();
+    noStroke();
+    textAlign(LEFT, CENTER);
+
+    if (pretendardFont) {
+      textFont(pretendardFont);
+    }
+
+    let displayText = "";
+    if (selectedToggles.length === 0) {
+      displayText = "전체 보기";
+    } else {
+      const shortLabels = [
+        "여행자",
+        "20대 여성",
+        "50대 남성",
+        "주부",
+        "10대 여성",
+      ];
+      displayText = selectedToggles.map((t) => shortLabels[t - 1]).join(", ");
+    }
+
+    fill(255, 255, 255, 200);
+    textSize(16 * SEARCH_SCALE);
+    textStyle(NORMAL);
+    const textX = X + 24 * SEARCH_SCALE + 40 * SEARCH_SCALE;
+    const textY = Y + H / 2;
+    text(displayText, textX, textY);
+    pop();
+  }
+}
+
+// 검색창 클릭 확인
+function checkSearchBarClick(x, y) {
+  const W = 1205 * SEARCH_SCALE;
+  const H = 75 * SEARCH_SCALE;
+  const X = (width - W) / 2;
+  const Y = 120;
+
+  return x >= X && x <= X + W && y >= Y && y <= Y + H;
+}
+
+// 토글 클릭 확인
+function checkToggleClick(x, y) {
+  if (!showToggles) return null;
+
+  const toggleLabels = [
+    "전체 보기",
+    "여행자의 취향 탐색",
+    "20대 여성의 취향 탐색",
+    "50대 남성의 취향 탐색",
+    "주부들의 취향 탐색",
+    "10대 여성의 취향 탐색",
+  ];
+
+  const toggleWidth = 300;
+  const toggleHeight = 50;
+  const toggleX = (width - toggleWidth) / 2;
+  const startY = 220;
+  const spacing = 60;
+
+  // 토글 클릭 확인
+  for (let i = 0; i < toggleLabels.length; i++) {
+    const toggleY = startY + i * spacing;
+    if (
+      x >= toggleX &&
+      x <= toggleX + toggleWidth &&
+      y >= toggleY &&
+      y <= toggleY + toggleHeight
+    ) {
+      return i; // 0~5 반환 (0은 전체 보기)
+    }
+  }
+
+  return null;
+}
+
+// 토글 선택/해제 (한 번에 하나만 선택 가능)
+function toggleSelect(toggleIndex) {
+  // toggleIndex: 0 = 전체 보기, 1~5 = 각 카테고리
+  if (toggleIndex === 0) {
+    // 전체 보기 선택
+    selectedToggles = [];
+    // 모든 버블 복구
+    bubbles.forEach((b) => {
+      if (b.isPopping || b.alpha < 0.5) {
+        b.isPopping = false;
+        b.popProgress = 0;
+        b.alpha = 1.0;
+      }
+    });
+  } else {
+    // 카테고리 선택 (1~5를 1~5로 매핑)
+    const categoryIndex = toggleIndex; // 1~5
+    selectedToggles = [categoryIndex];
+
+    // 필터링된 버블 찾기 및 복구
+    const filteredBubbles = bubbles.filter((b) => {
+      return (
+        b.attributes &&
+        b.attributes.some((attr) => selectedToggles.includes(attr))
+      );
+    });
+
+    // 필터링된 버블 복구 (alpha 및 팡 터짐 상태 초기화)
+    filteredBubbles.forEach((b) => {
+      b.isPopping = false;
+      b.popProgress = 0;
+      b.alpha = 1.0; // 바로 보이도록 설정
+    });
+  }
+
+  // 토글 닫기 및 버블 정렬 (바로 정렬)
+  showToggles = false;
+
+  // 필터링된 버블을 전역 변수에 저장 (snapToCenterBubble에서 사용)
+  if (toggleIndex === 0) {
+    currentFilteredBubbles = bubbles;
+  } else {
+    currentFilteredBubbles = bubbles.filter((b) => {
+      return (
+        b.attributes &&
+        b.attributes.some((attr) => selectedToggles.includes(attr))
+      );
+    });
+  }
+
+  // 필터링된 버블을 먼저 업데이트하여 위치 계산
+  const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
+  const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
+  const BUBBLE_AREA_BOTTOM = height - 10;
+  const BUBBLE_AREA_CENTER =
+    BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
+  const centerX = width * CENTER_X_RATIO;
+  const centerY = BUBBLE_AREA_CENTER - 20;
+
+  currentFilteredBubbles.forEach((b) => {
+    b.update(centerX, centerY, offsetX, offsetY, null);
+  });
+
+  // 버블 정렬 (버블이 이동하면서 정렬되도록)
+  snapToCenterBubble();
+  startAnim(); // 필터링 업데이트를 위해 애니메이션 시작
+}
+
+// 토글 UI 그리기
+function drawToggles() {
+  const toggleLabels = [
+    "전체 보기",
+    "여행자의 취향 탐색",
+    "20대 여성의 취향 탐색",
+    "50대 남성의 취향 탐색",
+    "주부들의 취향 탐색",
+    "10대 여성의 취향 탐색",
+  ];
+
+  const toggleWidth = 300;
+  const toggleHeight = 50;
+  const toggleX = (width - toggleWidth) / 2;
+  const startY = 220;
+  const spacing = 60;
+  const radius = 16;
+
+  push();
+  drawingContext.save();
+
+  // 배경 오버레이 (약간 어둡게)
+  fill(0, 0, 0, 100);
+  noStroke();
+  rect(0, 0, width, height);
+
+  for (let i = 0; i < toggleLabels.length; i++) {
+    const toggleY = startY + i * spacing;
+    // 전체 보기(0)는 selectedToggles가 비어있을 때 선택됨
+    // 카테고리(1~5)는 selectedToggles에 포함되어 있을 때 선택됨
+    const isSelected =
+      i === 0 ? selectedToggles.length === 0 : selectedToggles.includes(i);
+
+    // 토글 배경
+    const gradient = drawingContext.createLinearGradient(
+      toggleX,
+      toggleY,
+      toggleX,
+      toggleY + toggleHeight
+    );
+
+    if (isSelected) {
+      gradient.addColorStop(0, "rgba(255, 255, 255, 0.3)");
+      gradient.addColorStop(1, "rgba(255, 255, 255, 0.2)");
+    } else {
+      gradient.addColorStop(0, "rgba(255, 255, 255, 0.15)");
+      gradient.addColorStop(1, "rgba(255, 255, 255, 0.1)");
+    }
+
+    drawingContext.fillStyle = gradient;
+    drawingContext.strokeStyle = isSelected
+      ? "rgba(255, 255, 255, 0.5)"
+      : "rgba(255, 255, 255, 0.3)";
+    drawingContext.lineWidth = isSelected ? 2 : 1;
+
+    // 둥근 사각형
+    drawingContext.beginPath();
+    drawingContext.moveTo(toggleX + radius, toggleY);
+    drawingContext.lineTo(toggleX + toggleWidth - radius, toggleY);
+    drawingContext.quadraticCurveTo(
+      toggleX + toggleWidth,
+      toggleY,
+      toggleX + toggleWidth,
+      toggleY + radius
+    );
+    drawingContext.lineTo(
+      toggleX + toggleWidth,
+      toggleY + toggleHeight - radius
+    );
+    drawingContext.quadraticCurveTo(
+      toggleX + toggleWidth,
+      toggleY + toggleHeight,
+      toggleX + toggleWidth - radius,
+      toggleY + toggleHeight
+    );
+    drawingContext.lineTo(toggleX + radius, toggleY + toggleHeight);
+    drawingContext.quadraticCurveTo(
+      toggleX,
+      toggleY + toggleHeight,
+      toggleX,
+      toggleY + toggleHeight - radius
+    );
+    drawingContext.lineTo(toggleX, toggleY + radius);
+    drawingContext.quadraticCurveTo(
+      toggleX,
+      toggleY,
+      toggleX + radius,
+      toggleY
+    );
+    drawingContext.closePath();
+    drawingContext.fill();
+    drawingContext.stroke();
+
+    // 텍스트
+    push();
+    noStroke();
+    textAlign(CENTER, CENTER);
+
+    if (pretendardFont) {
+      textFont(pretendardFont);
+    }
+
+    fill(255, 255, 255, isSelected ? 255 : 200);
+    textSize(16);
+    textStyle(NORMAL);
+    text(
+      toggleLabels[i],
+      toggleX + toggleWidth / 2,
+      toggleY + toggleHeight / 2
+    );
+    pop();
+  }
+
+  drawingContext.restore();
+  pop();
 }
 
 function vignette() {
