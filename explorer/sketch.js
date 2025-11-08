@@ -2142,7 +2142,7 @@ function drawSearchBar() {
 
     let displayText = "";
     if (selectedToggles.length === 0) {
-      displayText = "전체 보기";
+      displayText = "전체 모아보기";
     } else {
       const shortLabels = [
         "여행자",
