@@ -14,8 +14,12 @@ let navigationBar; // 네비게이션 바 이미지
 let bgImage; // 배경 이미지
 let searchInput; // 검색 입력 필드
 let bubbleCap; // 버블 캡 이미지
-let bubbleImages = []; // 버블 이미지들
+let navBarBuffer; // 네비게이션 바 고해상도 버퍼
+let bubbleImages = []; // 버블 이미지들 (지연 로딩)
+let imageLoading = new Set(); // 현재 로딩 중인 이미지 인덱스
+let imageLoaded = new Set(); // 로드 완료된 이미지 인덱스
 let bubbleData = []; // 버블 제목/태그 데이터
+let imageFiles = []; // 이미지 파일명 목록 (전역으로 이동)
 let pretendardFont; // Pretendard 폰트
 let showModal = false; // 모달 표시 여부
 let showToggles = false; // 토글 표시 여부
@@ -379,6 +383,80 @@ function bubbleColor(seed) {
     outer: `hsl(${h} 70% 55% / 0.95)`,
     inner: `hsl(${(h + 20) % 360} 80% 35% / 0.75)`,
   };
+}
+
+// 화면에 보이는 버블의 이미지 지연 로딩
+function loadVisibleBubbleImages() {
+  const LOAD_MARGIN = 200; // 화면 밖 200px까지 미리 로드
+
+  for (const b of bubbles) {
+    // alpha가 너무 작으면 스킵
+    if (b.alpha < 0.01) continue;
+
+    // 이미지 인덱스가 없으면 스킵
+    if (b.imageIndex === null) continue;
+
+    // 이미 로드 중이거나 로드 완료된 이미지는 스킵
+    if (imageLoading.has(b.imageIndex) || imageLoaded.has(b.imageIndex))
+      continue;
+
+    // 버블이 화면에 보이는지 확인 (여유 공간 포함)
+    const effectiveR =
+      b.isPopping && b.popProgress < 1.0
+        ? b.r * (1.0 + b.popProgress * 1.5)
+        : b.r;
+
+    const isOnScreen =
+      b.pos.x + effectiveR > -LOAD_MARGIN &&
+      b.pos.x - effectiveR < width + LOAD_MARGIN &&
+      b.pos.y + effectiveR > -LOAD_MARGIN &&
+      b.pos.y - effectiveR < height + LOAD_MARGIN;
+
+    if (isOnScreen) {
+      // 이미지 로드 시작
+      loadBubbleImage(b.imageIndex);
+    }
+  }
+}
+
+// 개별 버블 이미지 로드 함수
+function loadBubbleImage(imageIndex) {
+  if (imageIndex === null || imageIndex >= imageFiles.length) return;
+  if (imageLoading.has(imageIndex) || imageLoaded.has(imageIndex)) return;
+
+  imageLoading.add(imageIndex);
+
+  loadImage(
+    `assets/bubble-imgs/${imageFiles[imageIndex]}`,
+    (img) => {
+      // 로드 성공
+      bubbleImages[imageIndex] = img;
+      imageLoaded.add(imageIndex);
+      imageLoading.delete(imageIndex);
+
+      // 해당 이미지를 사용하는 스프라이트 캐시 무효화
+      invalidateSpriteCacheForImage(imageIndex);
+    },
+    (e) => {
+      // 로드 실패
+      console.error(
+        `bubbleImage[${imageIndex}] (${imageFiles[imageIndex]}) 로딩 실패:`,
+        e
+      );
+      imageLoading.delete(imageIndex);
+    }
+  );
+}
+
+// 특정 이미지를 사용하는 스프라이트 캐시 무효화
+function invalidateSpriteCacheForImage(imageIndex) {
+  const keysToDelete = [];
+  for (const key of SPRITES.keys()) {
+    if (key.includes(`img${imageIndex}`)) {
+      keysToDelete.push(key);
+    }
+  }
+  keysToDelete.forEach((key) => SPRITES.delete(key));
 }
 
 // 스프라이트 캐시 시스템 (성능 최적화)
@@ -796,65 +874,8 @@ function drawCenterBubbleCap(bubble) {
 // 중앙 버블 설명창 그리기
 function drawBubbleInfo(bubble, centerX, centerY) {
   const infoY = bubble.pos.y + bubble.r + 20; // 버블 아래 20px (더 가깝게, 위로 올라감)
-  const infoWidth = 320;
-  const infoHeight = 90;
-  const infoX = bubble.pos.x - infoWidth / 2;
 
-  // 설명창 배경 (둥근 모서리)
-  push();
-  drawingContext.save();
-
-  // 그림자
-  drawingContext.shadowBlur = 20;
-  drawingContext.shadowColor = "rgba(0,0,0,0.4)";
-  drawingContext.shadowOffsetX = 0;
-  drawingContext.shadowOffsetY = 4;
-
-  // 배경 그라데이션
-  const gradient = drawingContext.createLinearGradient(
-    infoX,
-    infoY,
-    infoX,
-    infoY + infoHeight
-  );
-  gradient.addColorStop(0, "rgba(255, 255, 255, 0.15)");
-  gradient.addColorStop(1, "rgba(255, 255, 255, 0.08)");
-  drawingContext.fillStyle = gradient;
-
-  // 둥근 사각형 (더 둥글게)
-  const radius = 50;
-  drawingContext.beginPath();
-  drawingContext.moveTo(infoX + radius, infoY);
-  drawingContext.lineTo(infoX + infoWidth - radius, infoY);
-  drawingContext.quadraticCurveTo(
-    infoX + infoWidth,
-    infoY,
-    infoX + infoWidth,
-    infoY + radius
-  );
-  drawingContext.lineTo(infoX + infoWidth, infoY + infoHeight - radius);
-  drawingContext.quadraticCurveTo(
-    infoX + infoWidth,
-    infoY + infoHeight,
-    infoX + infoWidth - radius,
-    infoY + infoHeight
-  );
-  drawingContext.lineTo(infoX + radius, infoY + infoHeight);
-  drawingContext.quadraticCurveTo(
-    infoX,
-    infoY + infoHeight,
-    infoX,
-    infoY + infoHeight - radius
-  );
-  drawingContext.lineTo(infoX, infoY + radius);
-  drawingContext.quadraticCurveTo(infoX, infoY, infoX + radius, infoY);
-  drawingContext.closePath();
-  drawingContext.fill();
-
-  drawingContext.restore();
-  pop();
-
-  // 텍스트 그리기
+  // 텍스트 그리기 (배경 틀 제거)
   push();
   noStroke();
   textAlign(CENTER, CENTER); // 가로, 세로 모두 중앙 정렬
@@ -892,23 +913,19 @@ function drawBubbleInfo(bubble, centerX, centerY) {
 
 // ---------- p5 LIFECYCLE ----------
 function preload() {
+  // preload() 내에서는 콜백 없이 직접 할당 (p5.js가 자동으로 동기 처리)
   searchIcon = loadImage("assets/public-imgs/lucide_search.svg");
   captureButton = loadImage("assets/public-imgs/capture-button.png");
   workroomButton = loadImage("assets/public-imgs/workroom-button.png");
   navigationBar = loadImage("assets/public-imgs/navigation-bar.png");
-  bgImage = loadImage("assets/public-imgs/bg.png", () => {
-    // 이미지 로드 후 배경 버퍼 생성
-    if (typeof width !== "undefined" && width > 0) {
-      redrawBackgroundBuffer();
-    }
-  });
+  bgImage = loadImage("assets/public-imgs/bg.png");
   bubbleCap = loadImage("assets/public-imgs/bubble-cap.png");
 
   // Pretendard 폰트 로드
   pretendardFont = loadFont("assets/fonts/PretendardVariable.ttf");
 
-  // 버블 이미지 데이터 정의
-  const imageFiles = [
+  // 버블 이미지 데이터 정의 (전역 변수로 이동)
+  imageFiles = [
     "akihabara.png",
     "cafe.jpg",
     "home.jpg",
@@ -924,94 +941,228 @@ function preload() {
     "terrace.jpg",
     "town.png",
     "work.jpg",
+    "building.jpg",
+    "water-glitter.jpg",
+    "hamburger.jpg",
+    "neon-sign.jpg",
+    "hot-sauce.jpg",
+    "firework.jpg",
+    "fallen-leaf.jpg",
+    "sweater.jpg",
+    "balloon-dog.png",
+    "construction.jpg",
+    "library.png",
+    "running.png",
+    "samgyeopsal.png",
+    "basketball.png",
+    "hongdae.png",
+    "aquarium.png",
+    "super-market.png",
+    "jeju.png",
+    "crosswalk.png",
+    "ginkgo-tree.png",
   ];
 
   bubbleData = [
     {
-      title: "일본 도쿄 아키하바라",
-      tags: ["#밝은 분위기", "#감성적인", "#도시"],
+      title: "아키하바라의 밤거리",
+      tags: ["#비비드 컬러 대비", "#시각적 과부하", "#도시광의 반사"],
       attributes: [1, 2, 5], // 여행자, 20대 여성, 10대 여성
     },
     {
-      title: "카페 공간",
-      tags: ["#따뜻한", "#편안한", "#모던"],
+      title: "식물 가득한 카페 인테리어",
+      tags: ["#자연채광 강조", "#유기적 질감 대비", "#우드톤 통일감"],
       attributes: [2, 4],
     }, // 20대 여성, 주부
     {
-      title: "집 안 공간",
-      tags: ["#아늑한", "#편안한", "#일상"],
+      title: "햇살 드는 거실 공간",
+      tags: ["#부드러운 파스텔 톤", "#확산광의 따스함", "#시각적 여백감"],
       attributes: [4],
     }, // 주부
     {
-      title: "경복궁",
-      tags: ["#전통적인", "#우아한", "#역사"],
+      title: "경복궁의 야경",
+      tags: ["#점광원의 리듬", "#온·냉색 대비", "#대칭적 구도"],
       attributes: [1, 3],
     }, // 여행자, 50대 남성
     {
-      title: "파리 거리",
-      tags: ["#로맨틱한", "#예술적인", "#유럽"],
+      title: "파리 에펠탑의 낮 풍경",
+      tags: ["#구조적 중심성", "#공기 원근감", "#자연색 대비"],
       attributes: [1, 2],
     }, // 여행자, 20대 여성
     {
-      title: "공원 풍경",
-      tags: ["#자연", "#평화로운", "#푸른"],
+      title: "해질녘 유럽 거리 풍경",
+      tags: ["#저채도 컬러 조화", "#따스한 조도 변화", "#거리의 리듬감"],
       attributes: [3, 4],
     }, // 50대 남성, 주부
     {
-      title: "수영장",
-      tags: ["#시원한", "#밝은", "#활기찬"],
+      title: "야외 수영장과 숲 배경",
+      tags: ["#청명한 색 온도", "#인공·자연 질감 대비", "#곡선적 공간 리듬"],
       attributes: [2, 5],
     }, // 20대 여성, 10대 여성
     {
-      title: "프라하",
-      tags: ["#고풍스러운", "#아름다운", "#유럽"],
+      title: "프라하의 석양 다리",
+      tags: ["#웜 톤 그라데이션", "#공간 원근의 리듬", "#수면 반사의 균형"],
       attributes: [1, 3],
     }, // 여행자, 50대 남성
     {
-      title: "비 오는 날",
-      tags: ["#감성적인", "#차분한", "#몽환적인"],
+      title: "비 오는 도심 거리",
+      tags: ["#반사광 질감 대비", "#선형 원근 강조", "#냉색 조명 톤"],
       attributes: [2, 5],
     }, // 20대 여성, 10대 여성
     {
-      title: "학교 공간",
-      tags: ["#활기찬", "#젊은", "#학습"],
+      title: "학교 전경과 운동장",
+      tags: ["#대지색 대비", "#대칭적 수평 구도", "#명시적 공간 구조"],
       attributes: [5],
     }, // 10대 여성
     {
-      title: "서울 도시",
-      tags: ["#현대적인", "#활기찬", "#도시"],
+      title: "서울의 봄 전경",
+      tags: ["#계절적 명도 대비", "#원근감 흐름", "#수평선 중심 구도"],
       attributes: [1, 2, 3],
     }, // 여행자, 20대 여성, 50대 남성
     {
-      title: "도시 거리",
-      tags: ["#활기찬", "#다채로운", "#도시"],
+      title: "남산과 전통건축 조망",
+      tags: ["#계절 색채의 계조", "#수직 원근 흐름", "#전통·현대 혼성 구도"],
       attributes: [1, 2],
     }, // 여행자, 20대 여성
     {
-      title: "테라스",
-      tags: ["#편안한", "#자연", "#야외"],
+      title: "루프탑 테라스 공간",
+      tags: ["#황혼의 명도 대비", "#개방적 공간감", "#점광원의 리듬"],
       attributes: [3, 4],
     }, // 50대 남성, 주부
     {
-      title: "마을 풍경",
-      tags: ["#평화로운", "#전원적인", "#자연"],
+      title: "고즈넉한 유럽 골목",
+      tags: ["#저명도 톤 밸런스", "#반사 질감의 부드러움", "#중앙 구도 안정성"],
       attributes: [3, 4],
     }, // 50대 남성, 주부
     {
-      title: "작업 공간",
-      tags: ["#집중", "#모던", "#프로페셔널"],
+      title: "건설 현장의 일출 풍경",
+      tags: ["#황금광 대비", "#산업적 질감 강조", "#수직 구조 리듬"],
       attributes: [3],
     }, // 50대 남성
+    {
+      title: "빌딩",
+      tags: ["#사선 구도", "#엣지 부분대비", "#브루탈리즘"],
+      attributes: [1, 3],
+    }, // 여행자, 50대 남성
+    {
+      title: "윤슬",
+      tags: ["#사인 곡선", "#투명색", "#반추상"],
+      attributes: [2, 5],
+    }, // 20대 여성, 10대 여성
+    {
+      title: "참깨 빵",
+      tags: ["#유기적인 분포", "#비정형성", "#표면 밀도감"],
+      attributes: [4],
+    }, // 주부
+    {
+      title: "네온 사인",
+      tags: ["#형광 물질", "#외부 광선", "#팝 아트"],
+      attributes: [2, 5],
+    }, // 20대 여성, 10대 여성
+    {
+      title: "핫소스",
+      tags: ["#동심원 모양", "#점성 질감", "#모노크롬 미니멀리즘"],
+      attributes: [3, 4],
+    }, // 50대 남성, 주부
+    {
+      title: "폭죽 놀이",
+      tags: ["#방사선 구도", "#광채 확산", "#동적 에너지"],
+      attributes: [2, 5],
+    }, // 20대 여성, 10대 여성
+    {
+      title: "가을 낙엽",
+      tags: ["#그물맥 구조", "#세포 패터닝", "#프랙탈"],
+      attributes: [3, 4],
+    }, // 50대 남성, 주부
+    {
+      title: "성탄절 스웨터",
+      tags: ["#지오메트릭", "#하이라키", "#민속 모티프"],
+      attributes: [4, 5],
+    }, // 주부, 10대 여성
+    {
+      title: "풍선 강아지",
+      tags: ["#풍선 질감", "#반사 질감", "#포스트모더니즘"],
+      attributes: [2, 5],
+    }, // 20대 여성, 10대 여성
+    {
+      title: "철근",
+      tags: ["#산업 질감", "#규칙적인 그리드", "#텍토닉"],
+      attributes: [1, 3],
+    }, // 여행자, 50대 남성
+    {
+      title: "고전 도서관의 정적",
+      tags: ["#확산광의 깊이감", "#목재 질감의 통일성", "#수직적 반복 리듬"],
+      attributes: [3],
+    }, // 50대 남성
+    {
+      title: "트랙 위의 질주",
+      tags: ["#저각 원근 강조", "#역광 실루엣 효과", "#동세 중심 구도"],
+      attributes: [2, 5],
+    }, // 20대 여성, 10대 여성
+    {
+      title: "삼겹살 식사 장면",
+      tags: ["#근접 시선 구도", "#온기감 있는 색채", "#증기와 조명의 대비"],
+      attributes: [2, 4],
+    }, // 20대 여성, 주부
+    {
+      title: "실내 농구 경기",
+      tags: [
+        "#역동적 순간 포착",
+        "#인공조명의 균일 조도",
+        "#원형 구도의 집중감",
+      ],
+      attributes: [2, 5],
+    }, // 20대 여성, 10대 여성
+    {
+      title: "홍대 거리 버스킹",
+      tags: ["#네온 조명 대비", "#군중 밀도감", "#도시적 에너지 흐름"],
+      attributes: [1, 2, 5],
+    }, // 여행자, 20대 여성, 10대 여성
+    {
+      title: "수족관 터널 전경",
+      tags: ["#수중광의 산란", "#곡면 원근감", "#청록색 단일 톤"],
+      attributes: [2, 5],
+    }, // 20대 여성, 10대 여성
+    {
+      title: "대형마트 통로",
+      tags: ["#선형 원근 구도", "#인공조명 균질성", "#포장색의 반복 패턴"],
+      attributes: [4],
+    }, // 주부
+    {
+      title: "제주 해안 일몰",
+      tags: [
+        "#색온도 그라데이션",
+        "#수평선 중심 안정감",
+        "#반사광의 질감 대비",
+      ],
+      attributes: [1, 3, 4],
+    }, // 여행자, 50대 남성, 주부
+    {
+      title: "차창 밖 횡단보도",
+      tags: ["#프레이밍 구도", "#일상적 리듬감", "#선형 대비 구조"],
+      attributes: [2, 4],
+    }, // 20대 여성, 주부
+    {
+      title: "가을 은행나무길",
+      tags: ["#계절색 지배", "#원근 반복 리듬", "#자연광의 부드러운 투과"],
+      attributes: [3, 4],
+    }, // 50대 남성, 주부
   ];
 
-  // 버블 이미지 로드
+  // 버블 이미지 배열 초기화 (지연 로딩을 위해 null로 초기화)
   for (let i = 0; i < imageFiles.length; i++) {
-    bubbleImages.push(loadImage(`assets/bubble-imgs/${imageFiles[i]}`));
+    bubbleImages.push(null);
   }
+
+  // 초기 화면에 보일 버블 이미지만 미리 로드 (성능 최적화)
+  // setup()에서 화면에 보이는 버블 확인 후 로드
 }
 
 function setup() {
-  // pixelDensity(1) 제거 - 화질 유지를 위해 기본 해상도 사용
+  // Windows/데스크톱에서만 pixelDensity(1) 설정 (iPad는 제외)
+  if (!/iPad|iPhone|Macintosh/.test(navigator.userAgent)) {
+    pixelDensity(1); // 윈도우/데스크탑에서 좌표/크기 싱크 맞춤
+  }
   frameRate(45); // 60→45로 캡(시각적 차이는 적고 연산 25%↓)
   createCanvas(windowWidth, windowHeight);
 
@@ -1021,10 +1172,61 @@ function setup() {
   // 검색 입력 필드 생성
   createSearchInput();
 
-  // 배경 버퍼 초기화 (이미지 로드 후 호출)
-  if (bgImage && bgImage.width > 0) {
+  // 자산 로딩 확인 및 에러 체크
+  if (
+    !searchIcon ||
+    (searchIcon.width !== undefined && searchIcon.width === 0)
+  ) {
+    console.error("searchIcon 로딩 실패");
+  }
+  if (
+    !captureButton ||
+    (captureButton.width !== undefined && captureButton.width === 0)
+  ) {
+    console.error("captureButton 로딩 실패");
+  }
+  if (
+    !workroomButton ||
+    (workroomButton.width !== undefined && workroomButton.width === 0)
+  ) {
+    console.error("workroomButton 로딩 실패");
+  }
+  if (
+    !navigationBar ||
+    (navigationBar.width !== undefined && navigationBar.width === 0)
+  ) {
+    console.error("navigationBar 로딩 실패");
+  }
+  if (!bgImage || (bgImage.width !== undefined && bgImage.width === 0)) {
+    console.error("bgImage 로딩 실패");
+  } else {
     redrawBackgroundBuffer();
   }
+  if (!bubbleCap || (bubbleCap.width !== undefined && bubbleCap.width === 0)) {
+    console.error("bubbleCap 로딩 실패");
+  }
+  if (!pretendardFont) {
+    console.error("pretendardFont 로딩 실패");
+  }
+
+  // 네비게이션 바 고해상도 버퍼 생성 (한 번만 생성)
+  if (navigationBar) {
+    const NAV_W = navigationBar.width * 0.375;
+    const NAV_H = navigationBar.height * 0.375;
+    const scaleFactor = 2;
+    navBarBuffer = createGraphics(NAV_W * scaleFactor, NAV_H * scaleFactor);
+    navBarBuffer.imageMode(CORNER);
+    navBarBuffer.image(
+      navigationBar,
+      0,
+      0,
+      NAV_W * scaleFactor,
+      NAV_H * scaleFactor
+    );
+  }
+
+  // 초기 화면에 보이는 버블 이미지 로드
+  loadVisibleBubbleImages();
 
   // 모바일 스크롤 방지
   document.addEventListener(
@@ -1044,6 +1246,38 @@ function setup() {
     },
     { passive: false }
   );
+
+  // 포인터 이벤트 브릿지 설정 (Windows 터치스크린 지원)
+  setupPointerBridges();
+}
+
+// 포인터 이벤트 브릿지 함수 (Windows 터치스크린/펜 지원)
+function setupPointerBridges() {
+  // 포인터 다운 → mousePressed 브릿지
+  window.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "mouse") {
+      // 마우스가 아닌 포인터(터치/펜)만 처리
+      // p5의 mousePressed는 자동으로 호출되지만, 명시적으로 처리
+      if (typeof mousePressed === "function") {
+        // p5 전역 변수 업데이트 (필요한 경우)
+        // mouseX, mouseY는 이미 p5가 업데이트하므로 추가 작업 불필요
+      }
+    }
+  });
+
+  // 포인터 이동 → mouseDragged 브릿지
+  window.addEventListener("pointermove", (e) => {
+    if (isDragging && e.pointerType !== "mouse") {
+      // p5의 mouseDragged는 자동으로 호출됨
+    }
+  });
+
+  // 포인터 업 → mouseReleased 브릿지
+  window.addEventListener("pointerup", (e) => {
+    if (e.pointerType !== "mouse") {
+      // p5의 mouseReleased는 자동으로 호출됨
+    }
+  });
 }
 
 function createSearchInput() {
@@ -1071,6 +1305,12 @@ function createSearchInput() {
   searchInput.style("padding", "0");
   searchInput.style("margin", "0");
   searchInput.style("z-index", "1000"); // 가장 위에 표시
+
+  // Windows에서 레이어 문제 방지: pointer-events 및 위치 제어
+  searchInput.style("pointer-events", "auto"); // 포커스 가능
+  searchInput.style("position", "absolute");
+  searchInput.style("overflow", "hidden");
+  searchInput.style("white-space", "nowrap");
 }
 
 function draw() {
@@ -1332,6 +1572,9 @@ function draw() {
   const NAV_Y = 20;
   const NAV_H = navigationBar ? navigationBar.height * 0.375 : 64;
   const NAV_BOTTOM = NAV_Y + NAV_H;
+
+  // 화면에 보이는 버블의 이미지 지연 로딩
+  loadVisibleBubbleImages();
 
   // LOD: 보이는 버블만 수집하고 가까운 순으로 정렬 (성능 최적화)
   // 필터링된 버블과 팡 터지는 버블 모두 포함
@@ -1744,6 +1987,14 @@ function buildBubbles() {
 
 // ---------- PANNING (스와이프) ----------
 function mousePressed() {
+  // 검색창 클릭 확인 (드래그 방지 전에 확인)
+  const isSearchBarClick = checkSearchBarClick(mouseX, mouseY);
+
+  // 검색창이 아닌 곳을 클릭하면 input 비활성화하여 드래그 확보
+  if (!isSearchBarClick && searchInput) {
+    searchInput.style("pointer-events", "none"); // 캔버스 드래그 확보
+  }
+
   // 네비게이션 바 클릭 확인
   if (navigationBar && checkNavBarClick(mouseX, mouseY)) {
     showModal = true;
@@ -1767,13 +2018,13 @@ function mousePressed() {
       return;
     }
     // 토글 외부 클릭 시 닫기
-    if (!checkSearchBarClick(mouseX, mouseY)) {
+    if (!isSearchBarClick) {
       showToggles = false;
     }
   }
 
   // 검색창 클릭 확인
-  if (checkSearchBarClick(mouseX, mouseY)) {
+  if (isSearchBarClick) {
     // 검색창 클릭 시 항상 전체보기로 전환하고 토글 열기
     if (selectedToggles.length > 0) {
       toggleSelect(0); // 전체보기로 전환
@@ -1816,6 +2067,11 @@ function mouseDragged() {
 function mouseReleased() {
   if (!isDragging) return;
   isDragging = false;
+
+  // input 다시 활성화
+  if (searchInput) {
+    searchInput.style("pointer-events", "auto");
+  }
 
   // 드래그가 끝난 직후 바로 중앙 버블로 스냅
   // 관성이 시작되기 전에 스냅하여 버블이 흐르지 않도록 함
@@ -1923,7 +2179,7 @@ function drawNavBar() {
   const BUTTON_W = captureButton.width * 0.5;
   const BUTTON_H = captureButton.height * 0.5;
 
-  // 네비게이션 바 크기 (0.25 * 1.5 = 0.375)
+  // 네비게이션 바 크기 (기존 크기 유지)
   const NAV_W = navigationBar.width * 0.375;
   const NAV_H = navigationBar.height * 0.375;
 
@@ -1938,8 +2194,20 @@ function drawNavBar() {
   image(workroomButton, width - BUTTON_W, Y, BUTTON_W, BUTTON_H);
 
   // 네비게이션 바 - 중앙에 배치 (두 버튼 사이)
+  // 화질 개선: 고해상도 버퍼 사용 (setup에서 미리 생성)
   const navBarX = (width - NAV_W) / 2;
-  image(navigationBar, navBarX, Y, NAV_W, NAV_H);
+  push();
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  imageMode(CORNER);
+  if (navBarBuffer) {
+    // 고해상도 버퍼를 원래 크기로 축소하여 그리기
+    image(navBarBuffer, navBarX, Y, NAV_W, NAV_H);
+  } else {
+    // 버퍼가 없으면 일반 렌더링 (폴백)
+    image(navigationBar, navBarX, Y, NAV_W, NAV_H);
+  }
+  pop();
 }
 
 // 네비게이션 바 클릭 확인
