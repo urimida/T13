@@ -20,6 +20,8 @@ let pretendardFont; // Pretendard 폰트
 let showModal = false; // 모달 표시 여부
 let showToggles = false; // 토글 표시 여부
 let selectedToggles = []; // 선택된 토글들 (1~5)
+let previousSelectedToggles = []; // 이전에 선택된 토글들 (카테고리 변경 시 비교용)
+let alignAfterPopStartTime = null; // 팡 터짐 후 정렬 시작 시간
 
 // ---------- CONFIG ----------
 const BG_COLOR = "#1a1b1f";
@@ -1148,10 +1150,28 @@ function draw() {
     // 필터링된 버블을 전역 변수에 저장 (snapToCenterBubble에서 사용)
     currentFilteredBubbles = filteredBubbles;
 
-    // 필터링되지 않은 버블들 팡 터지기 시작
+    // 이전 카테고리와 새 카테고리 모두에 포함되는 버블 찾기 (유지되는 버블)
+    let previousFilteredBubbles = [];
+    if (previousSelectedToggles.length > 0) {
+      previousFilteredBubbles = bubbles.filter((b) => {
+        return (
+          b.attributes &&
+          b.attributes.some((attr) => previousSelectedToggles.includes(attr))
+        );
+      });
+    }
+
+    // 공통 버블 (이전과 새 카테고리 모두에 포함되는 버블)
+    const commonBubbles = filteredBubbles.filter((b) =>
+      previousFilteredBubbles.includes(b)
+    );
+
+    // 필터링되지 않은 버블들 팡 터지기 시작 (단, 공통 버블은 제외)
     bubbles.forEach((b) => {
       const isFiltered = filteredBubbles.includes(b);
-      if (!isFiltered && !b.isPopping) {
+      const isCommon = commonBubbles.includes(b);
+      // 필터링되지 않았고, 공통 버블이 아니면 팡 터지기
+      if (!isFiltered && !isCommon && !b.isPopping) {
         b.isPopping = true;
         b.popStartTime = millis();
         b.popProgress = 0;
@@ -1172,6 +1192,9 @@ function draw() {
 
   // 팡 터지는 애니메이션 업데이트
   const POP_DURATION = 400; // 0.4초 동안 팡 터짐
+  let allPopped = true; // 모든 팡 터지는 버블이 완료되었는지 확인
+  let lastPopEndTime = 0; // 마지막 팡 터짐 완료 시간
+
   bubbles.forEach((b) => {
     if (b.isPopping) {
       const elapsed = millis() - b.popStartTime;
@@ -1179,14 +1202,71 @@ function draw() {
 
       if (b.popProgress >= 1.0) {
         b.alpha = 0; // 완전히 사라짐
+        // 팡 터짐 완료 시간 기록
+        const popEndTime = b.popStartTime + POP_DURATION;
+        if (popEndTime > lastPopEndTime) {
+          lastPopEndTime = popEndTime;
+        }
       } else {
         // 팡 터지는 효과: 커지면서 투명해짐
         const scale = 1.0 + b.popProgress * 1.5; // 1.0에서 2.5배까지
         b.alpha = 1.0 - b.popProgress; // 투명도 감소
         // 실제 반지름은 업데이트하지 않고 그릴 때만 스케일 적용
+        allPopped = false; // 아직 팡 터지는 중인 버블이 있음
       }
     }
   });
+
+  // 모든 팡 터지는 애니메이션이 완료되고 0.3초 후에 정렬 시작
+  if (alignAfterPopStartTime !== null) {
+    // 팡 터지는 버블이 모두 완료되었는지 확인
+    if (allPopped && lastPopEndTime > 0) {
+      // 마지막 팡 터짐 완료 시간에서 0.3초 후
+      const elapsed = millis() - lastPopEndTime;
+      const ALIGN_DELAY = 300; // 0.3초 지연
+
+      if (elapsed >= ALIGN_DELAY) {
+        // 정렬 시작
+        if (currentFilteredBubbles.length > 0) {
+          const filteredCount = currentFilteredBubbles.length;
+          const gridSize = Math.ceil(Math.sqrt(filteredCount));
+
+          // 필터링된 버블들을 새로운 그리드로 재배치
+          currentFilteredBubbles.forEach((b, index) => {
+            const newGridX = index % gridSize;
+            const newGridY = Math.floor(index / gridSize);
+            b.gridX = newGridX;
+            b.gridY = newGridY;
+          });
+
+          // 새로운 그리드의 중심 계산
+          const centerGridX = Math.floor(gridSize / 2);
+          const centerGridY = Math.floor((filteredCount - 1) / gridSize / 2);
+          const centerHexX = centerGridX * HEX_SPACING * 1.5;
+          const centerHexY =
+            centerGridY * HEX_SPACING * sqrt(3) +
+            ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
+
+          // 화면 중앙에 오도록 오프셋 계산
+          const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
+          const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
+          const BUBBLE_AREA_BOTTOM = height - 10;
+          const BUBBLE_AREA_CENTER =
+            BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
+          const centerX = width * CENTER_X_RATIO;
+          const centerY = BUBBLE_AREA_CENTER - 20;
+
+          // 타겟 오프셋 설정 (부드럽게 이동하도록)
+          snapTargetX = centerX - centerHexX;
+          snapTargetY = centerY - centerHexY;
+          snapCompleted = false;
+        }
+
+        alignAfterPopStartTime = null; // 정렬 시작 플래그 리셋
+        lastPopEndTime = 0; // 리셋
+      }
+    }
+  }
 
   // 버블 업데이트 및 그리기 (화면에 보이는 것만)
   // 먼저 모든 버블 업데이트하여 중앙 버블 찾기 (1차 업데이트)
@@ -2111,18 +2191,48 @@ function toggleSelect(toggleIndex) {
   // toggleIndex: 0 = 전체 보기, 1~5 = 각 카테고리
   if (toggleIndex === 0) {
     // 전체 보기 선택
+    previousSelectedToggles = [...selectedToggles]; // 이전 선택 저장
     selectedToggles = [];
-    // 모든 버블 복구
-    bubbles.forEach((b) => {
+    // 모든 버블 복구 및 원래 그리드 위치로 복원
+    const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
+    bubbles.forEach((b, index) => {
       if (b.isPopping || b.alpha < 0.5) {
         b.isPopping = false;
         b.popProgress = 0;
         b.alpha = 1.0;
       }
+      // 원래 그리드 위치로 복원
+      b.gridX = index % gridSize;
+      b.gridY = Math.floor(index / gridSize);
     });
+    currentFilteredBubbles = bubbles;
+
+    // 원래 그리드의 중심으로 정렬
+    const centerGridX = Math.floor(gridSize / 2);
+    const centerGridY = Math.floor(gridSize / 2);
+    const centerHexX = centerGridX * HEX_SPACING * 1.5;
+    const centerHexY =
+      centerGridY * HEX_SPACING * sqrt(3) +
+      ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
+
+    const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
+    const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
+    const BUBBLE_AREA_BOTTOM = height - 10;
+    const BUBBLE_AREA_CENTER =
+      BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
+    const centerX = width * CENTER_X_RATIO;
+    const centerY = BUBBLE_AREA_CENTER - 20;
+
+    snapTargetX = centerX - centerHexX;
+    snapTargetY = centerY - centerHexY;
+    snapCompleted = false;
   } else {
     // 카테고리 선택 (1~5를 1~5로 매핑)
     const categoryIndex = toggleIndex; // 1~5
+
+    // 이전 선택된 토글 저장 (카테고리 변경 비교용)
+    previousSelectedToggles = [...selectedToggles];
+
     selectedToggles = [categoryIndex];
 
     // 필터링된 버블 찾기 및 복구
@@ -2133,44 +2243,58 @@ function toggleSelect(toggleIndex) {
       );
     });
 
+    // 이전 카테고리와 새 카테고리 모두에 포함되는 버블 찾기 (유지되는 버블)
+    let previousFilteredBubbles = [];
+    if (previousSelectedToggles.length > 0) {
+      previousFilteredBubbles = bubbles.filter((b) => {
+        return (
+          b.attributes &&
+          b.attributes.some((attr) => previousSelectedToggles.includes(attr))
+        );
+      });
+    }
+
+    // 공통 버블 (이전과 새 카테고리 모두에 포함되는 버블)
+    const commonBubbles = filteredBubbles.filter((b) =>
+      previousFilteredBubbles.includes(b)
+    );
+
     // 필터링된 버블 복구 (alpha 및 팡 터짐 상태 초기화)
+    // 단, 공통 버블은 이미 보이는 상태이므로 alpha만 확인
     filteredBubbles.forEach((b) => {
-      b.isPopping = false;
-      b.popProgress = 0;
-      b.alpha = 1.0; // 바로 보이도록 설정
+      if (!commonBubbles.includes(b)) {
+        // 공통 버블이 아닌 새로 나타나는 버블만 복구
+        b.isPopping = false;
+        b.popProgress = 0;
+        b.alpha = 1.0; // 바로 보이도록 설정
+      } else {
+        // 공통 버블은 팡 터지는 상태만 해제
+        if (b.isPopping) {
+          b.isPopping = false;
+          b.popProgress = 0;
+        }
+        b.alpha = 1.0; // alpha는 유지
+      }
     });
+
+    currentFilteredBubbles = filteredBubbles;
+
+    // 팡 터지는 애니메이션이 완료된 후 0.3초 뒤에 정렬 시작하도록 설정
+    // 팡 터지는 버블이 있는지 확인
+    const hasPoppingBubbles = bubbles.some((b) => b.isPopping);
+    if (hasPoppingBubbles) {
+      // 팡 터지는 버블이 있으면 팡 터짐 완료 후 정렬 시작 시간 설정
+      alignAfterPopStartTime = millis();
+    } else {
+      // 팡 터지는 버블이 없으면 바로 정렬
+      alignAfterPopStartTime = millis() - 1000; // 이미 지난 시간으로 설정하여 바로 실행
+    }
   }
 
-  // 토글 닫기 및 버블 정렬 (바로 정렬)
+  // 토글 닫기
   showToggles = false;
 
-  // 필터링된 버블을 전역 변수에 저장 (snapToCenterBubble에서 사용)
-  if (toggleIndex === 0) {
-    currentFilteredBubbles = bubbles;
-  } else {
-    currentFilteredBubbles = bubbles.filter((b) => {
-      return (
-        b.attributes &&
-        b.attributes.some((attr) => selectedToggles.includes(attr))
-      );
-    });
-  }
-
-  // 필터링된 버블을 먼저 업데이트하여 위치 계산
-  const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
-  const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
-  const BUBBLE_AREA_BOTTOM = height - 10;
-  const BUBBLE_AREA_CENTER =
-    BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
-  const centerX = width * CENTER_X_RATIO;
-  const centerY = BUBBLE_AREA_CENTER - 20;
-
-  currentFilteredBubbles.forEach((b) => {
-    b.update(centerX, centerY, offsetX, offsetY, null);
-  });
-
   // 버블 정렬 (버블이 이동하면서 정렬되도록)
-  snapToCenterBubble();
   startAnim(); // 필터링 업데이트를 위해 애니메이션 시작
 }
 
