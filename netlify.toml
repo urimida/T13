@@ -15,6 +15,12 @@
   to = "/analyze/dist/index.html"
   status = 200
 
+# Explorer 페이지
+[[redirects]]
+  from = "/explorer/*"
+  to = "/explorer/index.html"
+  status = 200
+
 # 메인 페이지
 [[redirects]]
   from = "/*"
