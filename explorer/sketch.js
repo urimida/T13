@@ -55,7 +55,9 @@ const FISHEYE_STRENGTH = 2.5; // 피시아이 효과 강도
 const CENTER_INFLUENCE_RADIUS = 200; // 중앙 버블이 주변에 영향을 미치는 반경
 const PAN_SENSITIVITY = 0.6; // 패닝 감도 (낮을수록 느림)
 const SEARCH_SCALE = 0.7 * 0.7; // 검색창 스케일
-const SEARCH_Y = 120; // 검색창 Y 위치
+const SEARCH_Y = 100; // 검색창 Y 위치 (기본값, 반응형으로 계산됨)
+const SEARCH_WIDTH_RATIO = 0.2; // 검색창 너비 비율 (화면 너비의 65%)
+const SEARCH_NAV_GAP = 20; // 네비게이션 바와 검색창 사이 간격
 
 // 성능 최적화 설정
 const MAX_DRAW = 140; // 그릴 최대 버블 수 (LOD)
@@ -1220,9 +1222,13 @@ function setup() {
   }
 
   // 네비게이션 바 고해상도 버퍼 생성 (한 번만 생성)
+  // windowResized에서 재생성하므로 여기서는 기본 크기로 생성
   if (navigationBar) {
-    const NAV_W = navigationBar.width * 0.375;
-    const NAV_H = navigationBar.height * 0.375;
+    // 반응형 스케일 계산 (헬퍼 함수 사용)
+    const responsiveScale = getResponsiveScale();
+
+    const NAV_W = navigationBar.width * 0.375 * responsiveScale;
+    const NAV_H = navigationBar.height * 0.375 * responsiveScale;
     const scaleFactor = 2;
     navBarBuffer = createGraphics(NAV_W * scaleFactor, NAV_H * scaleFactor);
     navBarBuffer.imageMode(CORNER);
@@ -1291,16 +1297,14 @@ function setupPointerBridges() {
 }
 
 function createSearchInput() {
-  const W = 1205 * SEARCH_SCALE;
-  const H = 75 * SEARCH_SCALE;
-  const X = (width - W) / 2;
-  const Y = 120;
+  const responsiveScale = getResponsiveScale();
+  const { W, H, X, Y } = getSearchMetrics();
 
   // 아이콘 영역을 제외한 텍스트 입력 영역
-  const iconSize = 24 * SEARCH_SCALE * 1.5;
-  const iconX = X + 24 * SEARCH_SCALE;
-  const textStartX = iconX + iconSize + 16 * SEARCH_SCALE;
-  const textWidth = W - (textStartX - X) - 24 * SEARCH_SCALE;
+  const iconSize = 24 * SEARCH_SCALE * responsiveScale * 1.5;
+  const iconX = X + 24 * SEARCH_SCALE * responsiveScale;
+  const textStartX = iconX + iconSize + 16 * SEARCH_SCALE * responsiveScale;
+  const textWidth = W - (textStartX - X) - 24 * SEARCH_SCALE * responsiveScale;
 
   searchInput = createInput("");
   searchInput.attribute("placeholder", "");
@@ -1310,11 +1314,16 @@ function createSearchInput() {
   searchInput.style("border", "none");
   searchInput.style("outline", "none");
   searchInput.style("color", "rgba(255,255,255,0.8)");
-  searchInput.style("font-size", `${16 * SEARCH_SCALE * 1.2 * 1.5}px`);
+  searchInput.style(
+    "font-size",
+    `${16 * SEARCH_SCALE * responsiveScale * 1.2 * 1.5}px`
+  );
   searchInput.style("font-family", "inherit");
   searchInput.style("padding", "0");
   searchInput.style("margin", "0");
   searchInput.style("z-index", "1000"); // 가장 위에 표시
+  searchInput.style("text-align", "center"); // 텍스트 중앙 정렬
+  searchInput.style("line-height", `${H}px`); // 세로 중앙 정렬을 위한 line-height
 
   // Windows에서 레이어 문제 방지: pointer-events 및 위치 제어
   searchInput.style("pointer-events", "auto"); // 포커스 가능
@@ -1580,7 +1589,11 @@ function draw() {
 
   // 검색창과 네비게이션 바 영역 계산 (재사용)
   const NAV_Y = 20;
-  const NAV_H = navigationBar ? navigationBar.height * 0.375 : 64;
+  // 반응형 스케일 계산 (헬퍼 함수 사용)
+  const responsiveScale = getResponsiveScale();
+  const NAV_H = navigationBar
+    ? navigationBar.height * 0.375 * responsiveScale
+    : 64;
   const NAV_BOTTOM = NAV_Y + NAV_H;
 
   // 화면에 보이는 버블의 이미지 지연 로딩
@@ -1690,26 +1703,77 @@ function windowResized() {
   redrawBackgroundBuffer(); // 배경 버퍼 재생성
   buildBubbles(); // 버블 재생성
 
+  // 네비게이션 바 고해상도 버퍼 재생성 (화면 크기 변경 시)
+  if (navigationBar) {
+    // 반응형 스케일 계산 (헬퍼 함수 사용)
+    const responsiveScale = getResponsiveScale();
+
+    const NAV_W = navigationBar.width * 0.375 * responsiveScale;
+    const NAV_H = navigationBar.height * 0.375 * responsiveScale;
+    const scaleFactor = 2;
+    navBarBuffer = createGraphics(NAV_W * scaleFactor, NAV_H * scaleFactor);
+    navBarBuffer.imageMode(CORNER);
+    navBarBuffer.image(
+      navigationBar,
+      0,
+      0,
+      NAV_W * scaleFactor,
+      NAV_H * scaleFactor
+    );
+  }
+
   // 검색 입력 필드 위치 업데이트
   if (searchInput) {
+    const responsiveScale = getResponsiveScale();
     const { W, H, X, Y } = getSearchMetrics();
-    const iconSize = 24 * SEARCH_SCALE * 1.5;
-    const iconX = X + 24 * SEARCH_SCALE;
-    const textStartX = iconX + iconSize + 16 * SEARCH_SCALE;
-    const textWidth = W - (textStartX - X) - 24 * SEARCH_SCALE;
+    const iconSize = 24 * SEARCH_SCALE * responsiveScale * 1.5;
+    const iconX = X + 24 * SEARCH_SCALE * responsiveScale;
+    const textStartX = iconX + iconSize + 16 * SEARCH_SCALE * responsiveScale;
+    const textWidth =
+      W - (textStartX - X) - 24 * SEARCH_SCALE * responsiveScale;
 
     searchInput.position(textStartX, Y);
     searchInput.size(textWidth, H);
+    searchInput.style(
+      "font-size",
+      `${16 * SEARCH_SCALE * responsiveScale * 1.2 * 1.5}px`
+    );
+    searchInput.style("text-align", "center"); // 텍스트 중앙 정렬
+    searchInput.style("line-height", `${H}px`); // 세로 중앙 정렬을 위한 line-height
   }
 }
 
 // ---------- UTILS ----------
+// 반응형 스케일 계산 헬퍼 함수
+function getResponsiveScale() {
+  const baseWidth = 1920;
+  const baseHeight = 1080;
+  const scaleX = width / baseWidth;
+  const scaleY = height / baseHeight;
+  const scale = Math.min(scaleX, scaleY);
+  const minScale = 0.5;
+  const maxScale = 1.5;
+  return Math.max(minScale, Math.min(maxScale, scale));
+}
+
 // 검색창 메트릭 헬퍼 함수
 function getSearchMetrics() {
-  const W = 1205 * SEARCH_SCALE;
-  const H = 75 * SEARCH_SCALE;
+  const responsiveScale = getResponsiveScale();
+
+  // 네비게이션 바 높이 계산
+  const NAV_Y = 20;
+  const NAV_H = navigationBar
+    ? navigationBar.height * 0.375 * responsiveScale
+    : 64;
+  const NAV_BOTTOM = NAV_Y + NAV_H;
+
+  // 검색창 너비: 화면 너비의 비율로 반응형 조정
+  const W = width * SEARCH_WIDTH_RATIO * responsiveScale;
+  const H = 75 * SEARCH_SCALE * responsiveScale;
   const X = (width - W) / 2;
-  const Y = SEARCH_Y;
+  // 네비게이션 바 아래에 적절한 간격을 두고 배치
+  const Y = NAV_BOTTOM + SEARCH_NAV_GAP * responsiveScale;
+
   return { W, H, X, Y, bottom: Y + H };
 }
 
@@ -2185,13 +2249,16 @@ function touchEnded() {
 function drawNavBar() {
   if (!captureButton || !workroomButton || !navigationBar) return;
 
-  // 버튼 크기 (반으로 줄임)
-  const BUTTON_W = captureButton.width * 0.5;
-  const BUTTON_H = captureButton.height * 0.5;
+  // 반응형 스케일 계산 (헬퍼 함수 사용)
+  const responsiveScale = getResponsiveScale();
 
-  // 네비게이션 바 크기 (기존 크기 유지)
-  const NAV_W = navigationBar.width * 0.375;
-  const NAV_H = navigationBar.height * 0.375;
+  // 버튼 크기 (반응형 스케일 적용)
+  const BUTTON_W = captureButton.width * 0.5 * responsiveScale;
+  const BUTTON_H = captureButton.height * 0.5 * responsiveScale;
+
+  // 네비게이션 바 크기 (반응형 스케일 적용)
+  const NAV_W = navigationBar.width * 0.375 * responsiveScale;
+  const NAV_H = navigationBar.height * 0.375 * responsiveScale;
 
   // 상단 위치
   const Y = 20;
@@ -2224,9 +2291,14 @@ function drawNavBar() {
 function checkNavBarClick(x, y) {
   if (!navigationBar) return false;
 
-  const BUTTON_W = captureButton ? captureButton.width * 0.5 : 0;
-  const NAV_W = navigationBar.width * 0.375;
-  const NAV_H = navigationBar.height * 0.375;
+  // 반응형 스케일 계산 (헬퍼 함수 사용)
+  const responsiveScale = getResponsiveScale();
+
+  const BUTTON_W = captureButton
+    ? captureButton.width * 0.5 * responsiveScale
+    : 0;
+  const NAV_W = navigationBar.width * 0.375 * responsiveScale;
+  const NAV_H = navigationBar.height * 0.375 * responsiveScale;
   const Y = 20;
   const navBarX = (width - NAV_W) / 2;
 
@@ -2356,20 +2428,18 @@ function drawModal() {
 }
 
 function drawSearchBar() {
-  const W = 1205 * SEARCH_SCALE;
-  const H = 75 * SEARCH_SCALE;
-  const X = (width - W) / 2;
-  const Y = 120;
+  const responsiveScale = getResponsiveScale();
+  const { W, H, X, Y } = getSearchMetrics();
 
   // 바 배경 - linear gradient
   noStroke();
   drawingContext.save();
 
   // box-shadow
-  drawingContext.shadowBlur = 30 * SEARCH_SCALE;
+  drawingContext.shadowBlur = 30 * SEARCH_SCALE * responsiveScale;
   drawingContext.shadowColor = "rgba(135, 135, 135, 0.30)";
-  drawingContext.shadowOffsetX = 7 * SEARCH_SCALE;
-  drawingContext.shadowOffsetY = 7 * SEARCH_SCALE;
+  drawingContext.shadowOffsetX = 7 * SEARCH_SCALE * responsiveScale;
+  drawingContext.shadowOffsetY = 7 * SEARCH_SCALE * responsiveScale;
 
   // linear gradient
   const gradient = drawingContext.createLinearGradient(X, Y, X, Y + H);
@@ -2378,7 +2448,7 @@ function drawSearchBar() {
   drawingContext.fillStyle = gradient;
 
   // rounded rect (수동으로 path 그리기)
-  const radius = 48 * SEARCH_SCALE;
+  const radius = 48 * SEARCH_SCALE * responsiveScale;
   drawingContext.beginPath();
   drawingContext.moveTo(X + radius, Y);
   drawingContext.lineTo(X + W - radius, Y);
@@ -2396,8 +2466,8 @@ function drawSearchBar() {
 
   // 돋보기 아이콘
   if (searchIcon) {
-    const iconSize = 24 * SEARCH_SCALE * 1.5; // 1.5배
-    const iconX = X + 24 * SEARCH_SCALE;
+    const iconSize = 24 * SEARCH_SCALE * responsiveScale * 1.5; // 1.5배
+    const iconX = X + 24 * SEARCH_SCALE * responsiveScale;
     const iconY = Y + (H - iconSize) / 2;
     imageMode(CORNER);
     tint(255, 255, 255, 165); // rgba(255,255,255,0.65) 효과
@@ -2412,7 +2482,7 @@ function drawSearchBar() {
   if (!showToggles) {
     push();
     noStroke();
-    textAlign(LEFT, CENTER);
+    textAlign(CENTER, CENTER); // 가로, 세로 모두 중앙 정렬
 
     if (pretendardFont) {
       textFont(pretendardFont);
@@ -2433,10 +2503,11 @@ function drawSearchBar() {
     }
 
     fill(255, 255, 255, 200);
-    textSize(16 * SEARCH_SCALE * 2); // 2배로 크게
+    textSize(16 * SEARCH_SCALE * responsiveScale * 2); // 2배로 크게
     textStyle(NORMAL);
-    const textX = X + 24 * SEARCH_SCALE + 40 * SEARCH_SCALE + 10; // 10픽셀 오른쪽
-    const textY = Y + H / 2 - 2; // 3픽셀 위로
+    // 검색창 중앙에 위치
+    const textX = X + W / 2; // 검색창 가로 중앙
+    const textY = Y + H / 2; // 검색창 세로 중앙
     text(displayText, textX, textY);
     pop();
   }
@@ -2444,10 +2515,7 @@ function drawSearchBar() {
 
 // 검색창 클릭 확인
 function checkSearchBarClick(x, y) {
-  const W = 1205 * SEARCH_SCALE;
-  const H = 75 * SEARCH_SCALE;
-  const X = (width - W) / 2;
-  const Y = 120;
+  const { W, H, X, Y } = getSearchMetrics();
 
   return x >= X && x <= X + W && y >= Y && y <= Y + H;
 }
