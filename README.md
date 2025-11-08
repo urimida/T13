@@ -52,6 +52,23 @@ T13/
 - 빌드하지 않으면 분석 프로젝트에 접근할 수 없습니다.
 - 다른 두 프로젝트(서클 투 캡쳐, 익스플로러)는 빌드 없이 바로 사용 가능합니다.
 
+## 🌐 Netlify 배포
+
+Netlify에 배포하면 **자동으로 빌드**됩니다! 별도로 빌드할 필요가 없습니다.
+
+### 배포 방법
+
+1. **GitHub/GitLab에 코드 푸시**
+2. **Netlify에서 사이트 생성**
+   - "Add new site" → "Import an existing project"
+   - 저장소 선택
+3. **빌드 설정** (자동 감지됨)
+   - Build command: `cd analyze && npm install && npm run build` (또는 `npm run build`)
+   - Publish directory: `.` (루트)
+4. **배포 완료!**
+
+`netlify.toml` 파일이 이미 설정되어 있어서 자동으로 빌드됩니다.
+
 ## 🔧 문제 해결
 
 ### 분석 프로젝트가 작동하지 않을 때
@@ -65,6 +82,12 @@ T13/
 1. Node.js가 설치되어 있는지 확인 (`node --version`)
 2. `analyze` 폴더에서 `npm install` 실행
 3. 다시 빌드 시도
+
+### Netlify 배포 시 빌드 실패
+
+1. Netlify 대시보드에서 빌드 로그 확인
+2. `netlify.toml` 파일이 루트에 있는지 확인
+3. Node.js 버전이 18 이상인지 확인
 
 ## 📝 라이선스
 

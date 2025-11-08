@@ -1,0 +1,47 @@
+[build]
+  # 빌드 명령어: analyze 폴더에서 빌드 실행
+  command = "cd analyze && npm install && npm run build"
+  # 빌드 결과물이 생성되는 폴더
+  publish = "."
+
+[build.environment]
+  # Node.js 버전 설정 (필요시)
+  NODE_VERSION = "18"
+
+# 리다이렉트 규칙: 모든 경로를 index.html로 리다이렉트 (SPA 지원)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# 헤더 설정 (캐시 최적화)
+[[headers]]
+  for = "/analyze/dist/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.png"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.jpg"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.svg"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+

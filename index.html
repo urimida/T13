@@ -207,45 +207,6 @@
           padding: 2rem;
         }
       }
-
-      /* 로딩 애니메이션 */
-      .loading {
-        display: none;
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(15, 15, 16, 0.95);
-        z-index: 9999;
-        align-items: center;
-        justify-content: center;
-        flex-direction: column;
-      }
-
-      .loading.active {
-        display: flex;
-      }
-
-      .spinner {
-        width: 50px;
-        height: 50px;
-        border: 4px solid rgba(255, 255, 255, 0.1);
-        border-top-color: #ffffff;
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-      }
-
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
-      }
-
-      .loading-text {
-        margin-top: 1rem;
-        color: rgba(255, 255, 255, 0.8);
-      }
     </style>
   </head>
   <body>
@@ -293,35 +254,8 @@
       </div>
     </div>
 
-    <div class="loading" id="loading">
-      <div class="spinner"></div>
-      <p class="loading-text">프로젝트를 불러오는 중...</p>
-    </div>
-
-    <div
-      class="build-instructions"
-      id="build-instructions"
-      style="display: none"
-    >
-      <h3>🔧 분석 프로젝트 빌드 방법</h3>
-      <ol>
-        <li>
-          <strong>자동 빌드 (권장):</strong><br />
-          Windows: <code>build-all.bat</code> 파일을 더블클릭<br />
-          Mac/Linux: 터미널에서 <code>node build-all.js</code> 실행
-        </li>
-        <li>
-          <strong>수동 빌드:</strong><br />
-          <code>cd analyze</code> → <code>npm install</code> →
-          <code>npm run build</code>
-        </li>
-        <li>빌드 완료 후 페이지를 새로고침하세요.</li>
-      </ol>
-    </div>
-
     <script>
       const projectCards = document.querySelectorAll(".project-card");
-      const loading = document.getElementById("loading");
       const analyzeStatus = document.getElementById("analyze-status");
       const buildInstructions = document.getElementById("build-instructions");
 
@@ -358,43 +292,27 @@
       });
 
       function navigateToProject(project) {
-        loading.classList.add("active");
+        let path = "";
 
-        // 짧은 딜레이 후 이동 (로딩 애니메이션 표시)
-        setTimeout(() => {
-          let path = "";
+        switch (project) {
+          case "analyze":
+            // React 앱은 빌드 후 dist 폴더에 있음
+            path = "analyze/dist/index.html";
+            break;
+          case "circle-to-capture":
+            path = "circle-to-capture/index.html";
+            break;
+          case "explorer":
+            path = "explorer/index.html";
+            break;
+        }
 
-          switch (project) {
-            case "analyze":
-              // React 앱은 빌드 후 dist 폴더에 있음
-              path = "analyze/dist/index.html";
-              break;
-            case "circle-to-capture":
-              path = "circle-to-capture/index.html";
-              break;
-            case "explorer":
-              path = "explorer/index.html";
-              break;
-          }
-
-          // 파일 존재 여부 확인 후 이동
-          fetch(path, { method: "HEAD" })
-            .then((response) => {
-              if (response.ok) {
-                window.location.href = path;
-              } else {
-                if (project === "analyze") {
-                  const message = `분석 프로젝트가 빌드되지 않았습니다.\n\n빌드 방법:\n\n1. 자동 빌드 (권장):\n   - Windows: build-all.bat 파일 더블클릭\n   - Mac/Linux: 터미널에서 "node build-all.js" 실행\n\n2. 수동 빌드:\n   - analyze 폴더로 이동\n   - npm install 실행\n   - npm run build 실행\n\n빌드 완료 후 페이지를 새로고침하세요.`;
-                  alert(message);
-                  // 빌드 안내 표시
-                  buildInstructions.scrollIntoView({ behavior: "smooth" });
-                } else {
-                  alert("프로젝트를 찾을 수 없습니다.");
-                }
-                loading.classList.remove("active");
-              }
-            })
-            .catch(() => {
+        // 파일 존재 여부 확인 후 이동
+        fetch(path, { method: "HEAD" })
+          .then((response) => {
+            if (response.ok) {
+              window.location.href = path;
+            } else {
               if (project === "analyze") {
                 const message = `분석 프로젝트가 빌드되지 않았습니다.\n\n빌드 방법:\n\n1. 자동 빌드 (권장):\n   - Windows: build-all.bat 파일 더블클릭\n   - Mac/Linux: 터미널에서 "node build-all.js" 실행\n\n2. 수동 빌드:\n   - analyze 폴더로 이동\n   - npm install 실행\n   - npm run build 실행\n\n빌드 완료 후 페이지를 새로고침하세요.`;
                 alert(message);
@@ -403,9 +321,18 @@
               } else {
                 alert("프로젝트를 찾을 수 없습니다.");
               }
-              loading.classList.remove("active");
-            });
-        }, 300);
+            }
+          })
+          .catch(() => {
+            if (project === "analyze") {
+              const message = `분석 프로젝트가 빌드되지 않았습니다.\n\n빌드 방법:\n\n1. 자동 빌드 (권장):\n   - Windows: build-all.bat 파일 더블클릭\n   - Mac/Linux: 터미널에서 "node build-all.js" 실행\n\n2. 수동 빌드:\n   - analyze 폴더로 이동\n   - npm install 실행\n   - npm run build 실행\n\n빌드 완료 후 페이지를 새로고침하세요.`;
+              alert(message);
+              // 빌드 안내 표시
+              buildInstructions.scrollIntoView({ behavior: "smooth" });
+            } else {
+              alert("프로젝트를 찾을 수 없습니다.");
+            }
+          });
       }
     </script>
   </body>
