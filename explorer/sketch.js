@@ -1101,9 +1101,16 @@ function draw() {
         // 중앙 버블이 있으면 빛 효과를 위해 애니메이션 계속 실행
         // stopAnim()은 나중에 중앙 버블 확인 후 호출
       } else {
-        // 부드럽게 타겟으로 이동
-        offsetX = lerp(offsetX, snapTargetX, SNAP_SPEED);
-        offsetY = lerp(offsetY, snapTargetY, SNAP_SPEED);
+        // 부드럽게 타겟으로 이동 (거리에 따라 속도 조정)
+        const dx = snapTargetX - offsetX;
+        const dy = snapTargetY - offsetY;
+        const dist = sqrt(dx * dx + dy * dy);
+
+        // 거리가 멀수록 더 빠르게, 가까울수록 더 느리게 (자연스러운 감속)
+        const dynamicSpeed = min(SNAP_SPEED * (1 + dist / 1000), 0.25);
+
+        offsetX = lerp(offsetX, snapTargetX, dynamicSpeed);
+        offsetY = lerp(offsetY, snapTargetY, dynamicSpeed);
         panVelocityX = 0; // 스냅 중에는 관성 무시
         panVelocityY = 0;
       }
@@ -1191,14 +1198,20 @@ function draw() {
   }
 
   // 팡 터지는 애니메이션 업데이트
-  const POP_DURATION = 400; // 0.4초 동안 팡 터짐
+  const POP_DURATION = 500; // 0.5초 동안 팡 터짐 (더 부드럽게)
   let allPopped = true; // 모든 팡 터지는 버블이 완료되었는지 확인
   let lastPopEndTime = 0; // 마지막 팡 터짐 완료 시간
+
+  // Easing 함수: ease-out cubic
+  function easeOutCubic(t) {
+    return 1 - pow(1 - t, 3);
+  }
 
   bubbles.forEach((b) => {
     if (b.isPopping) {
       const elapsed = millis() - b.popStartTime;
-      b.popProgress = Math.min(elapsed / POP_DURATION, 1.0);
+      const rawProgress = Math.min(elapsed / POP_DURATION, 1.0);
+      b.popProgress = easeOutCubic(rawProgress); // easing 적용
 
       if (b.popProgress >= 1.0) {
         b.alpha = 0; // 완전히 사라짐
@@ -1208,8 +1221,8 @@ function draw() {
           lastPopEndTime = popEndTime;
         }
       } else {
-        // 팡 터지는 효과: 커지면서 투명해짐
-        const scale = 1.0 + b.popProgress * 1.5; // 1.0에서 2.5배까지
+        // 팡 터지는 효과: 커지면서 투명해짐 (더 부드러운 곡선)
+        const scale = 1.0 + b.popProgress * 1.2; // 1.0에서 2.2배까지 (더 부드럽게)
         b.alpha = 1.0 - b.popProgress; // 투명도 감소
         // 실제 반지름은 업데이트하지 않고 그릴 때만 스케일 적용
         allPopped = false; // 아직 팡 터지는 중인 버블이 있음
@@ -1217,53 +1230,55 @@ function draw() {
     }
   });
 
-  // 모든 팡 터지는 애니메이션이 완료되고 0.3초 후에 정렬 시작
+  // 팡 애니메이션이 진행되는 동안 시점 이동 시작 (더 자연스럽게)
   if (alignAfterPopStartTime !== null) {
-    // 팡 터지는 버블이 모두 완료되었는지 확인
-    if (allPopped && lastPopEndTime > 0) {
-      // 마지막 팡 터짐 완료 시간에서 0.3초 후
-      const elapsed = millis() - lastPopEndTime;
-      const ALIGN_DELAY = 300; // 0.3초 지연
+    const elapsedSinceStart = millis() - alignAfterPopStartTime;
+    const POP_START_DELAY = 200; // 팡 애니메이션 시작 후 0.2초 후에 시점 이동 시작
 
-      if (elapsed >= ALIGN_DELAY) {
-        // 정렬 시작
-        if (currentFilteredBubbles.length > 0) {
-          const filteredCount = currentFilteredBubbles.length;
-          const gridSize = Math.ceil(Math.sqrt(filteredCount));
+    // 팡 애니메이션이 시작된 지 일정 시간이 지나면 바로 정렬 시작
+    // 팡 애니메이션이 완료되기를 기다리지 않고 진행 중에 시작
+    if (elapsedSinceStart >= POP_START_DELAY) {
+      // 정렬 시작
+      if (currentFilteredBubbles.length > 0) {
+        const filteredCount = currentFilteredBubbles.length;
+        const gridSize = Math.ceil(Math.sqrt(filteredCount));
 
-          // 필터링된 버블들을 새로운 그리드로 재배치
-          currentFilteredBubbles.forEach((b, index) => {
-            const newGridX = index % gridSize;
-            const newGridY = Math.floor(index / gridSize);
-            b.gridX = newGridX;
-            b.gridY = newGridY;
-          });
+        // 필터링된 버블들을 새로운 그리드로 재배치
+        currentFilteredBubbles.forEach((b, index) => {
+          const newGridX = index % gridSize;
+          const newGridY = Math.floor(index / gridSize);
+          b.gridX = newGridX;
+          b.gridY = newGridY;
+        });
 
-          // 새로운 그리드의 중심 계산
-          const centerGridX = Math.floor(gridSize / 2);
-          const centerGridY = Math.floor((filteredCount - 1) / gridSize / 2);
-          const centerHexX = centerGridX * HEX_SPACING * 1.5;
-          const centerHexY =
-            centerGridY * HEX_SPACING * sqrt(3) +
-            ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
+        // 새로운 그리드의 중심 계산
+        const centerGridX = Math.floor(gridSize / 2);
+        const centerGridY = Math.floor((filteredCount - 1) / gridSize / 2);
+        const centerHexX = centerGridX * HEX_SPACING * 1.5;
+        const centerHexY =
+          centerGridY * HEX_SPACING * sqrt(3) +
+          ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
 
-          // 화면 중앙에 오도록 오프셋 계산
-          const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
-          const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
-          const BUBBLE_AREA_BOTTOM = height - 10;
-          const BUBBLE_AREA_CENTER =
-            BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
-          const centerX = width * CENTER_X_RATIO;
-          const centerY = BUBBLE_AREA_CENTER - 20;
+        // 화면 중앙에 오도록 오프셋 계산
+        const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
+        const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
+        const BUBBLE_AREA_BOTTOM = height - 10;
+        const BUBBLE_AREA_CENTER =
+          BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
+        const centerX = width * CENTER_X_RATIO;
+        const centerY = BUBBLE_AREA_CENTER - 20;
 
-          // 타겟 오프셋 설정 (부드럽게 이동하도록)
-          snapTargetX = centerX - centerHexX;
-          snapTargetY = centerY - centerHexY;
-          snapCompleted = false;
-        }
+        // 타겟 오프셋 설정 (부드럽게 이동하도록)
+        // 현재 위치에서 목표 위치로 부드럽게 이동 시작
+        snapTargetX = centerX - centerHexX;
+        snapTargetY = centerY - centerHexY;
+        snapCompleted = false;
 
-        alignAfterPopStartTime = null; // 정렬 시작 플래그 리셋
-        lastPopEndTime = 0; // 리셋
+        // 애니메이션 시작 (즉시 시점 이동 시작)
+        startAnim();
+
+        // 정렬 시작 플래그 리셋 (한 번만 실행되도록)
+        alignAfterPopStartTime = null;
       }
     }
   }
@@ -1759,7 +1774,11 @@ function mousePressed() {
 
   // 검색창 클릭 확인
   if (checkSearchBarClick(mouseX, mouseY)) {
-    showToggles = !showToggles;
+    // 검색창 클릭 시 항상 전체보기로 전환하고 토글 열기
+    if (selectedToggles.length > 0) {
+      toggleSelect(0); // 전체보기로 전환
+    }
+    showToggles = true; // 토글 항상 열기
     startAnim();
     return;
   }
@@ -1840,7 +1859,11 @@ function touchStarted() {
 
     // 검색창 클릭 확인
     if (checkSearchBarClick(touch.x, touch.y)) {
-      showToggles = !showToggles;
+      // 검색창 클릭 시 항상 전체보기로 전환하고 토글 열기
+      if (selectedToggles.length > 0) {
+        toggleSelect(0); // 전체보기로 전환
+      }
+      showToggles = true; // 토글 항상 열기
       startAnim();
       return false;
     }
@@ -2132,10 +2155,10 @@ function drawSearchBar() {
     }
 
     fill(255, 255, 255, 200);
-    textSize(16 * SEARCH_SCALE);
+    textSize(16 * SEARCH_SCALE * 2); // 2배로 크게
     textStyle(NORMAL);
-    const textX = X + 24 * SEARCH_SCALE + 40 * SEARCH_SCALE;
-    const textY = Y + H / 2;
+    const textX = X + 24 * SEARCH_SCALE + 40 * SEARCH_SCALE + 10; // 10픽셀 오른쪽
+    const textY = Y + H / 2 - 2; // 3픽셀 위로
     text(displayText, textX, textY);
     pop();
   }
