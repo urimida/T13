@@ -795,7 +795,7 @@ function drawCenterBubbleCap(bubble) {
 
 // 중앙 버블 설명창 그리기
 function drawBubbleInfo(bubble, centerX, centerY) {
-  const infoY = bubble.pos.y + bubble.r + 30; // 버블 아래 30px
+  const infoY = bubble.pos.y + bubble.r + 20; // 버블 아래 20px (더 가깝게, 위로 올라감)
   const infoWidth = 320;
   const infoHeight = 90;
   const infoX = bubble.pos.x - infoWidth / 2;
@@ -1141,7 +1141,7 @@ function draw() {
     BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
 
   const centerX = width * CENTER_X_RATIO;
-  const centerY = BUBBLE_AREA_CENTER - 20; // 검색창 아래 영역의 중앙에서 20픽셀 위
+  const centerY = BUBBLE_AREA_CENTER - 70; // 검색창 아래 영역의 중앙에서 70픽셀 위 (더 위로)
 
   // 버블 필터링 (선택된 토글이 있으면 해당 속성을 가진 버블만 표시)
   let filteredBubbles = bubbles;
@@ -1266,7 +1266,7 @@ function draw() {
         const BUBBLE_AREA_CENTER =
           BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
         const centerX = width * CENTER_X_RATIO;
-        const centerY = BUBBLE_AREA_CENTER - 20;
+        const centerY = BUBBLE_AREA_CENTER - 70; // 더 위로
 
         // 타겟 오프셋 설정 (부드럽게 이동하도록)
         // 현재 위치에서 목표 위치로 부드럽게 이동 시작
@@ -1317,8 +1317,8 @@ function draw() {
 
   // 중앙 버블을 최대 크기로 부드럽게 설정 (배경 움직임에 따라 동적으로 변함)
   if (centerBubble) {
-    // 부드럽게 최대 크기로 변화 (1.2배 더 크게)
-    centerBubble.r = lerp(centerBubble.r, MAX_BUBBLE_RADIUS * 1.2, 0.2);
+    // 부드럽게 최대 크기로 변화 (1.2배 * 0.9 = 1.08배, 약간 작게)
+    centerBubble.r = lerp(centerBubble.r, MAX_BUBBLE_RADIUS * 1.2 * 0.9, 0.2);
 
     // 중앙 버블 위치를 전달하여 주변 버블들이 작아지도록 재업데이트 (필터링된 버블만)
     filteredBubbles.forEach((b) => {
@@ -1473,7 +1473,7 @@ function snapToCenterBubble() {
     BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
 
   const centerX = width * CENTER_X_RATIO;
-  const centerY = BUBBLE_AREA_CENTER - 20; // 검색창 아래 영역의 중앙에서 20픽셀 위
+  const centerY = BUBBLE_AREA_CENTER - 70; // 검색창 아래 영역의 중앙에서 70픽셀 위 (더 위로)
 
   // 필터링된 버블만 사용 (없으면 모든 버블 사용)
   const bubblesToUse =
