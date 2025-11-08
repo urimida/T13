@@ -6,7 +6,7 @@
 
 [build.environment]
   # Node.js 버전 설정 (필요시)
-  NODE_VERSION = "18"
+  NODE_VERSION = "20"
 
 # 리다이렉트 규칙: 모든 경로를 index.html로 리다이렉트 (SPA 지원)
 [[redirects]]

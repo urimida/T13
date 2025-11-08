@@ -39,6 +39,7 @@ export default function GridPage() {
     }));
 
     function layoutInitial() {
+      if (!container) return;
       const rect = container.getBoundingClientRect();
       const cell = Math.min(rect.width, rect.height) / 3;
       bubbles.forEach((b) => {
@@ -104,6 +105,7 @@ export default function GridPage() {
     let raf = 0;
 
     function tick() {
+      if (!container) return;
       const rect = container.getBoundingClientRect();
       bubbles.forEach((b, i) => {
         // gentle floating
@@ -172,7 +174,9 @@ export default function GridPage() {
           return (
             <button
               key={idx}
-              ref={(el) => (itemRefs[i].el = el)}
+              ref={(el) => {
+                itemRefs[i].el = el;
+              }}
               className="absolute rounded-full overflow-hidden focus-visible:outline-ring/50 focus-visible:ring-[3px]"
               style={styleForCell}
               onClick={() => navigate(`/cell/${idx}`)}
