@@ -584,22 +584,32 @@ function redrawBackgroundBuffer() {
 
     let drawW, drawH, bgOffsetX, bgOffsetY;
 
+    // 화면을 완전히 꽉 채우도록 cover 방식 적용 (비율 유지, 확대하여 화면 채움)
     if (imgRatio > screenRatio) {
-      // 이미지가 더 넓음 → 높이에 맞춤
+      // 이미지가 더 넓음 → 높이에 맞춰 확대 (좌우가 잘림)
       drawH = height;
       drawW = imgRatio * drawH;
-      bgOffsetX = (width - drawW) / 2;
+      bgOffsetX = (width - drawW) / 2; // 중앙 정렬
       bgOffsetY = 0;
     } else {
-      // 이미지가 더 높음 → 너비에 맞춤
+      // 이미지가 더 높음 → 너비에 맞춰 확대 (상하가 잘림)
       drawW = width;
       drawH = drawW / imgRatio;
       bgOffsetX = 0;
-      bgOffsetY = (height - drawH) / 2;
+      bgOffsetY = (height - drawH) / 2; // 중앙 정렬
     }
 
+    // 넘치는 부분을 잘라내기 위해 클리핑 먼저 적용
+    bgBuffer.drawingContext.save();
+    bgBuffer.drawingContext.beginPath();
+    bgBuffer.drawingContext.rect(0, 0, width, height);
+    bgBuffer.drawingContext.clip();
+
+    // 화면 전체를 채우도록 이미지 확대하여 그리기
     bgBuffer.imageMode(CORNER);
     bgBuffer.image(bgImage, bgOffsetX, bgOffsetY, drawW, drawH);
+
+    bgBuffer.drawingContext.restore();
   } else {
     bgBuffer.background(BG_COLOR);
   }
