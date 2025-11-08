@@ -39,6 +39,13 @@ let lensCacheKey = ""; // 렌즈 캐싱 키 (x, y, scale, opacity, rotation 기�
 let showModal = false; // 모달 표시 여부
 let modalOpacity = 0; // 모달 페이드 인/아웃용 투명도
 
+// 캡쳐 후 화면 관련 변수
+let showCaptureScreen = false; // 캡쳐 화면 표시 여부
+let capturedImage = null; // 캡쳐된 이미지
+let captureAnimation = null; // 캡쳐 애니메이션 { startX, startY, currentX, currentY, targetX, targetY, progress, scale }
+let darkOverlayOpacity = 0; // 배경 어둡게 오버레이 투명도
+let captureRadius = 0; // 캡쳐된 원의 반지름
+
 // 반응형 스케일 계산 헬퍼 함수
 function getResponsiveScale() {
   const baseWidth = 1920;
@@ -231,38 +238,23 @@ function getPointer() {
   return { x: mouseX, y: mouseY };
 }
 
-// 드래그 시작 (p5.js 이벤트)
-function mousePressed() {
-  // UI 요소 클릭 확인
-  if (checkUIClick(mouseX, mouseY)) {
-    return false; // UI 클릭이면 올가미 시작하지 않음
-  }
-
-  // 이전 올가미 잔상 즉시 제거
-  isDrawing = false;
-  drawingPath = [];
-  overlayNeedsClear = true;
-  lastDrawnPathIndex = 0; // 증분 렌더링 인덱스 초기화
-
-  // 새로운 드래그 시작
-  hasDragged = false;
-  isDrawing = true;
-  drawingPath = [];
-  if (Number.isFinite(mouseX) && Number.isFinite(mouseY)) {
-    drawingPath.push({ x: mouseX, y: mouseY });
-  }
-  lastDrawingPathLength = drawingPath.length;
-  return false; // 기본 동작 방지
-}
-
-function touchStarted() {
-  // UI 요소 클릭 확인
-  if (touches && touches.length > 0) {
-    if (checkUIClick(touches[0].x, touches[0].y)) {
-      return false; // UI 클릭이면 올가미 시작하지 않음
+// 포인터 다운 (통합 핸들러)
+function handlePointerDown(x, y) {
+  // 모달이 열려있으면 닫기 버튼 클릭 확인
+  if (showModal && window.modalCloseBtn) {
+    const btn = window.modalCloseBtn;
+    if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
+      showModal = false;
+      modalOpacity = 0;
+      return true; // 처리됨
     }
   }
 
+  // UI 요소 클릭 확인
+  if (checkUIClick(x, y)) {
+    return true; // UI 클릭이면 올가미 시작하지 않음
+  }
+
   // 이전 올가미 잔상 즉시 제거
   isDrawing = false;
   drawingPath = [];
@@ -273,15 +265,43 @@ function touchStarted() {
   hasDragged = false;
   isDrawing = true;
   drawingPath = [];
-  if (touches && touches.length > 0) {
-    drawingPath.push({ x: touches[0].x, y: touches[0].y });
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    drawingPath.push({ x: x, y: y });
   }
   lastDrawingPathLength = drawingPath.length;
-  return false; // 기본 동작 방지
+  return false; // 계속 진행
 }
 
-// 드래그 종료 (p5.js 이벤트)
-function mouseReleased() {
+// 드래그 시작 (p5.js 이벤트 - 포인터 통합)
+function mousePressed() {
+  const ptr = getPointer();
+  const handled = handlePointerDown(ptr.x, ptr.y);
+  return !handled; // handled면 false 반환하여 기본 동작 방지
+}
+
+function touchStarted() {
+  const ptr = getPointer();
+  const handled = handlePointerDown(ptr.x, ptr.y);
+  return !handled; // handled면 false 반환하여 기본 동작 방지
+}
+
+// 포인터 업 (통합 핸들러)
+function handlePointerUp(x, y) {
+  // 캡쳐 화면 버튼 클릭 확인
+  if (showCaptureScreen && !hasDragged && window.captureButtons) {
+    for (let btn of window.captureButtons) {
+      if (
+        x >= btn.x &&
+        x <= btn.x + btn.w &&
+        y >= btn.y &&
+        y <= btn.y + btn.h
+      ) {
+        handleCaptureButtonClick(btn.action);
+        return true; // 처리됨
+      }
+    }
+  }
+
   // 모달이 열려있으면 닫기 버튼 또는 모달 외부 클릭 시 닫기
   if (showModal && !hasDragged) {
     const responsiveScale = getResponsiveScale();
@@ -298,27 +318,22 @@ function mouseReleased() {
     if (window.modalCloseBtn) {
       const btn = window.modalCloseBtn;
       if (
-        mouseX >= btn.x &&
-        mouseX <= btn.x + btn.w &&
-        mouseY >= btn.y &&
-        mouseY <= btn.y + btn.h
+        x >= btn.x &&
+        x <= btn.x + btn.w &&
+        y >= btn.y &&
+        y <= btn.y + btn.h
       ) {
         showModal = false;
         modalOpacity = 0;
-        return false;
+        return true; // 처리됨
       }
     }
 
     // 모달 외부 클릭 시 닫기
-    if (
-      mouseX < modalLeft ||
-      mouseX > modalRight ||
-      mouseY < modalTop ||
-      mouseY > modalBottom
-    ) {
+    if (x < modalLeft || x > modalRight || y < modalTop || y > modalBottom) {
       showModal = false;
       modalOpacity = 0;
-      return false;
+      return true; // 처리됨
     }
   }
 
@@ -336,7 +351,7 @@ function mouseReleased() {
     fixedLensPosition = null; // 렌즈 위치는 null로 설정하되 애니메이션은 계속
     isDrawing = false;
     drawingPath = [];
-    return false;
+    return true; // 처리됨
   }
 
   if (!isDrawing || drawingPath.length < 10) {
@@ -345,7 +360,7 @@ function mouseReleased() {
     overlayNeedsClear = true;
     lastDrawnPathIndex = 0;
     if (overlay) overlay.clear(); // ✅
-    return false;
+    return true; // 처리됨
   }
 
   // 원 인식 및 버블 생성
@@ -362,111 +377,37 @@ function mouseReleased() {
   overlayNeedsClear = true;
   lastDrawnPathIndex = 0;
   if (overlay) overlay.clear(); // ✅
-  return false;
+  return true; // 처리됨
+}
+
+// 드래그 종료 (포인터 통합)
+function mouseReleased() {
+  const ptr = getPointer();
+  const handled = handlePointerUp(ptr.x, ptr.y);
+  return !handled; // handled면 false 반환하여 기본 동작 방지
 }
 
 function touchEnded() {
-  // 모달이 열려있으면 닫기 버튼 또는 모달 외부 터치 시 닫기
-  if (showModal && !hasDragged && touches && touches.length > 0) {
-    const responsiveScale = getResponsiveScale();
-    const modalX = width / 2;
-    const modalY = height / 2;
-    const modalW = 400 * responsiveScale;
-    const modalH = 200 * responsiveScale;
-    const modalLeft = modalX - modalW / 2;
-    const modalRight = modalX + modalW / 2;
-    const modalTop = modalY - modalH / 2;
-    const modalBottom = modalY + modalH / 2;
-
-    const tx = touches[0].x;
-    const ty = touches[0].y;
-
-    // 닫기 버튼 터치 확인
-    if (window.modalCloseBtn) {
-      const btn = window.modalCloseBtn;
-      if (
-        tx >= btn.x &&
-        tx <= btn.x + btn.w &&
-        ty >= btn.y &&
-        ty <= btn.y + btn.h
-      ) {
-        showModal = false;
-        modalOpacity = 0;
-        return false;
-      }
-    }
-
-    // 모달 외부 터치 시 닫기
-    if (
-      tx < modalLeft ||
-      tx > modalRight ||
-      ty < modalTop ||
-      ty > modalBottom
-    ) {
-      showModal = false;
-      modalOpacity = 0;
-      return false;
-    }
-  }
-
-  // 드래그가 아닌 단순 터치면 고정된 돋보기 터짐 애니메이션 시작
-  if (!hasDragged && fixedLensPosition) {
-    // 렌즈 터짐 애니메이션 시작
-    lensAnimation = {
-      x: fixedLensPosition.x,
-      y: fixedLensPosition.y,
-      scale: 1,
-      opacity: 1,
-      rotation: 0,
-      progress: 0, // 0 ~ 1
-    };
-    fixedLensPosition = null; // 렌즈 위치는 null로 설정하되 애니메이션은 계속
-    isDrawing = false;
-    drawingPath = [];
-    return false;
-  }
-
-  if (!isDrawing || drawingPath.length < 10) {
-    isDrawing = false;
-    drawingPath = [];
-    overlayNeedsClear = true;
-    lastDrawnPathIndex = 0;
-    if (overlay) overlay.clear(); // ✅
-    return false;
-  }
-
-  // 원 인식 및 버블 생성
-  const circle = detectCircle(drawingPath);
-  if (circle) {
-    // 올가미 경로를 먼저 초기화하여 잔상 방지
-    isDrawing = false;
-    drawingPath = [];
-    captureBubble(circle);
-  } else {
-    isDrawing = false;
-    drawingPath = [];
-  }
-  overlayNeedsClear = true;
-  lastDrawnPathIndex = 0;
-  if (overlay) overlay.clear(); // ✅
-  return false;
+  const ptr = getPointer();
+  const handled = handlePointerUp(ptr.x, ptr.y);
+  return !handled; // handled면 false 반환하여 기본 동작 방지
 }
 
-// 드래그 중 경로 업데이트
-function mouseDragged() {
+// 포인터 이동 (통합 핸들러)
+function handlePointerMove(x, y) {
   hasDragged = true; // 드래그 중임을 표시
-  if (isDrawing && Number.isFinite(mouseX) && Number.isFinite(mouseY)) {
+  if (isDrawing && Number.isFinite(x) && Number.isFinite(y)) {
     // 마지막 점과의 거리가 충분하면 추가
     if (
       drawingPath.length === 0 ||
       dist(
-        mouseX,
-        mouseY,
+        x,
+        y,
         drawingPath[drawingPath.length - 1].x,
         drawingPath[drawingPath.length - 1].y
       ) > 5
     ) {
-      drawingPath.push({ x: mouseX, y: mouseY });
+      drawingPath.push({ x: x, y: y });
 
       // 경로가 너무 길어지면 오래된 점 제거 (성능 최적화)
       if (drawingPath.length > maxPathLength) {
@@ -480,38 +421,18 @@ function mouseDragged() {
       }
     }
   }
+}
+
+// 드래그 중 경로 업데이트 (포인터 통합)
+function mouseDragged() {
+  const ptr = getPointer();
+  handlePointerMove(ptr.x, ptr.y);
   return false;
 }
 
 function touchMoved() {
-  hasDragged = true; // 드래그 중임을 표시
-  if (isDrawing && touches && touches.length > 0) {
-    const tx = touches[0].x;
-    const ty = touches[0].y;
-    // 마지막 점과의 거리가 충분하면 추가
-    if (
-      drawingPath.length === 0 ||
-      dist(
-        tx,
-        ty,
-        drawingPath[drawingPath.length - 1].x,
-        drawingPath[drawingPath.length - 1].y
-      ) > 5
-    ) {
-      drawingPath.push({ x: tx, y: ty });
-
-      // 경로가 너무 길어지면 오래된 점 제거 (성능 최적화)
-      if (drawingPath.length > maxPathLength) {
-        drawingPath.shift(); // 첫 번째 점 제거
-        // 전체 경로를 다시 그려야 하므로 clear 필요
-        overlayNeedsClear = true;
-        lastDrawnPathIndex = 0;
-      } else {
-        // 경로가 변경되었으므로 overlay 업데이트 필요 (증분 렌더링)
-        overlayNeedsClear = false; // 증분 렌더링이므로 clear 불필요
-      }
-    }
-  }
+  const ptr = getPointer();
+  handlePointerMove(ptr.x, ptr.y);
   return false;
 }
 
@@ -567,19 +488,88 @@ function detectCircle(path) {
   return null;
 }
 
-// 렌즈 고정 전용 (버블 생성 로직 제거)
+// 렌즈 고정 및 캡쳐 처리
 function captureBubble(circle) {
-  // 버블 관련 로직 전부 제거
-  // -> 버블 배열도 비우고, 저장 안 함
-  bubbles = []; // 혹시 남아있던 이전 버블 제거
-
   // 올가미 자국 제거
   isDrawing = false;
   drawingPath = [];
   lastDrawnPathIndex = 0;
 
-  // 렌즈만 고정
-  fixedLensPosition = { x: circle.x, y: circle.y };
+  // 캡쳐된 영역 이미지 추출
+  if (!bgImg) return;
+
+  // 캔버스에서 원형 영역 추출
+  const captureBuffer = createGraphics(lensDiameter, lensDiameter);
+  const ctx = captureBuffer.drawingContext;
+
+  // 배경 이미지의 해당 영역을 캡쳐
+  if (
+    !cachedCoverFit ||
+    lastCanvasSize.w !== width ||
+    lastCanvasSize.h !== height
+  ) {
+    cachedCoverFit = computeCoverFit(bgImg.width, bgImg.height, width, height);
+    lastCanvasSize = { w: width, h: height };
+  }
+  const cover = cachedCoverFit;
+
+  // 원의 중심을 배경 이미지 좌표로 변환
+  const imgX = circle.x - cover.offsetX;
+  const imgY = circle.y - cover.offsetY;
+
+  // 원형 마스크 먼저 적용
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(lensRadius, lensRadius, lensRadius, 0, Math.PI * 2);
+  ctx.clip();
+
+  // 배경 이미지에서 해당 영역 추출 (확대된 영역)
+  // 렌즈와 동일한 방식으로 변환
+  ctx.save();
+  ctx.translate(lensRadius, lensRadius);
+  ctx.scale(zoom, zoom);
+
+  // 스케일 전 좌표계에서 포인터가 가리키던 배경 위치를 역보정
+  const centerShiftX = -imgX + lensRadius / zoom;
+  const centerShiftY = -imgY + lensRadius / zoom;
+  ctx.translate(centerShiftX, centerShiftY);
+
+  // 확대된 배경 렌더 (ctx.drawImage 사용)
+  if (bgImg.elt) {
+    ctx.drawImage(
+      bgImg.elt,
+      cover.offsetX,
+      cover.offsetY,
+      cover.drawW,
+      cover.drawH
+    );
+  }
+
+  ctx.restore();
+  ctx.restore(); // 클리핑 해제
+
+  capturedImage = captureBuffer;
+  captureRadius = circle.radius;
+
+  // 애니메이션 시작
+  const centerX = width / 2;
+  const centerY = height / 2;
+  captureAnimation = {
+    startX: circle.x,
+    startY: circle.y,
+    currentX: circle.x,
+    currentY: circle.y,
+    targetX: centerX,
+    targetY: centerY,
+    progress: 0,
+    scale: 1,
+    startRadius: circle.radius,
+    targetRadius: Math.min(width, height) * 0.3, // 화면의 30% 크기
+  };
+
+  showCaptureScreen = true;
+  darkOverlayOpacity = 0;
+  fixedLensPosition = null; // 렌즈 위치 제거
 
   // 흔적 완전 제거
   overlayNeedsClear = true;
@@ -755,29 +745,107 @@ function draw() {
     }
   }
 
-  // 돋보기 표시 로직 - 올가미 완성 시에만 표시
-  if (fixedLensPosition) {
-    // 고정된 돋보기 위치에 표시 (overlay에 그리기)
-    drawLens(fixedLensPosition.x, fixedLensPosition.y);
-    window.currentLens = {
-      x: fixedLensPosition.x,
-      y: fixedLensPosition.y,
-      r: lensRadius,
-    };
+  // 캡쳐 화면 표시
+  if (showCaptureScreen && captureAnimation) {
+    // 배경 다시 그리기 (어둡게 하기 전에)
+    drawBackgroundCovered();
+
+    // 배경 어둡게
+    darkOverlayOpacity = min(0.7, darkOverlayOpacity + 0.05);
+    fill(0, 0, 0, darkOverlayOpacity * 255);
+    noStroke();
+    rect(0, 0, width, height);
+
+    // 캡쳐 애니메이션 업데이트
+    captureAnimation.progress = min(1, captureAnimation.progress + 0.05);
+    const t = captureAnimation.progress;
+    const easeOut = 1 - Math.pow(1 - t, 3); // ease-out cubic
+
+    captureAnimation.currentX = lerp(
+      captureAnimation.startX,
+      captureAnimation.targetX,
+      easeOut
+    );
+    captureAnimation.currentY = lerp(
+      captureAnimation.startY,
+      captureAnimation.targetY,
+      easeOut
+    );
+
+    const currentRadius = lerp(
+      captureAnimation.startRadius,
+      captureAnimation.targetRadius,
+      easeOut
+    );
+
+    // 캡쳐된 이미지 그리기
+    if (capturedImage) {
+      push();
+      const ctx = drawingContext;
+      ctx.save();
+
+      // 원형 클리핑 경로 설정
+      ctx.beginPath();
+      ctx.arc(
+        captureAnimation.currentX,
+        captureAnimation.currentY,
+        currentRadius,
+        0,
+        Math.PI * 2
+      );
+      ctx.clip();
+
+      // 이미지 크기 조정하여 그리기
+      const scale = (currentRadius * 2) / lensDiameter;
+      ctx.save();
+      ctx.translate(captureAnimation.currentX, captureAnimation.currentY);
+      ctx.scale(scale, scale);
+      ctx.translate(-lensRadius, -lensRadius);
+
+      // 캡쳐된 이미지 그리기 (ctx.drawImage 사용)
+      if (capturedImage.canvas) {
+        ctx.drawImage(capturedImage.canvas, 0, 0, lensDiameter, lensDiameter);
+      } else {
+        // 폴백: p5.js image 함수 사용
+        imageMode(CORNER);
+        image(capturedImage, 0, 0, lensDiameter, lensDiameter);
+      }
+
+      ctx.restore();
+      ctx.restore(); // 클리핑 해제
+      pop();
+    }
+
+    // 버튼들 그리기 (애니메이션 완료 후)
+    if (captureAnimation.progress >= 1) {
+      drawCaptureButtons();
+    }
   } else {
-    window.currentLens = null;
+    // 일반 화면
+    // 돋보기 표시 로직 - 올가미 완성 시에만 표시
+    if (fixedLensPosition) {
+      // 고정된 돋보기 위치에 표시 (overlay에 그리기)
+      drawLens(fixedLensPosition.x, fixedLensPosition.y);
+      window.currentLens = {
+        x: fixedLensPosition.x,
+        y: fixedLensPosition.y,
+        r: lensRadius,
+      };
+    } else {
+      window.currentLens = null;
+    }
+
+    // 드래그 중일 때만 올가미를 overlay에 그림
+    if (isDrawing && !fixedLensPosition) {
+      drawLasso();
+    }
+
+    // 마지막에 overlay를 합성
+    if (overlay) image(overlay, 0, 0);
+
+    // UI 요소 그리기 (overlay 위에)
+    drawUI();
   }
-
-  // 드래그 중일 때만 올가미를 overlay에 그림
-  if (isDrawing && !fixedLensPosition) {
-    drawLasso();
-  }
-
-  // 마지막에 overlay를 합성
-  if (overlay) image(overlay, 0, 0);
-
-  // UI 요소 그리기 (overlay 위에)
-  drawUI();
 
   // 모달 그리기 (가장 위에)
   if (showModal) {
@@ -790,10 +858,11 @@ function drawUI() {
   // 반응형 스케일 계산
   const responsiveScale = getResponsiveScale();
 
-  // 기본 크기를 1.5배로 키우고 반응형 적용
-  const baseHeight = 48 * 1.5 * responsiveScale; // 기준 높이 (1.5배 + 반응형)
+  // 기본 크기를 1.5배 * 2배 * 0.8 = 2.4배로 조정하고 반응형 적용
+  const baseHeight = 48 * 2.2 * responsiveScale; // 기준 높이 (2.4배 + 반응형)
   const margin = 16 * responsiveScale; // 상단 마진 (반응형)
   const gap = 8 * responsiveScale; // 아이콘 간 간격 (반응형)
+  const verticalGap = -baseHeight * 0.3; // 작업실과 갤러리 사이 간격 (겹치도록 음수 값)
 
   imageMode(CORNER);
 
@@ -806,7 +875,13 @@ function drawUI() {
   if (galleryImg && galleryImg.width > 0 && galleryImg.height > 0) {
     const galleryRatio = galleryImg.width / galleryImg.height;
     const galleryW = baseHeight * galleryRatio;
-    image(galleryImg, margin, margin + baseHeight + gap, galleryW, baseHeight);
+    image(
+      galleryImg,
+      margin,
+      margin + baseHeight + verticalGap,
+      galleryW,
+      baseHeight
+    );
   }
 
   // 중간: 시계와 조도표 가로 묶음
@@ -881,10 +956,11 @@ function checkUIClick(x, y) {
   // 반응형 스케일 계산
   const responsiveScale = getResponsiveScale();
 
-  // 기본 크기를 1.5배로 키우고 반응형 적용
-  const baseHeight = 48 * 1.5 * responsiveScale; // 기준 높이 (1.5배 + 반응형)
+  // 기본 크기를 1.5배 * 2배 * 0.8 = 2.4배로 조정하고 반응형 적용
+  const baseHeight = 48 * 1.5 * 2 * 0.8 * responsiveScale; // 기준 높이 (2.4배 + 반응형)
   const margin = 16 * responsiveScale; // 상단 마진 (반응형)
   const gap = 8 * responsiveScale; // 아이콘 간 간격 (반응형)
+  const verticalGap = 0; // 작업실과 갤러리 사이 간격 (0으로 설정하여 최소화)
 
   // 왼쪽: 작업실과 갤러리
   if (workroomImg && workroomImg.width > 0 && workroomImg.height > 0) {
@@ -908,8 +984,8 @@ function checkUIClick(x, y) {
     if (
       x >= margin &&
       x <= margin + galleryW &&
-      y >= margin + baseHeight + gap &&
-      y <= margin + baseHeight + gap + baseHeight
+      y >= margin + baseHeight + verticalGap &&
+      y <= margin + baseHeight + verticalGap + baseHeight
     ) {
       showModal = true;
       modalOpacity = 0;
@@ -1148,4 +1224,132 @@ function drawModal() {
     w: closeBtnSize,
     h: closeBtnSize,
   };
+}
+
+// 캡쳐 화면 버튼 그리기
+function drawCaptureButtons() {
+  const responsiveScale = getResponsiveScale();
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const buttonY =
+    centerY + (captureAnimation.targetRadius || 200) + 40 * responsiveScale;
+
+  const buttonHeight = 50 * responsiveScale;
+  const buttonPaddingX = 30 * responsiveScale;
+  const buttonPaddingY = 20 * responsiveScale;
+  const buttonGap = 10 * responsiveScale;
+  const borderRadius = 30 * responsiveScale;
+
+  const buttons = [
+    { text: "저장하기", action: "save" },
+    { text: "삭제하기", action: "delete" },
+    { text: "메모 작성하기", action: "memo" },
+  ];
+
+  // 버튼 텍스트 크기 측정 및 배치
+  textSize(16 * responsiveScale);
+  textFont("system-ui, -apple-system, sans-serif");
+  textAlign(CENTER, CENTER);
+
+  let totalWidth = 0;
+  const buttonWidths = [];
+
+  for (let btn of buttons) {
+    const textW = textWidth(btn.text);
+    const btnW = textW + buttonPaddingX * 2;
+    buttonWidths.push(btnW);
+    totalWidth += btnW;
+    if (buttons.indexOf(btn) < buttons.length - 1) {
+      totalWidth += buttonGap;
+    }
+  }
+
+  let currentX = centerX - totalWidth / 2;
+
+  push();
+  const ctx = drawingContext;
+
+  for (let i = 0; i < buttons.length; i++) {
+    const btn = buttons[i];
+    const btnW = buttonWidths[i];
+    const btnX = currentX;
+    const btnY = buttonY;
+
+    // 버튼 배경 (글래스모피즘 스타일)
+    ctx.save();
+    ctx.fillStyle = "rgba(165, 242, 221, 0.30)";
+    ctx.shadowBlur = 30;
+    ctx.shadowColor = "rgba(128, 128, 128, 0.30)";
+    ctx.shadowOffsetX = 7;
+    ctx.shadowOffsetY = 7;
+
+    // 둥근 사각형
+    ctx.beginPath();
+    ctx.moveTo(btnX + borderRadius, btnY);
+    ctx.lineTo(btnX + btnW - borderRadius, btnY);
+    ctx.quadraticCurveTo(btnX + btnW, btnY, btnX + btnW, btnY + borderRadius);
+    ctx.lineTo(btnX + btnW, btnY + buttonHeight - borderRadius);
+    ctx.quadraticCurveTo(
+      btnX + btnW,
+      btnY + buttonHeight,
+      btnX + btnW - borderRadius,
+      btnY + buttonHeight
+    );
+    ctx.lineTo(btnX + borderRadius, btnY + buttonHeight);
+    ctx.quadraticCurveTo(
+      btnX,
+      btnY + buttonHeight,
+      btnX,
+      btnY + buttonHeight - borderRadius
+    );
+    ctx.lineTo(btnX, btnY + borderRadius);
+    ctx.quadraticCurveTo(btnX, btnY, btnX + borderRadius, btnY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // 버튼 텍스트
+    fill(255, 255, 255, 255);
+    text(btn.text, btnX + btnW / 2, btnY + buttonHeight / 2);
+
+    // 버튼 영역 저장 (클릭 감지용)
+    if (!window.captureButtons) window.captureButtons = [];
+    window.captureButtons[i] = {
+      x: btnX,
+      y: btnY,
+      w: btnW,
+      h: buttonHeight,
+      action: btn.action,
+    };
+
+    currentX += btnW + buttonGap;
+  }
+
+  pop();
+}
+
+// 캡쳐 버튼 클릭 처리
+function handleCaptureButtonClick(action) {
+  switch (action) {
+    case "save":
+      // 저장 기능 (추후 구현)
+      console.log("저장하기");
+      // 저장 후 화면 닫기
+      showCaptureScreen = false;
+      capturedImage = null;
+      captureAnimation = null;
+      darkOverlayOpacity = 0;
+      break;
+    case "delete":
+      // 삭제 기능 - 화면 닫기
+      showCaptureScreen = false;
+      capturedImage = null;
+      captureAnimation = null;
+      darkOverlayOpacity = 0;
+      break;
+    case "memo":
+      // 메모 작성 기능 (추후 구현)
+      console.log("메모 작성하기");
+      break;
+  }
 }

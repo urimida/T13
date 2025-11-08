@@ -1,6 +1,6 @@
 [build]
   # 빌드 명령어: analyze 폴더에서 빌드 실행
-  command = "cd analyze && npm install && npm run build"
+  command = "cd analyze && npm ci && npm run build"
   # 빌드 결과물이 생성되는 폴더
   publish = "."
 
@@ -15,11 +15,29 @@
   to = "/analyze/dist/index.html"
   status = 200
 
+# Circle-to-Capture 페이지
+[[redirects]]
+  from = "/circle-to-capture"
+  to = "/circle-to-capture/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/circle-to-capture/*"
+  to = "/circle-to-capture/index.html"
+  status = 200
+  force = false
+
 # Explorer 페이지
+[[redirects]]
+  from = "/explorer"
+  to = "/explorer/index.html"
+  status = 200
+
 [[redirects]]
   from = "/explorer/*"
   to = "/explorer/index.html"
   status = 200
+  force = false
 
 # 메인 페이지
 [[redirects]]
