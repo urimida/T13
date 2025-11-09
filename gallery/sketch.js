@@ -2885,7 +2885,9 @@ function drawVisualLanguageCards() {
   const responsiveScale = getResponsiveScale();
   const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
   const CARD_AREA_TOP = SEARCH_BOTTOM + 20; // 검색창 아래 20px
-  const CARD_Y = CARD_AREA_TOP + 20; // 카드 Y 위치
+  // 태블릿에서 카드를 20픽셀 더 아래로 내림
+  const tabletOffset = responsiveScale < 1 ? 20 : 0; // 태블릿(작은 화면)일 때만 오프셋 적용
+  const CARD_Y = CARD_AREA_TOP + 20 + tabletOffset; // 카드 Y 위치
   const CARD_HEIGHT = 180 * responsiveScale; // 카드 높이
   const CARD_WIDTH = 200 * responsiveScale; // 카드 너비
   const CARD_GAP = 20 * responsiveScale; // 카드 간 간격
@@ -3093,7 +3095,9 @@ function checkCardClick(x, y) {
   const responsiveScale = getResponsiveScale();
   const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
   const CARD_AREA_TOP = SEARCH_BOTTOM + 20;
-  const CARD_Y = CARD_AREA_TOP + 20;
+  // 태블릿에서 카드를 20픽셀 더 아래로 내림 (drawVisualLanguageCards와 동일)
+  const tabletOffset = responsiveScale < 1 ? 20 : 0; // 태블릿(작은 화면)일 때만 오프셋 적용
+  const CARD_Y = CARD_AREA_TOP + 20 + tabletOffset;
   const CARD_HEIGHT = 180 * responsiveScale;
   const CARD_WIDTH = 200 * responsiveScale;
   const CARD_GAP = 20 * responsiveScale;
