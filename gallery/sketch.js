@@ -1549,33 +1549,44 @@ function setupPointerBridges() {
     }
   });
 
-  // 포인터 업 → mouseReleased 브릿지
-  window.addEventListener("pointerup", (e) => {
+  // 포인터 업 이벤트를 캔버스에 직접 바인딩 (더 정확한 감지)
+  const handlePointerUp = (e) => {
     if (e.pointerType !== "mouse") {
       // 포인터 업 이벤트를 mouseReleased로 명시적으로 전달
       // p5.js의 mouseReleased는 마우스 이벤트에만 반응할 수 있으므로 직접 호출
       if (
         typeof mouseReleased === "function" &&
         typeof canvas !== "undefined" &&
-        canvas
+        canvas &&
+        canvas.elt
       ) {
         // mouseX, mouseY를 포인터 위치로 업데이트
         const rect = canvas.elt.getBoundingClientRect();
         mouseX = e.clientX - rect.left;
         mouseY = e.clientY - rect.top;
+        // 드래그 중이었다면 mouseReleased 호출하여 자동 정렬 트리거
+        // isDragging 상태는 mouseReleased 내부에서 확인됨
         mouseReleased();
       }
     }
-  });
+  };
+
+  // 캔버스와 window 모두에 이벤트 바인딩 (더 확실한 감지)
+  // canvas.elt가 존재하는지 확인
+  if (typeof canvas !== "undefined" && canvas && canvas.elt) {
+    canvas.elt.addEventListener("pointerup", handlePointerUp);
+  }
+  window.addEventListener("pointerup", handlePointerUp);
 
   // 포인터가 캔버스 밖으로 나갔을 때도 처리 (손을 떼어낸 것으로 인식)
-  window.addEventListener("pointerleave", (e) => {
+  const handlePointerLeave = (e) => {
     if (e.pointerType !== "mouse" && isDragging) {
       // 드래그 중이었다면 손을 뗀 것으로 처리
       if (
         typeof mouseReleased === "function" &&
         typeof canvas !== "undefined" &&
-        canvas
+        canvas &&
+        canvas.elt
       ) {
         const rect = canvas.elt.getBoundingClientRect();
         mouseX = e.clientX - rect.left;
@@ -1583,16 +1594,22 @@ function setupPointerBridges() {
         mouseReleased();
       }
     }
-  });
+  };
+
+  if (typeof canvas !== "undefined" && canvas && canvas.elt) {
+    canvas.elt.addEventListener("pointerleave", handlePointerLeave);
+  }
+  window.addEventListener("pointerleave", handlePointerLeave);
 
   // 포인터 취소 (예: 시스템 제스처로 인한 취소)
-  window.addEventListener("pointercancel", (e) => {
+  const handlePointerCancel = (e) => {
     if (e.pointerType !== "mouse" && isDragging) {
       // 드래그 중이었다면 손을 뗀 것으로 처리
       if (
         typeof mouseReleased === "function" &&
         typeof canvas !== "undefined" &&
-        canvas
+        canvas &&
+        canvas.elt
       ) {
         const rect = canvas.elt.getBoundingClientRect();
         mouseX = e.clientX - rect.left;
@@ -1600,7 +1617,12 @@ function setupPointerBridges() {
         mouseReleased();
       }
     }
-  });
+  };
+
+  if (typeof canvas !== "undefined" && canvas && canvas.elt) {
+    canvas.elt.addEventListener("pointercancel", handlePointerCancel);
+  }
+  window.addEventListener("pointercancel", handlePointerCancel);
 }
 
 function createSearchInput() {
@@ -3096,8 +3118,9 @@ function drawSearchBar() {
   const H = 75 * SEARCH_SCALE * 1.3; // 크기 고정
   const X = (width - W) / 2;
   // 간격만 반응형으로 조정: 화면이 작아지면 간격이 좁아짐
+  // 기본적으로 10픽셀 위로 올림
   const gap = SEARCH_NAV_GAP * responsiveScale;
-  const Y = NAV_BOTTOM + gap;
+  const Y = NAV_BOTTOM + gap - 10;
 
   // interested 이미지만 표시 (배경 컴포넌트 제거)
   if (interestedImage && interestedImage.width > 0) {
