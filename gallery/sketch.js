@@ -2081,8 +2081,11 @@ function getSearchMetrics() {
   const W = width * SEARCH_WIDTH_RATIO * responsiveScale * 1.3;
   const H = 75 * SEARCH_SCALE * responsiveScale * 1.3;
   const X = (width - W) / 2;
-  // 네비게이션 바 아래에 적절한 간격을 두고 배치 (간격 고정)
-  const Y = NAV_BOTTOM + SEARCH_NAV_GAP;
+  // 태블릿에서는 간격을 줄이기 위해 반응형 스케일 적용 (화면이 작을수록 간격 작아짐)
+  // 태블릿에서 간격을 더 줄이기 위해 스케일을 더 작게 적용
+  const gapScale = Math.min(1, responsiveScale * 0.6); // 태블릿에서 간격을 60%로 줄임
+  const gap = SEARCH_NAV_GAP * gapScale;
+  const Y = NAV_BOTTOM + gap;
 
   return { W, H, X, Y, bottom: Y + H };
 }
@@ -3126,9 +3129,11 @@ function drawSearchBar() {
   const W = width * SEARCH_WIDTH_RATIO * 1.3; // 크기 고정
   const H = 75 * SEARCH_SCALE * 1.3; // 크기 고정
   const X = (width - W) / 2;
-  // 간격 고정 (반응형 제거)
+  // 태블릿에서는 간격을 줄이기 위해 반응형 스케일 적용 (화면이 작을수록 간격 작아짐)
   // 기본적으로 10픽셀 위로 올림
-  const gap = SEARCH_NAV_GAP;
+  // 태블릿에서 간격을 더 줄이기 위해 스케일을 더 작게 적용
+  const gapScale = Math.min(1, responsiveScale * 0.6); // 태블릿에서 간격을 60%로 줄임
+  const gap = SEARCH_NAV_GAP * gapScale;
   const Y = NAV_BOTTOM + gap - 10;
 
   // interested 이미지만 표시 (배경 컴포넌트 제거)
