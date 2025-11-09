@@ -1552,7 +1552,53 @@ function setupPointerBridges() {
   // 포인터 업 → mouseReleased 브릿지
   window.addEventListener("pointerup", (e) => {
     if (e.pointerType !== "mouse") {
-      // p5의 mouseReleased는 자동으로 호출됨
+      // 포인터 업 이벤트를 mouseReleased로 명시적으로 전달
+      // p5.js의 mouseReleased는 마우스 이벤트에만 반응할 수 있으므로 직접 호출
+      if (
+        typeof mouseReleased === "function" &&
+        typeof canvas !== "undefined" &&
+        canvas
+      ) {
+        // mouseX, mouseY를 포인터 위치로 업데이트
+        const rect = canvas.elt.getBoundingClientRect();
+        mouseX = e.clientX - rect.left;
+        mouseY = e.clientY - rect.top;
+        mouseReleased();
+      }
+    }
+  });
+
+  // 포인터가 캔버스 밖으로 나갔을 때도 처리 (손을 떼어낸 것으로 인식)
+  window.addEventListener("pointerleave", (e) => {
+    if (e.pointerType !== "mouse" && isDragging) {
+      // 드래그 중이었다면 손을 뗀 것으로 처리
+      if (
+        typeof mouseReleased === "function" &&
+        typeof canvas !== "undefined" &&
+        canvas
+      ) {
+        const rect = canvas.elt.getBoundingClientRect();
+        mouseX = e.clientX - rect.left;
+        mouseY = e.clientY - rect.top;
+        mouseReleased();
+      }
+    }
+  });
+
+  // 포인터 취소 (예: 시스템 제스처로 인한 취소)
+  window.addEventListener("pointercancel", (e) => {
+    if (e.pointerType !== "mouse" && isDragging) {
+      // 드래그 중이었다면 손을 뗀 것으로 처리
+      if (
+        typeof mouseReleased === "function" &&
+        typeof canvas !== "undefined" &&
+        canvas
+      ) {
+        const rect = canvas.elt.getBoundingClientRect();
+        mouseX = e.clientX - rect.left;
+        mouseY = e.clientY - rect.top;
+        mouseReleased();
+      }
     }
   });
 }
@@ -3039,14 +3085,19 @@ function checkCardClick(x, y) {
 
 // 현재 필터링된 버블들을 가운데 기준으로 부채꼴(호) 배열
 function drawSearchBar() {
-  // 검색창 메트릭 (반응형 없이 고정 크기 사용)
+  // 반응형 스케일 계산 (간격만 반응형으로 조정)
+  const responsiveScale = getResponsiveScale();
+
+  // 검색창 메트릭 (크기는 고정, 간격만 반응형)
   const NAV_Y = 20;
   const NAV_H = navigationBar ? navigationBar.height * 0.45 : 64;
   const NAV_BOTTOM = NAV_Y + NAV_H;
-  const W = width * SEARCH_WIDTH_RATIO * 1.3; // 반응형 스케일 제거
-  const H = 75 * SEARCH_SCALE * 1.3; // 반응형 스케일 제거
+  const W = width * SEARCH_WIDTH_RATIO * 1.3; // 크기 고정
+  const H = 75 * SEARCH_SCALE * 1.3; // 크기 고정
   const X = (width - W) / 2;
-  const Y = NAV_BOTTOM + SEARCH_NAV_GAP;
+  // 간격만 반응형으로 조정: 화면이 작아지면 간격이 좁아짐
+  const gap = SEARCH_NAV_GAP * responsiveScale;
+  const Y = NAV_BOTTOM + gap;
 
   // interested 이미지만 표시 (배경 컴포넌트 제거)
   if (interestedImage && interestedImage.width > 0) {
