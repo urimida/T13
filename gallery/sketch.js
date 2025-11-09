@@ -2885,8 +2885,8 @@ function drawVisualLanguageCards() {
   const responsiveScale = getResponsiveScale();
   const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
   const CARD_AREA_TOP = SEARCH_BOTTOM + 20; // 검색창 아래 20px
-  // 태블릿에서 카드를 20픽셀 더 아래로 내림
-  const tabletOffset = responsiveScale < 1 ? 20 : 0; // 태블릿(작은 화면)일 때만 오프셋 적용
+  // 태블릿에서 카드를 30픽셀 더 아래로 내림 (20 + 10)
+  const tabletOffset = responsiveScale < 1 ? 30 : 0; // 태블릿(작은 화면)일 때만 오프셋 적용
   const CARD_Y = CARD_AREA_TOP + 20 + tabletOffset; // 카드 Y 위치
   const CARD_HEIGHT = 180 * responsiveScale; // 카드 높이
   const CARD_WIDTH = 200 * responsiveScale; // 카드 너비
@@ -3095,8 +3095,8 @@ function checkCardClick(x, y) {
   const responsiveScale = getResponsiveScale();
   const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
   const CARD_AREA_TOP = SEARCH_BOTTOM + 20;
-  // 태블릿에서 카드를 20픽셀 더 아래로 내림 (drawVisualLanguageCards와 동일)
-  const tabletOffset = responsiveScale < 1 ? 20 : 0; // 태블릿(작은 화면)일 때만 오프셋 적용
+  // 태블릿에서 카드를 30픽셀 더 아래로 내림 (drawVisualLanguageCards와 동일, 20 + 10)
+  const tabletOffset = responsiveScale < 1 ? 30 : 0; // 태블릿(작은 화면)일 때만 오프셋 적용
   const CARD_Y = CARD_AREA_TOP + 20 + tabletOffset;
   const CARD_HEIGHT = 180 * responsiveScale;
   const CARD_WIDTH = 200 * responsiveScale;
@@ -3136,9 +3136,11 @@ function drawSearchBar() {
   // 태블릿에서는 간격을 줄이기 위해 반응형 스케일 적용 (화면이 작을수록 간격 작아짐)
   // 기본적으로 10픽셀 위로 올림
   // 태블릿에서 간격을 더 줄이기 위해 스케일을 더 작게 적용
-  const gapScale = Math.min(1, responsiveScale * 0.6); // 태블릿에서 간격을 60%로 줄임
+  const gapScale = Math.min(1, responsiveScale * 0.3); // 태블릿에서 간격을 30%로 줄임
   const gap = SEARCH_NAV_GAP * gapScale;
-  const Y = NAV_BOTTOM + gap - 10;
+  // 태블릿에서 버튼을 20픽셀 더 올림
+  const tabletButtonOffset = responsiveScale < 1 ? -20 : 0;
+  const Y = NAV_BOTTOM + gap - 10 + tabletButtonOffset;
 
   // interested 이미지만 표시 (배경 컴포넌트 제거)
   if (interestedImage && interestedImage.width > 0) {
