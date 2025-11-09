@@ -108,7 +108,9 @@ let dragOffsetX = 0; // 드래그 시작 시 오프셋 X
 let dragOffsetY = 0; // 드래그 시작 시 오프셋 Y
 let panVelocityX = 0; // X 방향 이동 속도 (관성)
 let panVelocityY = 0; // Y 방향 이동 속도 (관성)
-let snapTargetX = null; // 스냅 타겟 X 오프셋
+let snapTargetX = null;
+let lastPointerStamp = 0; // 마지막 포인터 입력 타임스탬프
+const RELEASE_IDLE_MS = 140; // 손을 뗀 뒤 이 시간 이상 입력 없으면 릴리즈로 간주 // 스냅 타겟 X 오프셋
 let snapTargetY = null; // 스냅 타겟 Y 오프셋
 let snapCompleted = false; // 스냅이 완료되었는지 여부
 const SNAP_SPEED = 0.15; // 스냅 애니메이션 속도 (낮을수록 느림)
@@ -1671,6 +1673,17 @@ function draw() {
     background(BG_COLOR);
   }
 
+  // 릴리즈 워치독: 드래그 중 입력이 끊기면 자동으로 손을 뗀 것으로 처리
+  if (isDragging && millis() - lastPointerStamp > RELEASE_IDLE_MS) {
+    isDragging = false;
+    // pointercancel/leave 등으로 놓치는 경우 보정
+    snapTargetX = null;
+    snapTargetY = null;
+    snapCompleted = false;
+    // 바로 중앙 버블로 스냅 시작
+    snapToCenterBubble();
+  }
+
   // 패닝 애니메이션 업데이트 (관성 및 스냅)
   if (!isDragging) {
     // 스냅 타겟이 있으면 부드럽게 스냅
@@ -2068,8 +2081,8 @@ function getSearchMetrics() {
   const W = width * SEARCH_WIDTH_RATIO * responsiveScale * 1.3;
   const H = 75 * SEARCH_SCALE * responsiveScale * 1.3;
   const X = (width - W) / 2;
-  // 네비게이션 바 아래에 적절한 간격을 두고 배치
-  const Y = NAV_BOTTOM + SEARCH_NAV_GAP * responsiveScale;
+  // 네비게이션 바 아래에 적절한 간격을 두고 배치 (간격 고정)
+  const Y = NAV_BOTTOM + SEARCH_NAV_GAP;
 
   return { W, H, X, Y, bottom: Y + H };
 }
@@ -2358,6 +2371,7 @@ function buildBubbles() {
 
 // ---------- PANNING (스와이프) ----------
 function mousePressed() {
+  lastPointerStamp = millis();
   // 검색창 클릭 확인 (드래그 방지 전에 확인)
   const isSearchBarClick = checkSearchBarClick(mouseX, mouseY);
 
@@ -2437,6 +2451,7 @@ function mousePressed() {
 }
 
 function mouseDragged() {
+  lastPointerStamp = millis();
   if (ARC_MODE && arcDragging) {
     // 전체 드래그 거리 계산
     const totalDragDistance = mouseX - arcDragStartX;
@@ -2479,6 +2494,7 @@ function mouseDragged() {
 }
 
 function mouseReleased() {
+  lastPointerStamp = millis();
   if (ARC_MODE && arcDragging) {
     arcDragging = false;
 
@@ -2522,6 +2538,7 @@ function mouseReleased() {
 
 // ---------- TOUCH EVENTS (모바일 지원) ----------
 function touchStarted() {
+  lastPointerStamp = millis();
   if (ARC_MODE && touches.length > 0) {
     const t = touches[0];
     if (isInArcArea(t.x, t.y)) {
@@ -2601,6 +2618,7 @@ function touchStarted() {
 }
 
 function touchMoved() {
+  lastPointerStamp = millis();
   if (ARC_MODE && arcDragging && touches.length > 0) {
     const t = touches[0];
     // 전체 드래그 거리 계산
@@ -2647,6 +2665,7 @@ function touchMoved() {
 }
 
 function touchEnded() {
+  lastPointerStamp = millis();
   if (ARC_MODE && arcDragging) {
     arcDragging = false;
 
@@ -2655,19 +2674,9 @@ function touchEnded() {
       selectedCardIndex !== null && currentFilteredBubbles.length > 0
         ? currentFilteredBubbles
         : bubbles;
-    if (src.length > 0 && touches.length > 0) {
-      const t = touches[0];
-      const step = ARC_SPREAD_RAD / Math.max(1, ARC_VISIBLE_COUNT - 1);
-      // 전체 드래그 거리에 따라 버블 인덱스 변경
-      const totalDragDistance = t.x - arcDragStartX;
-      const dragAngle = totalDragDistance * ARC_DRAG_SENSE;
-      const indexChange = dragAngle / step;
-      // 왼쪽으로 드래그하면 인덱스 증가 (왼쪽 버블이 사라지고 오른쪽에 새 버블)
-      // 오른쪽으로 드래그하면 인덱스 감소
-      // 드래그 시작 시점의 인덱스를 기준으로 계산
-      const newTargetIndex = arcDragStartIndex - indexChange;
-      arcTargetIndex = positiveMod(Math.round(newTargetIndex), src.length);
-      // arcCurrentIndex는 draw에서 부드럽게 목표로 이동
+    if (src.length > 0) {
+      // 드래그 중 실시간 반영해온 arcCurrentIndex를 기준으로 스냅
+      arcTargetIndex = positiveMod(Math.round(arcCurrentIndex), src.length);
     }
 
     arcVel = 0; // 관성 초기화
@@ -3117,9 +3126,9 @@ function drawSearchBar() {
   const W = width * SEARCH_WIDTH_RATIO * 1.3; // 크기 고정
   const H = 75 * SEARCH_SCALE * 1.3; // 크기 고정
   const X = (width - W) / 2;
-  // 간격만 반응형으로 조정: 화면이 작아지면 간격이 좁아짐
+  // 간격 고정 (반응형 제거)
   // 기본적으로 10픽셀 위로 올림
-  const gap = SEARCH_NAV_GAP * responsiveScale;
+  const gap = SEARCH_NAV_GAP;
   const Y = NAV_BOTTOM + gap - 10;
 
   // interested 이미지만 표시 (배경 컴포넌트 제거)
