@@ -10,7 +10,7 @@ let gatheringImg;
 // 돋보기 설정 (요청 스펙: 지름 370px)
 const lensDiameter = 370;
 const lensRadius = lensDiameter / 2;
-const zoom = 2.0; // 확대 배율
+// zoom 변수 제거 - 렌즈 확대 기능 없음
 
 // 올가미/버블 관련 변수
 let isDrawing = false;
@@ -18,7 +18,7 @@ let drawingPath = [];
 let bubbles = []; // 저장된 버블들
 const minCircleRadius = 50; // 최소 원 반지름
 const circleTolerance = 0.3; // 원 인식 허용 오차 (0-1)
-let fixedLensPosition = null; // 고정된 돋보기 위치 (버블 생성 시 설정)
+let fixedLensPosition = null; // 고정된 돋보기 위치 (버블 생성 시 설정) { x, y, radius, startRadius, targetRadius, progress }
 let lensAnimation = null; // 렌즈 터짐 애니메이션 상태 { x, y, scale, opacity, rotation, progress }
 let hasDragged = false; // 드래그 여부 추적
 let overlay; // 올가미/가이드만 그리는 레이어
@@ -45,6 +45,180 @@ let capturedImage = null; // 캡쳐된 이미지
 let captureAnimation = null; // 캡쳐 애니메이션 { startX, startY, currentX, currentY, targetX, targetY, progress, scale }
 let darkOverlayOpacity = 0; // 배경 어둡게 오버레이 투명도
 let captureRadius = 0; // 캡쳐된 원의 반지름
+let captureDelayTimer = 0; // 렌즈 표시 후 캡쳐 화면으로 전환하기 위한 타이머
+const CAPTURE_DELAY = 30; // 렌즈 표시 시간 (프레임 수, 약 0.67초)
+
+// Easing helpers
+const Easing = {
+  easeOutCubic: (t) => 1 - Math.pow(1 - t, 3),
+  easeInOutCubic: (t) =>
+    t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2,
+  easeInQuad: (t) => t * t,
+  easeOutBack: (t, s = 1.10158) =>
+    1 + (s + 1) * Math.pow(t - 1, 3) + s * Math.pow(t - 1, 2),
+  clamp: (v, a = 0, b = 1) => Math.min(b, Math.max(a, v)),
+};
+
+// Cubic Bezier (x,y 각각에 사용)
+function bezier1D(p0, p1, p2, p3, t) {
+  const it = 1 - t;
+  return (
+    it * it * it * p0 +
+    3 * it * it * t * p1 +
+    3 * it * t * t * p2 +
+    t * t * t * p3
+  );
+}
+
+// 버튼 액션 애니메이션 변수
+let deleteAnimation = null; // 삭제 애니메이션 { t0, dur, phaseInflate, x, y, baseR, particles:[], ring:{r, alpha, born} }
+let saveAnimation = null; // 저장 애니메이션 { t0, dur, startX, startY, targetX, targetY, cx1, cy1, cx2, cy2, startRadius, targetRadius }
+
+// 4x4 그리드 특징 데이터
+const gridFeatures = [
+  // 1행
+  ["수관 실루엣", "네거티브 스페이스", "저명도 그린 질감"], // 1번 (좌상단)
+  ["사선 지붕 릿지 소실점", "UI 오버레이 레이어링", "목재 루버 리듬"], // 2번
+  ["캔틸레버 정점(예각)", "금속 하이라이트", "식재·체인 디테일 포인트"], // 3번
+  ["발코니 모듈 반복", "하늘–회색 입면 냉·난색 대비", "대기 원근"], // 4번 (우상단)
+  // 2행
+  ["잎·가지 덩어리감", "유기적 윤곽과 하늘 대비", "점묘식 음영 패턴"], // 5번
+  ["수직 루버 패턴", "사선 처마 흐름", "유리 난간–목재 재료 대비"], // 6번
+  ["삼각형 매스 전이", "엣지 하이라이트", "소형 오브제(플랜터) 포컬"], // 7번
+  ["직교 타워 반복", "경계 정돈", "청명한 스카이 백그라운드"], // 8번
+  // 3행
+  ["고채도 파랑 원형 표지판", "수관 오클루전", "전경-배경 분리"], // 9번
+  ["일문 타이포 표지(화이트 보드)", "표지 그림자 캐스팅", "목재 면과 교차"], // 10번
+  ["소핏 음영 그라데이션", "V자 코너 수렴", "다운라이트 점광 포인트"], // 11번
+  ["도로 소실점 유도", "가는 전선 라인워크", "명조 대비 강화"], // 12번
+  // 4행
+  ["하단 유리 반사 레이어", "낮은 잎사귀 컷오프", "베이스 라인 정렬"], // 13번 (좌하단)
+  ["수직 멀리언 리듬", "고반사 유리 텍스처", "인물 스케일 앵커"], // 14번
+  ["브랜드 엠블럼 포컬", "직사광 캐스팅 섀도", "목재 텍스처 방향 대비"], // 15번
+  ["교차로 원근 심화", "간판·신호 혼합 색온", "도시 전경 프레이밍"], // 16번 (우하단)
+];
+
+// 원과 사각형의 교차 면적 계산
+function calculateCircleRectIntersection(cx, cy, radius, rx, ry, rw, rh) {
+  // 사각형이 원 안에 완전히 포함되는 경우
+  const corners = [
+    { x: rx, y: ry },
+    { x: rx + rw, y: ry },
+    { x: rx + rw, y: ry + rh },
+    { x: rx, y: ry + rh },
+  ];
+  let allInside = true;
+  for (const corner of corners) {
+    const dist = Math.sqrt(
+      Math.pow(cx - corner.x, 2) + Math.pow(cy - corner.y, 2)
+    );
+    if (dist > radius) {
+      allInside = false;
+      break;
+    }
+  }
+  if (allInside) {
+    return rw * rh; // 사각형 전체 면적
+  }
+
+  // 원이 사각형 안에 완전히 포함되는 경우
+  const distToClosest = Math.sqrt(
+    Math.pow(Math.max(rx, Math.min(cx, rx + rw)) - cx, 2) +
+      Math.pow(Math.max(ry, Math.min(cy, ry + rh)) - cy, 2)
+  );
+  if (distToClosest >= radius) {
+    return 0; // 교차하지 않음
+  }
+
+  // 근사 계산: 샘플링 방식으로 교차 면적 계산
+  const samples = 50; // 각 축당 샘플 수
+  let intersectionArea = 0;
+  const stepX = rw / samples;
+  const stepY = rh / samples;
+
+  for (let i = 0; i < samples; i++) {
+    for (let j = 0; j < samples; j++) {
+      const px = rx + i * stepX + stepX / 2;
+      const py = ry + j * stepY + stepY / 2;
+      const dist = Math.sqrt(Math.pow(cx - px, 2) + Math.pow(cy - py, 2));
+      if (dist <= radius) {
+        intersectionArea += stepX * stepY;
+      }
+    }
+  }
+
+  return intersectionArea;
+}
+
+// 캡쳐된 영역의 그리드 특징 분석
+function analyzeCapturedGrid(circle) {
+  if (!bgImg || !cachedCoverFit) return [];
+
+  const cover = cachedCoverFit;
+  const gridCols = 4;
+  const gridRows = 4;
+
+  // 배경 이미지 원본 좌표로 변환
+  const screenX = circle.x - cover.offsetX;
+  const screenY = circle.y - cover.offsetY;
+  const scaleX = bgImg.width / cover.drawW;
+  const scaleY = bgImg.height / cover.drawH;
+  const imgX = screenX * scaleX;
+  const imgY = screenY * scaleY;
+  const imgRadius = circle.radius * Math.min(scaleX, scaleY);
+
+  // 올가미의 전체 면적
+  const totalLassoArea = Math.PI * imgRadius * imgRadius;
+
+  // 그리드 칸 크기
+  const gridCellW = bgImg.width / gridCols;
+  const gridCellH = bgImg.height / gridRows;
+
+  // 모든 칸에 대해 원과의 교차 면적 계산
+  const cellIntersectionAreas = [];
+  for (let row = 0; row < gridRows; row++) {
+    for (let col = 0; col < gridCols; col++) {
+      const cellX = col * gridCellW;
+      const cellY = row * gridCellH;
+      const cellIndex = row * gridCols + col;
+
+      // 원과 칸의 교차 면적 계산
+      const intersectionArea = calculateCircleRectIntersection(
+        imgX,
+        imgY,
+        imgRadius,
+        cellX,
+        cellY,
+        gridCellW,
+        gridCellH
+      );
+
+      cellIntersectionAreas[cellIndex] = intersectionArea;
+    }
+  }
+
+  // 각 특징별로 올가미 내 면적 계산
+  const featureAreas = {};
+  for (let cellIndex = 0; cellIndex < gridRows * gridCols; cellIndex++) {
+    if (gridFeatures[cellIndex]) {
+      const intersectionArea = cellIntersectionAreas[cellIndex] || 0;
+      for (const feature of gridFeatures[cellIndex]) {
+        if (!featureAreas[feature]) {
+          featureAreas[feature] = 0;
+        }
+        featureAreas[feature] += intersectionArea;
+      }
+    }
+  }
+
+  // 올가미 면적의 20% 이상을 차지하는 특징만 필터링
+  const threshold = totalLassoArea * 0.2;
+  const filteredFeatures = Object.keys(featureAreas).filter(
+    (feature) => featureAreas[feature] >= threshold
+  );
+
+  return filteredFeatures;
+}
 
 // 반응형 스케일 계산 헬퍼 함수
 function getResponsiveScale() {
@@ -147,88 +321,180 @@ function drawBackgroundCovered() {
   image(bgImg, offsetX, offsetY, drawW, drawH);
 }
 
-function drawLens(mx, my, scale = 1, opacity = 1, rotation = 0) {
-  if (!bgImg || !overlay) return;
+// 그리드 시각화 (디버깅용)
+function drawGridVisualization() {
+  if (!bgImg || !cachedCoverFit) return;
 
-  // 배경이 화면에 그려진 동일 스케일을 참고하여, 확대용으로 재-렌더링
-  // 캐시된 값 사용
-  if (
-    !cachedCoverFit ||
-    lastCanvasSize.w !== width ||
-    lastCanvasSize.h !== height
-  ) {
-    cachedCoverFit = computeCoverFit(bgImg.width, bgImg.height, width, height);
-    lastCanvasSize = { w: width, h: height };
+  const cover = cachedCoverFit;
+  const gridCols = 4;
+  const gridRows = 4;
+
+  // 그리드 칸 크기 (화면 좌표계)
+  const cellW = cover.drawW / gridCols;
+  const cellH = cover.drawH / gridRows;
+
+  push();
+  stroke(255, 0, 0); // 빨간색
+  strokeWeight(2);
+  noFill();
+
+  // 그리드 선 그리기
+  for (let i = 0; i <= gridCols; i++) {
+    const x = cover.offsetX + i * cellW;
+    line(x, cover.offsetY, x, cover.offsetY + cover.drawH);
   }
+  for (let i = 0; i <= gridRows; i++) {
+    const y = cover.offsetY + i * cellH;
+    line(cover.offsetX, y, cover.offsetX + cover.drawW, y);
+  }
+
+  // 각 칸에 번호와 특징 표시
+  textAlign(CENTER, TOP);
+  textSize(14);
+  fill(255, 0, 0); // 빨간색
+  noStroke();
+
+  for (let row = 0; row < gridRows; row++) {
+    for (let col = 0; col < gridCols; col++) {
+      const cellIndex = row * gridCols + col;
+      const cellX = cover.offsetX + col * cellW;
+      const cellY = cover.offsetY + row * cellH;
+      const cellCenterX = cellX + cellW / 2;
+      const cellCenterY = cellY + cellH / 2;
+
+      // 칸 번호 표시
+      textSize(20);
+      textStyle(BOLD);
+      text(`${cellIndex + 1}`, cellCenterX, cellY + 10);
+
+      // 모든 특징 표시
+      if (gridFeatures[cellIndex] && gridFeatures[cellIndex].length > 0) {
+        textSize(11);
+        textStyle(NORMAL);
+        const maxWidth = cellW - 20;
+        let yOffset = cellY + 35; // 번호 아래부터 시작
+
+        for (const feature of gridFeatures[cellIndex]) {
+          // 텍스트가 칸을 벗어나지 않도록 줄바꿈 처리
+          if (textWidth(feature) > maxWidth) {
+            // 긴 텍스트는 줄바꿈
+            const words = feature.split(/[\/·]/);
+            let currentLine = "";
+            for (const word of words) {
+              const testLine = currentLine ? `${currentLine}/${word}` : word;
+              if (textWidth(testLine) > maxWidth && currentLine) {
+                text(currentLine, cellCenterX, yOffset);
+                yOffset += 14;
+                currentLine = word;
+              } else {
+                currentLine = testLine;
+              }
+            }
+            if (currentLine) {
+              text(currentLine, cellCenterX, yOffset);
+              yOffset += 14;
+            }
+          } else {
+            text(feature, cellCenterX, yOffset);
+            yOffset += 14;
+          }
+
+          // 다음 특징과 구분을 위한 간격
+          yOffset += 2;
+        }
+      }
+    }
+  }
+
+  pop();
+}
+
+// drawLens 함수는 더 이상 사용하지 않음 - 올가미로 캡쳐한 이미지만 표시
+
+// 화면 좌표 (cx,cy), 화면 반지름 r 로 렌즈를 그린다(확대 없음, 1:1 렌더링)
+// srcRectOverride: { sx, sy, sw, sh }를 넘기면 그 영역만을 사용해 어디에든 그려줌
+function drawLensFromBG(cx, cy, r, srcRectOverride = null) {
+  if (!bgImg || !cachedCoverFit) return;
   const cover = cachedCoverFit;
 
-  // overlay에 렌즈 그리기 (메인 캔버스에 잔상 남지 않도록)
-  const ctx = overlay.drawingContext;
+  const toSrcX = bgImg.width / cover.drawW;
+  const toSrcY = bgImg.height / cover.drawH;
+
+  let sx, sy, srcW, srcH;
+
+  if (srcRectOverride) {
+    // 고정된 원본 영역을 사용
+    ({ sx, sy, sw: srcW, sh: srcH } = srcRectOverride);
+  } else {
+    // (이전 로직) 화면 위치에서 즉석 계산
+    const srcCenterX = (cx - cover.offsetX) * toSrcX;
+    const srcCenterY = (cy - cover.offsetY) * toSrcY;
+    srcW = 2 * r * toSrcX;
+    srcH = 2 * r * toSrcY;
+    sx = srcCenterX - srcW / 2;
+    sy = srcCenterY - srcH / 2;
+    sx = Math.max(0, Math.min(bgImg.width - srcW, sx));
+    sy = Math.max(0, Math.min(bgImg.height - srcH, sy));
+  }
+
+  const srcCanvas = bgImg.canvas || bgImg.elt;
+  const ctx = drawingContext;
+
+  // 원형 클리핑
   ctx.save();
-  ctx.globalAlpha = opacity;
-  ctx.translate(mx, my);
-  ctx.rotate(rotation); // 회전 추가
-  ctx.scale(scale, scale);
-  ctx.translate(-mx, -my);
   ctx.beginPath();
-  ctx.arc(mx, my, lensRadius, 0, Math.PI * 2);
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.clip();
 
-  // 확대 배율만큼 변환하여, 포인터 아래의 지점을 중심에 오도록 그리기
-  ctx.save();
-  ctx.translate(mx, my);
-  ctx.scale(zoom, zoom);
+  // 목적지는 렌즈 원에 꽉 차게
+  ctx.drawImage(srcCanvas, sx, sy, srcW, srcH, cx - r, cy - r, 2 * r, 2 * r);
 
-  // 스케일 전 좌표계에서 포인터가 가리키던 배경 위치를 역보정
-  const imgX = mx - cover.offsetX;
-  const imgY = my - cover.offsetY;
-  const centerShiftX = -imgX + lensRadius / zoom;
-  const centerShiftY = -imgY + lensRadius / zoom;
-  ctx.translate(centerShiftX, centerShiftY);
-
-  // 확대된 배경 렌더 (overlay에)
-  overlay.image(bgImg, cover.offsetX, cover.offsetY, cover.drawW, cover.drawH);
   ctx.restore();
+}
 
-  // 가장자리 페더(뭉개짐) 표현: 라디얼 그라디언트 오버레이로 부드러운 경계
-  const feather = 28; // 페더 범위(px)
+// 렌즈 테두리만 그리기 (캡쳐된 이미지 위에)
+function drawLensBorder(mx, my, radius = lensRadius) {
+  push();
+  const ctx = drawingContext;
+  ctx.save();
+
+  // 가장자리 페더(뭉개짐) 표현
+  const feather = 28;
   const grad = ctx.createRadialGradient(
     mx,
     my,
-    Math.max(1, lensRadius - feather),
+    Math.max(1, radius - feather),
     mx,
     my,
-    lensRadius + 1
+    radius + 1
   );
   grad.addColorStop(0.0, "rgba(255,255,255,0)");
   grad.addColorStop(1.0, "rgba(255,255,255,0.55)");
   ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.arc(mx, my, lensRadius + 1, 0, Math.PI * 2);
+  ctx.arc(mx, my, radius + 1, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.restore();
-
-  // 검정 방사형 그라디언트 스트로크
-  ctx.save();
-  const strokeFeather = 10; // 외곽으로 번지는 정도
+  // 방사형 그라디언트 스트로크
+  const strokeFeather = 10;
   const strokeGrad = ctx.createRadialGradient(
     mx,
     my,
-    Math.max(1, lensRadius - 1),
+    Math.max(1, radius - 1),
     mx,
     my,
-    lensRadius + strokeFeather
+    radius + strokeFeather
   );
   strokeGrad.addColorStop(0.0, "rgba(255,255,255,0.9)");
   strokeGrad.addColorStop(1.0, "rgba(255,255,255,0)");
 
   ctx.beginPath();
-  ctx.arc(mx, my, lensRadius, 0, Math.PI * 2);
+  ctx.arc(mx, my, radius, 0, Math.PI * 2);
   ctx.lineWidth = 2;
   ctx.strokeStyle = strokeGrad;
   ctx.stroke();
   ctx.restore();
+  pop();
 }
 
 function getPointer() {
@@ -337,18 +603,11 @@ function handlePointerUp(x, y) {
     }
   }
 
-  // 드래그가 아닌 단순 클릭이면 고정된 돋보기 터짐 애니메이션 시작
+  // 드래그가 아닌 단순 클릭이면 렌즈 터짐 애니메이션 시작 (더 이상 사용하지 않음 - 렌즈 확대 기능 제거)
+  // 렌즈는 올가미로 캡쳐한 이미지만 표시하므로 이 기능 제거
   if (!hasDragged && fixedLensPosition) {
-    // 렌즈 터짐 애니메이션 시작
-    lensAnimation = {
-      x: fixedLensPosition.x,
-      y: fixedLensPosition.y,
-      scale: 1,
-      opacity: 1,
-      rotation: 0,
-      progress: 0, // 0 ~ 1
-    };
-    fixedLensPosition = null; // 렌즈 위치는 null로 설정하되 애니메이션은 계속
+    // 렌즈 터짐 애니메이션은 더 이상 사용하지 않음
+    // fixedLensPosition은 그대로 유지하여 캡쳐된 이미지 계속 표시
     isDrawing = false;
     drawingPath = [];
     return true; // 처리됨
@@ -498,11 +757,7 @@ function captureBubble(circle) {
   // 캡쳐된 영역 이미지 추출
   if (!bgImg) return;
 
-  // 캔버스에서 원형 영역 추출
-  const captureBuffer = createGraphics(lensDiameter, lensDiameter);
-  const ctx = captureBuffer.drawingContext;
-
-  // 배경 이미지의 해당 영역을 캡쳐
+  // 배경 이미지의 해당 영역을 캡쳐 (캐시 업데이트)
   if (
     !cachedCoverFit ||
     lastCanvasSize.w !== width ||
@@ -511,65 +766,51 @@ function captureBubble(circle) {
     cachedCoverFit = computeCoverFit(bgImg.width, bgImg.height, width, height);
     lastCanvasSize = { w: width, h: height };
   }
+
+  // 캡쳐된 영역의 그리드 특징 분석
+  window.capturedFeatures = analyzeCapturedGrid(circle);
+  // 라벨 위치 초기화 (새로운 캡쳐마다 재계산)
+  window.featureLabelPositions = null;
+
+  // 올가미 시점의 원본 자르기 좌표를 고정 저장
   const cover = cachedCoverFit;
+  const toSrcX = bgImg.width / cover.drawW;
+  const toSrcY = bgImg.height / cover.drawH;
 
-  // 원의 중심을 배경 이미지 좌표로 변환
-  const imgX = circle.x - cover.offsetX;
-  const imgY = circle.y - cover.offsetY;
+  const srcCenterX = (circle.x - cover.offsetX) * toSrcX;
+  const srcCenterY = (circle.y - cover.offsetY) * toSrcY;
+  const srcW = 2 * circle.radius * toSrcX;
+  const srcH = 2 * circle.radius * toSrcY;
+  let sx = srcCenterX - srcW / 2;
+  let sy = srcCenterY - srcH / 2;
+  sx = Math.max(0, Math.min(bgImg.width - srcW, sx));
+  sy = Math.max(0, Math.min(bgImg.height - srcH, sy));
 
-  // 원형 마스크 먼저 적용
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(lensRadius, lensRadius, lensRadius, 0, Math.PI * 2);
-  ctx.clip();
+  // 이후 모든 렌더/저장에서 이 값만 사용
+  window.capturedSrcRect = { sx, sy, sw: srcW, sh: srcH };
 
-  // 배경 이미지에서 해당 영역 추출 (확대된 영역)
-  // 렌즈와 동일한 방식으로 변환
-  ctx.save();
-  ctx.translate(lensRadius, lensRadius);
-  ctx.scale(zoom, zoom);
-
-  // 스케일 전 좌표계에서 포인터가 가리키던 배경 위치를 역보정
-  const centerShiftX = -imgX + lensRadius / zoom;
-  const centerShiftY = -imgY + lensRadius / zoom;
-  ctx.translate(centerShiftX, centerShiftY);
-
-  // 확대된 배경 렌더 (ctx.drawImage 사용)
-  if (bgImg.elt) {
-    ctx.drawImage(
-      bgImg.elt,
-      cover.offsetX,
-      cover.offsetY,
-      cover.drawW,
-      cover.drawH
-    );
-  }
-
-  ctx.restore();
-  ctx.restore(); // 클리핑 해제
-
-  capturedImage = captureBuffer;
+  // 이미지 버퍼는 생성하지 않음 - 실시간으로 drawLensFromBG로 렌더링
+  capturedImage = null; // 더 이상 사용하지 않음
   captureRadius = circle.radius;
 
-  // 애니메이션 시작
+  // 먼저 렌즈를 표시 (올가미로 그린 원의 크기로, 중앙으로 이동하며 커지는 애니메이션)
   const centerX = width / 2;
   const centerY = height / 2;
-  captureAnimation = {
+  const targetRadius = Math.min(width, height) * 0.3; // 최종 크기
+  fixedLensPosition = {
+    x: circle.x,
+    y: circle.y,
+    radius: circle.radius, // 현재 크기 (올가미 원 크기)
     startX: circle.x,
     startY: circle.y,
-    currentX: circle.x,
-    currentY: circle.y,
     targetX: centerX,
     targetY: centerY,
-    progress: 0,
-    scale: 1,
     startRadius: circle.radius,
-    targetRadius: Math.min(width, height) * 0.3, // 화면의 30% 크기
+    targetRadius: targetRadius,
+    progress: 0, // 애니메이션 진행도
   };
-
-  showCaptureScreen = true;
-  darkOverlayOpacity = 0;
-  fixedLensPosition = null; // 렌즈 위치 제거
+  captureDelayTimer = 0;
+  showCaptureScreen = false; // 아직 캡쳐 화면 표시 안 함
 
   // 흔적 완전 제거
   overlayNeedsClear = true;
@@ -695,6 +936,7 @@ function drawBubbles() {
 function draw() {
   background(255);
   drawBackgroundCovered();
+  drawGridVisualization(); // 그리드 시각화
 
   // ✅ 버블은 더 이상 그리지 않음
   // drawBubbles();  <-- 버블 렌더링 제거
@@ -712,41 +954,145 @@ function draw() {
 
   lastDrawingPathLength = drawingPath.length;
 
-  // 렌즈 터짐 애니메이션 업데이트 및 렌더링
+  // 렌즈 터짐 애니메이션 업데이트 및 렌더링 (더 이상 사용하지 않음 - 렌즈 확대 기능 제거)
+  // lensAnimation은 제거되었지만 호환성을 위해 유지
   if (lensAnimation) {
-    // 진행도 업데이트 (0 -> 1)
-    lensAnimation.progress += 0.12;
+    // 애니메이션 즉시 완료 처리
+    lensAnimation = null;
+  }
 
-    if (lensAnimation.progress >= 1) {
-      // 애니메이션 완료 - 제거
-      lensAnimation = null;
-    } else {
-      // 이징 함수 (ease-out cubic)로 부드러운 터짐 효과
-      const t = lensAnimation.progress;
-      const easeOut = 1 - Math.pow(1 - t, 3);
+  // 렌즈 표시 후 캡쳐 화면으로 전환 (capturedImage 의존 제거)
+  if (fixedLensPosition && !showCaptureScreen) {
+    // 애니메이션이 완료되었는지 확인
+    const animationComplete =
+      fixedLensPosition.progress !== undefined &&
+      fixedLensPosition.progress >= 1;
 
-      // 스케일: 1.0 -> 2.2 (더 크게 터짐)
-      lensAnimation.scale = 1 + easeOut * 1.2;
+    if (animationComplete) {
+      captureDelayTimer++;
+      if (captureDelayTimer >= CAPTURE_DELAY) {
+        // 캡쳐 화면으로 전환
+        captureAnimation = {
+          startX: fixedLensPosition.x,
+          startY: fixedLensPosition.y,
+          currentX: fixedLensPosition.x,
+          currentY: fixedLensPosition.y,
+          targetX: fixedLensPosition.targetX,
+          targetY: fixedLensPosition.targetY,
+          progress: 0,
+          scale: 1,
+          startRadius: fixedLensPosition.radius,
+          targetRadius: fixedLensPosition.targetRadius,
+        };
+        showCaptureScreen = true;
+        darkOverlayOpacity = 0;
+        fixedLensPosition = null; // 렌즈 위치 제거
+      }
+    }
+  }
 
-      // 투명도: 1.0 -> 0 (빠르게 사라짐)
-      lensAnimation.opacity = 1 - easeOut;
+  // 삭제 애니메이션 처리
+  if (deleteAnimation) {
+    // 배경 어둡게 유지
+    fill(0, 0, 0, Math.min(0.7, darkOverlayOpacity || 0.7) * 255);
+    noStroke();
+    rect(0, 0, width, height);
 
-      // 회전: 약간 회전하면서 터짐
-      lensAnimation.rotation = easeOut * Math.PI * 0.3;
+    deleteAnimation.progress = min(1, deleteAnimation.progress + 0.12);
+    const t = deleteAnimation.progress;
+    const easeOut = Easing.easeOutCubic(t);
 
-      // 애니메이션 중인 렌즈 그리기
-      drawLens(
-        lensAnimation.x,
-        lensAnimation.y,
-        lensAnimation.scale,
-        lensAnimation.opacity,
-        lensAnimation.rotation
-      );
+    // 콘텐츠는 확대하지 않고, 렌즈 반지름만 약간 키움
+    const r = deleteAnimation.baseR * (1 + 0.6 * easeOut);
+
+    // 1:1 렌더링으로 렌즈 그리기
+    push();
+    const ctx = drawingContext;
+    ctx.save();
+    ctx.globalAlpha = 1 - easeOut; // 페이드아웃
+    drawLensFromBG(
+      deleteAnimation.x,
+      deleteAnimation.y,
+      r,
+      window.capturedSrcRect // 고정된 원본 영역 사용
+    );
+    ctx.restore();
+    pop();
+
+    // 투명 링 (비눗방울 느낌)
+    const ringAlpha = (1 - easeOut) * 0.8;
+    push();
+    noFill();
+    stroke(255, 255, 255, 255 * ringAlpha);
+    strokeWeight(2);
+    circle(deleteAnimation.x, deleteAnimation.y, r * 2 + 8);
+    pop();
+
+    // 애니메이션 완료 시 화면 닫기
+    if (deleteAnimation.progress >= 1) {
+      showCaptureScreen = false;
+      capturedImage = null;
+      deleteAnimation = null;
+      darkOverlayOpacity = 0;
+    }
+  }
+
+  // 저장 애니메이션 처리
+  if (saveAnimation) {
+    saveAnimation.progress = min(1, saveAnimation.progress + 0.08);
+    const t = saveAnimation.progress;
+    const easeInOut = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // ease-in-out
+
+    // 위치 보간
+    saveAnimation.currentX = lerp(
+      saveAnimation.startX,
+      saveAnimation.targetX,
+      easeInOut
+    );
+    saveAnimation.currentY = lerp(
+      saveAnimation.startY,
+      saveAnimation.targetY,
+      easeInOut
+    );
+
+    // 크기 보간 (축소)
+    saveAnimation.currentRadius = lerp(
+      saveAnimation.startRadius,
+      saveAnimation.targetRadius,
+      easeInOut
+    );
+
+    // 배경 어둡게
+    darkOverlayOpacity = min(0.7, darkOverlayOpacity + 0.05);
+    fill(0, 0, 0, darkOverlayOpacity * 255);
+    noStroke();
+    rect(0, 0, width, height);
+
+    // 1:1 렌더링으로 렌즈 그리기 (갤러리로 이동하며 축소)
+    drawLensFromBG(
+      saveAnimation.currentX,
+      saveAnimation.currentY,
+      saveAnimation.currentRadius,
+      window.capturedSrcRect // 고정된 원본 영역 사용
+    );
+
+    // 애니메이션 완료 시 화면 닫기
+    if (saveAnimation.progress >= 1) {
+      showCaptureScreen = false;
+      capturedImage = null;
+      saveAnimation = null;
+      darkOverlayOpacity = 0;
+      console.log("저장 완료");
     }
   }
 
   // 캡쳐 화면 표시
-  if (showCaptureScreen && captureAnimation) {
+  if (
+    showCaptureScreen &&
+    captureAnimation &&
+    !deleteAnimation &&
+    !saveAnimation
+  ) {
     // 배경 다시 그리기 (어둡게 하기 전에)
     drawBackgroundCovered();
 
@@ -778,58 +1124,66 @@ function draw() {
       easeOut
     );
 
-    // 캡쳐된 이미지 그리기
-    if (capturedImage) {
-      push();
-      const ctx = drawingContext;
-      ctx.save();
-
-      // 원형 클리핑 경로 설정
-      ctx.beginPath();
-      ctx.arc(
-        captureAnimation.currentX,
-        captureAnimation.currentY,
-        currentRadius,
-        0,
-        Math.PI * 2
-      );
-      ctx.clip();
-
-      // 이미지 크기 조정하여 그리기
-      const scale = (currentRadius * 2) / lensDiameter;
-      ctx.save();
-      ctx.translate(captureAnimation.currentX, captureAnimation.currentY);
-      ctx.scale(scale, scale);
-      ctx.translate(-lensRadius, -lensRadius);
-
-      // 캡쳐된 이미지 그리기 (ctx.drawImage 사용)
-      if (capturedImage.canvas) {
-        ctx.drawImage(capturedImage.canvas, 0, 0, lensDiameter, lensDiameter);
-      } else {
-        // 폴백: p5.js image 함수 사용
-        imageMode(CORNER);
-        image(capturedImage, 0, 0, lensDiameter, lensDiameter);
-      }
-
-      ctx.restore();
-      ctx.restore(); // 클리핑 해제
-      pop();
-    }
+    // 1:1 렌더링으로 렌즈 그리기
+    drawLensFromBG(
+      captureAnimation.currentX,
+      captureAnimation.currentY,
+      currentRadius,
+      window.capturedSrcRect // 고정된 원본 영역 사용
+    );
 
     // 버튼들 그리기 (애니메이션 완료 후)
     if (captureAnimation.progress >= 1) {
       drawCaptureButtons();
+      drawFeatureLabels();
     }
   } else {
     // 일반 화면
     // 돋보기 표시 로직 - 올가미 완성 시에만 표시
     if (fixedLensPosition) {
-      // 고정된 돋보기 위치에 표시 (overlay에 그리기)
-      drawLens(fixedLensPosition.x, fixedLensPosition.y);
+      // 중앙으로 이동하며 커지는 애니메이션 업데이트
+      if (fixedLensPosition.progress !== undefined) {
+        fixedLensPosition.progress = min(1, fixedLensPosition.progress + 0.05);
+        const t = fixedLensPosition.progress;
+        const easeOut = 1 - Math.pow(1 - t, 3); // ease-out cubic
+
+        // 위치 보간 (올가미 위치 -> 중앙)
+        fixedLensPosition.x = lerp(
+          fixedLensPosition.startX,
+          fixedLensPosition.targetX,
+          easeOut
+        );
+        fixedLensPosition.y = lerp(
+          fixedLensPosition.startY,
+          fixedLensPosition.targetY,
+          easeOut
+        );
+
+        // 크기 보간 (올가미 원 크기 -> 최종 크기)
+        fixedLensPosition.radius = lerp(
+          fixedLensPosition.startRadius,
+          fixedLensPosition.targetRadius,
+          easeOut
+        );
+      }
+
+      // 1:1 렌더링으로 렌즈 그리기
+      drawLensFromBG(
+        fixedLensPosition.x,
+        fixedLensPosition.y,
+        fixedLensPosition.radius,
+        window.capturedSrcRect // 고정된 원본 영역 사용
+      );
+      drawLensBorder(
+        fixedLensPosition.x,
+        fixedLensPosition.y,
+        fixedLensPosition.radius
+      );
+
       window.currentLens = {
         x: fixedLensPosition.x,
         y: fixedLensPosition.y,
-        r: lensRadius,
+        r: fixedLensPosition.radius,
       };
     } else {
       window.currentLens = null;
@@ -851,6 +1205,29 @@ function draw() {
   if (showModal) {
     drawModal();
   }
+}
+
+// 갤러리 아이콘 중심 좌표 계산 (drawUI와 동일 수식 사용)
+function getGalleryIconCenter() {
+  const responsiveScale = getResponsiveScale();
+  const baseHeight = 48 * 2.2 * responsiveScale;
+  const margin = 16 * responsiveScale;
+  const verticalGap = -baseHeight * 0.3;
+
+  if (!galleryImg || galleryImg.width === 0) {
+    // 안전장치: 대략적인 위치(좌상단)에 둠
+    return {
+      x: margin + 40 * responsiveScale,
+      y: margin + baseHeight + verticalGap + baseHeight / 2,
+    };
+  }
+
+  const galleryRatio = galleryImg.width / galleryImg.height;
+  const galleryW = baseHeight * galleryRatio;
+
+  const x = margin + galleryW / 2;
+  const y = margin + baseHeight + verticalGap + baseHeight / 2;
+  return { x, y };
 }
 
 // UI 요소 그리기 함수
@@ -1243,7 +1620,6 @@ function drawCaptureButtons() {
   const buttons = [
     { text: "저장하기", action: "save" },
     { text: "삭제하기", action: "delete" },
-    { text: "메모 작성하기", action: "memo" },
   ];
 
   // 버튼 텍스트 크기 측정 및 배치
@@ -1328,28 +1704,270 @@ function drawCaptureButtons() {
   pop();
 }
 
+// 둥근 사각형 경로 헬퍼
+function roundRectPath(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
+}
+
+// 글래스 라벨 하나 그리기 (배경 재렌더+블러+틴트+테두리+스펙큘러)
+function drawGlassLabel(x, y, w, h, r) {
+  const ctx = drawingContext;
+
+  // 1) 아웃샤도우 (라벨 외곽 글로우)
+  ctx.save();
+  roundRectPath(ctx, x, y, w, h, r);
+  ctx.shadowBlur = 18;
+  ctx.shadowColor = "rgba(0,0,0,0.25)";
+  ctx.fillStyle = "rgba(0,0,0,0.001)"; // 내용 영향 없이 그림자만
+  ctx.fill();
+  ctx.restore();
+
+  // 2) 클립 후, 배경을 다시 그리면서 필터 적용 → 백드롭 블러 효과
+  ctx.save();
+  roundRectPath(ctx, x, y, w, h, r);
+  ctx.clip();
+
+  if (bgImg && cachedCoverFit) {
+    const { offsetX, offsetY, drawW, drawH } = cachedCoverFit;
+
+    // 유리감: 블러 + 채도↑ + 밝기↓ (더 어둡고 흐리게)
+    ctx.filter = "blur(16px) saturate(140%) brightness(60%)";
+    const src = bgImg.canvas || bgImg.elt;
+    ctx.drawImage(
+      src,
+      0,
+      0,
+      bgImg.width,
+      bgImg.height,
+      offsetX,
+      offsetY,
+      drawW,
+      drawH
+    );
+    ctx.filter = "none";
+  }
+
+  // 3) 어두운 오버레이 (배경을 더 어둡게)
+  ctx.fillStyle = "rgba(0,0,0,0.4)";
+  ctx.fillRect(x, y, w, h);
+
+  // 4) 유리 틴트(상→하 미묘한 그라디언트)
+  const tint = ctx.createLinearGradient(x, y, x, y + h);
+  tint.addColorStop(0, "rgba(255,255,255,0.15)");
+  tint.addColorStop(1, "rgba(255,255,255,0.08)");
+  ctx.fillStyle = tint;
+  ctx.fillRect(x, y, w, h);
+
+  // 5) 유리 테두리(대각선 그라디언트 하이라이트)
+  const edge = ctx.createLinearGradient(x, y, x + w, y + h);
+  edge.addColorStop(0, "rgba(255,255,255,0.75)");
+  edge.addColorStop(1, "rgba(255,255,255,0.05)");
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = 1.5;
+  roundRectPath(ctx, x, y, w, h, r);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// 특징 라벨 그리기 (glass 스타일 참고, 방사형 랜덤 배치)
+function drawFeatureLabels() {
+  if (!window.capturedFeatures || window.capturedFeatures.length === 0) return;
+  if (!captureAnimation) return;
+
+  const responsiveScale = getResponsiveScale();
+  const centerX = captureAnimation.currentX ?? width / 2;
+  const centerY = captureAnimation.currentY ?? height / 2;
+  const lensR = captureAnimation.targetRadius ?? 200;
+
+  const padX = 32 * responsiveScale; // 라벨 마진 더 크게 (글자보다 더 크게)
+  const labelH = 50 * responsiveScale; // 라벨 높이 더 크게 (위아래로 뚱뚱하게)
+  const radius = 79 * responsiveScale;
+
+  textSize(18 * responsiveScale);
+  textFont("system-ui, -apple-system, sans-serif");
+  textAlign(CENTER, CENTER);
+
+  // 라벨 위치를 한 번만 계산하고 저장 (랜덤 위치 고정)
+  if (
+    !window.featureLabelPositions ||
+    window.featureLabelPositions.length !== window.capturedFeatures.length
+  ) {
+    window.featureLabelPositions = [];
+    const minDist = lensR + 80 * responsiveScale;
+    const maxDist = Math.min(width, height) * 0.4;
+
+    for (let i = 0; i < window.capturedFeatures.length; i++) {
+      let attempts = 0;
+      let labelX, labelY;
+      let validPosition = false;
+
+      // 유효한 위치를 찾을 때까지 시도
+      while (!validPosition && attempts < 50) {
+        // 방사형 랜덤 위치 계산
+        const ang = Math.random() * Math.PI * 2;
+        const distR = minDist + Math.random() * (maxDist - minDist);
+        labelX = centerX + Math.cos(ang) * distR;
+        labelY = centerY + Math.sin(ang) * distR;
+
+        // 화면 경계 체크 (# 포함)
+        const tw = textWidth("# " + window.capturedFeatures[i]);
+        const labelW = tw + padX * 2;
+        const margin = 20 * responsiveScale;
+
+        // 라벨은 화면 위아래 25%씩 제외하고 가운데 50%에만 존재
+        const topBoundary = height * 0.25; // 상단 25% 제외
+        const bottomBoundary = height * 0.75; // 하단 25% 제외
+        const labelTop = labelY - labelH / 2;
+        const labelBottom = labelY + labelH / 2;
+        const inVerticalRange =
+          labelTop >= topBoundary && labelBottom <= bottomBoundary;
+
+        // 버튼 영역 계산 (버튼이 표시되는 영역 피하기)
+        const buttonY = centerY + lensR + 40 * responsiveScale;
+        const buttonHeight = 50 * responsiveScale;
+        const buttonAreaTop = buttonY - 20 * responsiveScale; // 버튼 위 여유 공간
+        const buttonAreaBottom = buttonY + buttonHeight + 20 * responsiveScale; // 버튼 아래 여유 공간
+
+        // 라벨이 버튼 영역과 겹치지 않는지 체크
+        const notInButtonArea =
+          labelBottom < buttonAreaTop || labelTop > buttonAreaBottom;
+
+        // 기존 라벨들과 겹치지 않는지 체크
+        const padding = 15 * responsiveScale; // 라벨 간 최소 간격
+        let noOverlap = true;
+        for (let j = 0; j < window.featureLabelPositions.length; j++) {
+          const existingPos = window.featureLabelPositions[j];
+          const existingTw = textWidth("# " + window.capturedFeatures[j]);
+          const existingW = existingTw + padX * 2;
+
+          // 두 라벨의 경계 박스 계산
+          const thisLeft = labelX - labelW / 2;
+          const thisRight = labelX + labelW / 2;
+          const thisTop = labelY - labelH / 2;
+          const thisBottom = labelY + labelH / 2;
+
+          const existingLeft = existingPos.x - existingW / 2;
+          const existingRight = existingPos.x + existingW / 2;
+          const existingTop = existingPos.y - labelH / 2;
+          const existingBottom = existingPos.y + labelH / 2;
+
+          // 겹침 체크 (패딩 포함)
+          if (
+            !(
+              thisRight + padding < existingLeft ||
+              thisLeft - padding > existingRight ||
+              thisBottom + padding < existingTop ||
+              thisTop - padding > existingBottom
+            )
+          ) {
+            noOverlap = false;
+            break;
+          }
+        }
+
+        if (
+          labelX - labelW / 2 >= margin &&
+          labelX + labelW / 2 <= width - margin &&
+          inVerticalRange && // 화면 가운데 50% 영역 체크
+          notInButtonArea && // 버튼 영역 체크
+          noOverlap // 라벨 간 겹침 체크
+        ) {
+          validPosition = true;
+        }
+        attempts++;
+      }
+
+      // 유효한 위치를 못 찾으면 기본 위치 사용
+      if (!validPosition) {
+        const ang = (i / window.capturedFeatures.length) * Math.PI * 2;
+        const distR = minDist + 50 * responsiveScale;
+        labelX = centerX + Math.cos(ang) * distR;
+        labelY = centerY + Math.sin(ang) * distR;
+      }
+
+      window.featureLabelPositions.push({ x: labelX, y: labelY });
+    }
+  }
+
+  // 실제 그리기
+  for (let i = 0; i < window.capturedFeatures.length; i++) {
+    const feature = window.capturedFeatures[i];
+    const pos = window.featureLabelPositions[i];
+    if (!pos) continue;
+
+    const tw = textWidth("# " + feature);
+    const labelW = tw + padX * 2;
+    const x = pos.x - labelW / 2;
+    const y = pos.y - labelH / 2;
+
+    // 글래스 라벨(백드롭 블러+유리 표현)
+    drawGlassLabel(x, y, labelW, labelH, radius);
+
+    // C) 텍스트 (미세한 그림자로 가독성 ↑, # 추가)
+    push();
+    fill(255);
+    drawingContext.shadowBlur = 4;
+    drawingContext.shadowColor = "rgba(0,0,0,0.25)";
+    drawingContext.shadowOffsetX = 0;
+    drawingContext.shadowOffsetY = 2;
+    text("# " + feature, pos.x, pos.y);
+    pop();
+  }
+}
+
 // 캡쳐 버튼 클릭 처리
 function handleCaptureButtonClick(action) {
   switch (action) {
     case "save":
-      // 저장 기능 (추후 구현)
-      console.log("저장하기");
-      // 저장 후 화면 닫기
-      showCaptureScreen = false;
-      capturedImage = null;
-      captureAnimation = null;
-      darkOverlayOpacity = 0;
+      // 저장 애니메이션 시작: 중앙(현재) → 갤러리 아이콘으로 축소 이동
+      if (captureAnimation) {
+        const startX = captureAnimation.currentX ?? width / 2;
+        const startY = captureAnimation.currentY ?? height / 2;
+        const startRadius = captureAnimation.targetRadius ?? lensRadius;
+        const { x: gx, y: gy } = getGalleryIconCenter();
+        saveAnimation = {
+          progress: 0,
+          startX,
+          startY,
+          currentX: startX,
+          currentY: startY,
+          targetX: gx,
+          targetY: gy,
+          startRadius: startRadius,
+          currentRadius: startRadius,
+          targetRadius: 12, // 갤러리로 빨려 들어가는 느낌
+        };
+        // 캡쳐 고정 애니메이션은 멈춤 (버튼 숨김)
+        captureAnimation = null;
+      }
       break;
     case "delete":
-      // 삭제 기능 - 화면 닫기
-      showCaptureScreen = false;
-      capturedImage = null;
-      captureAnimation = null;
-      darkOverlayOpacity = 0;
-      break;
-    case "memo":
-      // 메모 작성 기능 (추후 구현)
-      console.log("메모 작성하기");
+      // 삭제 애니메이션 시작: 버블처럼 터지며 사라짐
+      if (captureAnimation) {
+        const cx = captureAnimation.currentX ?? width / 2;
+        const cy = captureAnimation.currentY ?? height / 2;
+        const cr = captureAnimation.targetRadius ?? lensRadius;
+        deleteAnimation = {
+          progress: 0,
+          x: cx,
+          y: cy,
+          baseR: cr, // 기본 반지름 (1:1 렌더링용)
+        };
+        // 캡쳐 고정 애니메이션은 멈춤 (버튼 숨김)
+        captureAnimation = null;
+      }
       break;
   }
 }

@@ -215,21 +215,14 @@
       <p class="subtitle">세 가지 인터랙티브 프로젝트를 탐색하세요</p>
 
       <div class="projects-grid">
-        <div class="project-card" data-project="analyze" id="analyze-card">
-          <span class="project-icon">📊</span>
-          <h2 class="project-title">분석</h2>
+        <div class="project-card" data-project="glass" id="glass-card">
+          <span class="project-icon">🔍</span>
+          <h2 class="project-title">글래스</h2>
           <p class="project-description">
-            React 기반의 인터랙티브 분석 도구입니다. 동적 프레임 레이아웃과
-            다양한 UI 컴포넌트를 제공합니다.
+            p5.js를 활용한 인터랙티브 글래스 렌즈 프로젝트입니다. 액체 유리
+            효과와 물리 엔진을 활용한 인터랙션을 제공합니다.
           </p>
-          <span class="project-badge">React + Vite</span>
-          <div
-            class="project-status not-ready"
-            id="analyze-status"
-            style="display: none"
-          >
-            빌드 필요
-          </div>
+          <span class="project-badge">p5.js</span>
         </div>
 
         <div class="project-card" data-project="circle-to-capture">
@@ -256,33 +249,6 @@
 
     <script>
       const projectCards = document.querySelectorAll(".project-card");
-      const analyzeStatus = document.getElementById("analyze-status");
-      const buildInstructions = document.getElementById("build-instructions");
-
-      // 페이지 로드 시 빌드 상태 확인
-      window.addEventListener("DOMContentLoaded", async () => {
-        await checkBuildStatus();
-      });
-
-      async function checkBuildStatus() {
-        try {
-          const response = await fetch("analyze/dist/index.html", {
-            method: "HEAD",
-          });
-          if (response.ok) {
-            analyzeStatus.textContent = "✅ 준비됨";
-            analyzeStatus.className = "project-status ready";
-            analyzeStatus.style.display = "inline-block";
-            buildInstructions.style.display = "none";
-          } else {
-            analyzeStatus.style.display = "inline-block";
-            buildInstructions.style.display = "block";
-          }
-        } catch (error) {
-          analyzeStatus.style.display = "inline-block";
-          buildInstructions.style.display = "block";
-        }
-      }
 
       projectCards.forEach((card) => {
         card.addEventListener("click", function () {
@@ -295,9 +261,8 @@
         let path = "";
 
         switch (project) {
-          case "analyze":
-            // React 앱은 빌드 후 dist 폴더에 있음
-            path = "analyze/dist/index.html";
+          case "glass":
+            path = "glass/index.html";
             break;
           case "circle-to-capture":
             path = "circle-to-capture/index.html";
@@ -307,32 +272,12 @@
             break;
         }
 
-        // 파일 존재 여부 확인 후 이동
-        fetch(path, { method: "HEAD" })
-          .then((response) => {
-            if (response.ok) {
-              window.location.href = path;
-            } else {
-              if (project === "analyze") {
-                const message = `분석 프로젝트가 빌드되지 않았습니다.\n\n빌드 방법:\n\n1. 자동 빌드 (권장):\n   - Windows: build-all.bat 파일 더블클릭\n   - Mac/Linux: 터미널에서 "node build-all.js" 실행\n\n2. 수동 빌드:\n   - analyze 폴더로 이동\n   - npm install 실행\n   - npm run build 실행\n\n빌드 완료 후 페이지를 새로고침하세요.`;
-                alert(message);
-                // 빌드 안내 표시
-                buildInstructions.scrollIntoView({ behavior: "smooth" });
-              } else {
-                alert("프로젝트를 찾을 수 없습니다.");
-              }
-            }
-          })
-          .catch(() => {
-            if (project === "analyze") {
-              const message = `분석 프로젝트가 빌드되지 않았습니다.\n\n빌드 방법:\n\n1. 자동 빌드 (권장):\n   - Windows: build-all.bat 파일 더블클릭\n   - Mac/Linux: 터미널에서 "node build-all.js" 실행\n\n2. 수동 빌드:\n   - analyze 폴더로 이동\n   - npm install 실행\n   - npm run build 실행\n\n빌드 완료 후 페이지를 새로고침하세요.`;
-              alert(message);
-              // 빌드 안내 표시
-              buildInstructions.scrollIntoView({ behavior: "smooth" });
-            } else {
-              alert("프로젝트를 찾을 수 없습니다.");
-            }
-          });
+        // 바로 이동 (로컬 파일 시스템에서는 fetch가 실패할 수 있음)
+        if (path) {
+          window.location.href = path;
+        } else {
+          alert("프로젝트를 찾을 수 없습니다.");
+        }
       }
     </script>
   </body>
