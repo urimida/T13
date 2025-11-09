@@ -963,14 +963,17 @@ function drawBubbleInfoInCircle(bubble, x, y, r) {
     textFont(pretendardFont);
   }
 
-  // 버블 아래쪽 공간에 텍스트 표시 (버블과 겹치지 않도록)
-  const textOffsetY = r + 30; // 버블 아래쪽 30px 여백
-  const titleY = y + textOffsetY;
-  const tagsY = y + textOffsetY + 25; // 제목 아래 25px
+  // 반응형 스케일 적용
+  const responsiveScale = getResponsiveScale();
 
-  // 제목 (버블 아래쪽)
+  // 버블 아래쪽 공간에 텍스트 표시 (버블과 겹치지 않도록, 반응형 스케일 적용)
+  const textOffsetY = r + 30 * responsiveScale; // 버블 아래쪽 여백
+  const titleY = y + textOffsetY;
+  const tagsY = y + textOffsetY + 25 * responsiveScale; // 제목 아래 여백
+
+  // 제목 (버블 아래쪽, 반응형 크기)
   fill(255, 255, 255, 255);
-  textSize(20); // 고정 크기
+  textSize(20 * responsiveScale);
   textStyle(BOLD);
 
   // 텍스트 그림자 효과
@@ -982,10 +985,10 @@ function drawBubbleInfoInCircle(bubble, x, y, r) {
   text(bubble.name, x, titleY);
   drawingContext.restore();
 
-  // 설명/태그 (제목 아래)
+  // 설명/태그 (제목 아래, 반응형 크기)
   if (bubble.tags && bubble.tags.length > 0) {
     fill(255, 255, 255, 220);
-    textSize(14);
+    textSize(14 * responsiveScale);
     textStyle(NORMAL);
     const tagsText = bubble.tags.slice(0, 2).join("  "); // 최대 2개 태그
 
@@ -3124,6 +3127,7 @@ function selectCard(indexOrNull) {
 
   // 아크 캐러셀 초기화
   if (ARC_MODE) {
+    // 즉시 중앙 고정을 위해 현재 인덱스와 목표 인덱스를 0으로 설정
     arcTargetIndex = 0;
     arcCurrentIndex = 0;
     arcScroll = 0;
@@ -3552,7 +3556,10 @@ function drawArcCarousel() {
     if (normalizedDiff > src.length / 2) normalizedDiff -= src.length;
     if (normalizedDiff < -src.length / 2) normalizedDiff += src.length;
 
-    if (Math.abs(normalizedDiff) > 0.01) {
+    // 초기화 직후 또는 목표가 0일 때는 즉시 중앙 고정
+    if (arcTargetIndex === 0 && Math.abs(arcCurrentIndex) < 0.01) {
+      arcCurrentIndex = 0;
+    } else if (Math.abs(normalizedDiff) > 0.01) {
       arcCurrentIndex = lerp(arcCurrentIndex, arcTargetIndex, 0.2); // 부드러운 이동
       // 인덱스가 목표에 가까워지면 정확히 맞춤
       if (Math.abs(normalizedDiff) < 0.1) {
@@ -3575,7 +3582,10 @@ function drawArcCarousel() {
   const mid = Math.floor(ARC_VISIBLE_COUNT / 2); // 3
   const angleBase = -Math.PI / 2; // 위 방향(12시 기준 -90도) 중심
 
-  // 먼저 모든 버블의 크기를 계산
+  // 반응형 스케일 적용
+  const responsiveScale = getResponsiveScale();
+
+  // 먼저 모든 버블의 크기를 계산 (반응형 스케일 적용)
   const bubbleRadii = [];
   for (let i = -mid; i <= mid; i++) {
     const distanceFromCenter = Math.abs(i);
@@ -3585,12 +3595,12 @@ function drawArcCarousel() {
     const sizeRatio = 1 - Math.pow(normalizedDistance, 4) * 0.8; // 4제곱으로 더 가파르게
     // 주인공 버블(i=0)만 ARC_HERO_R 사용, 나머지는 ARC_MAX_R 사용
     const maxR = i === 0 ? ARC_HERO_R : ARC_MAX_R;
-    const r = lerp(ARC_MIN_R, maxR, sizeRatio);
+    const r = lerp(ARC_MIN_R, maxR, sizeRatio) * responsiveScale;
     bubbleRadii.push({ index: i, r: r });
   }
 
-  // 버블 끝점 간 일정한 간격 설정 (픽셀 단위)
-  const EDGE_GAP = 20; // 버블 끝점 간 간격 (픽셀)
+  // 버블 끝점 간 일정한 간격 설정 (픽셀 단위, 반응형 스케일 적용)
+  const EDGE_GAP = 20 * responsiveScale; // 버블 끝점 간 간격 (픽셀)
 
   // 중앙 버블부터 시작하여 각도를 누적 계산
   const angles = [];
