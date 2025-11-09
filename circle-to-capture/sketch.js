@@ -38,6 +38,13 @@ let lensCacheKey = ""; // 렌즈 캐싱 키 (x, y, scale, opacity, rotation 기�
 // 모달 관련 변수
 let showModal = false; // 모달 표시 여부
 let modalOpacity = 0; // 모달 페이드 인/아웃용 투명도
+let modalJustOpened = false; // 모달이 방금 열렸는지 추적 (터치 이벤트 보호용)
+let modalOpenTime = 0; // 모달이 열린 시간 (프레임 수)
+const MODAL_PROTECTION_FRAMES = 5; // 모달이 열린 후 보호 시간 (프레임 수)
+
+// 안내 텍스트 관련 변수
+let showInstructionText = true; // 안내 텍스트 표시 여부
+let instructionPulseTime = 0; // LED 펄스 애니메이션 시간
 
 // 캡쳐 후 화면 관련 변수
 let showCaptureScreen = false; // 캡쳐 화면 표시 여부
@@ -506,12 +513,13 @@ function getPointer() {
 
 // 포인터 다운 (통합 핸들러)
 function handlePointerDown(x, y) {
-  // 모달이 열려있으면 닫기 버튼 클릭 확인
-  if (showModal && window.modalCloseBtn) {
+  // 모달이 열려있으면 닫기 버튼 클릭 확인 (보호 시간이 지난 후에만)
+  if (showModal && !modalJustOpened && window.modalCloseBtn) {
     const btn = window.modalCloseBtn;
     if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
       showModal = false;
       modalOpacity = 0;
+      modalJustOpened = false;
       return true; // 처리됨
     }
   }
@@ -531,6 +539,7 @@ function handlePointerDown(x, y) {
   hasDragged = false;
   isDrawing = true;
   drawingPath = [];
+  showInstructionText = false; // 그림 그리기 시작하면 안내 텍스트 숨김
   if (Number.isFinite(x) && Number.isFinite(y)) {
     drawingPath.push({ x: x, y: y });
   }
@@ -966,6 +975,14 @@ function drawBubbles() {
 function draw() {
   background(255);
   drawBackgroundCovered();
+
+  // 모달 보호 시간 업데이트 (터치 이벤트 보호)
+  if (modalJustOpened && showModal) {
+    modalOpenTime++;
+    if (modalOpenTime >= MODAL_PROTECTION_FRAMES) {
+      modalJustOpened = false; // 보호 시간이 지나면 플래그 해제
+    }
+  }
   // drawGridVisualization(); // 그리드 시각화 (비활성화)
 
   // ✅ 버블은 더 이상 그리지 않음
@@ -1064,6 +1081,13 @@ function draw() {
       capturedImage = null;
       deleteAnimation = null;
       darkOverlayOpacity = 0;
+      fixedLensPosition = null; // 렌즈 위치 초기화
+      captureAnimation = null; // 캡쳐 애니메이션도 초기화
+      isDrawing = false; // 그리기 상태 초기화
+      drawingPath = []; // 경로 초기화
+      // 안내 텍스트 다시 표시
+      showInstructionText = true;
+      instructionPulseTime = 0;
     }
   }
 
@@ -1112,6 +1136,13 @@ function draw() {
       capturedImage = null;
       saveAnimation = null;
       darkOverlayOpacity = 0;
+      fixedLensPosition = null; // 렌즈 위치 초기화
+      captureAnimation = null; // 캡쳐 애니메이션도 초기화
+      isDrawing = false; // 그리기 상태 초기화
+      drawingPath = []; // 경로 초기화
+      // 안내 텍스트 다시 표시
+      showInstructionText = true;
+      instructionPulseTime = 0;
       console.log("저장 완료");
     }
   }
@@ -1121,7 +1152,8 @@ function draw() {
     showCaptureScreen &&
     captureAnimation &&
     !deleteAnimation &&
-    !saveAnimation
+    !saveAnimation &&
+    showInstructionText === false // 캡쳐 화면일 때는 안내 텍스트 숨김
   ) {
     // 배경 다시 그리기 (어둡게 하기 전에)
     drawBackgroundCovered();
@@ -1229,6 +1261,19 @@ function draw() {
 
     // UI 요소 그리기 (overlay 위에)
     drawUI();
+
+    // 안내 텍스트 그리기 (LED 깜빡임 효과)
+    // 저장/삭제 애니메이션이 없고, 캡쳐 화면이 아니고, 그리기 중이 아니고, 렌즈가 없을 때만 표시
+    if (
+      showInstructionText &&
+      !isDrawing &&
+      !fixedLensPosition &&
+      !showCaptureScreen &&
+      !deleteAnimation &&
+      !saveAnimation
+    ) {
+      drawInstructionText();
+    }
   }
 
   // 모달 그리기 (가장 위에)
@@ -1358,6 +1403,56 @@ function drawUI() {
   }
 }
 
+// 안내 텍스트 그리기 (LED 깜빡임 효과)
+function drawInstructionText() {
+  const responsiveScale = getResponsiveScale();
+
+  // LED 펄스 효과 (시간 기반)
+  instructionPulseTime += 0.1;
+  const pulse = (Math.sin(instructionPulseTime) + 1) * 0.5; // 0~1 사이 값
+  const alpha = 0.3 + pulse * 0.7; // 0.3~1.0 사이로 펄스 (살짝 보였다가 사라졌다가)
+
+  push();
+  const ctx = drawingContext;
+  ctx.save();
+
+  // 텍스트 설정
+  textAlign(CENTER, CENTER);
+  textSize(24 * responsiveScale);
+  textFont("system-ui, -apple-system, sans-serif");
+  const textY = height / 2 + 30 * responsiveScale; // 화면 중앙 약간 아래쪽
+
+  // LED 글로우 효과를 위한 여러 레이어 그리기
+  // 1단계: 뿌연 글로우 레이어들
+  ctx.shadowBlur = 15;
+  ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.3})`;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  fill(255, 255, 255, alpha * 0.2 * 255);
+  text("채집을 원하는 부분에 원을 그려주세요.", width / 2, textY);
+
+  // 2단계: 중간 글로우 레이어
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.5})`;
+  fill(255, 255, 255, alpha * 0.4 * 255);
+  text("채집을 원하는 부분에 원을 그려주세요.", width / 2, textY);
+
+  // 3단계: 메인 LED 텍스트
+  ctx.shadowBlur = 8;
+  ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.8})`;
+  fill(255, 255, 255, alpha * 255);
+  text("채집을 원하는 부분에 원을 그려주세요.", width / 2, textY);
+
+  // 그림자 리셋
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = "transparent";
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+
+  ctx.restore();
+  pop();
+}
+
 // UI 요소 클릭 확인 함수
 function checkUIClick(x, y) {
   // 반응형 스케일 계산
@@ -1381,6 +1476,8 @@ function checkUIClick(x, y) {
     ) {
       showModal = true;
       modalOpacity = 0;
+      modalJustOpened = true; // 모달이 방금 열렸음을 표시
+      modalOpenTime = 0; // 시간 초기화
       return true;
     }
   }
@@ -1396,6 +1493,8 @@ function checkUIClick(x, y) {
     ) {
       showModal = true;
       modalOpacity = 0;
+      modalJustOpened = true; // 모달이 방금 열렸음을 표시
+      modalOpenTime = 0; // 시간 초기화
       return true;
     }
   }
@@ -1437,6 +1536,8 @@ function checkUIClick(x, y) {
     ) {
       showModal = true;
       modalOpacity = 0;
+      modalJustOpened = true; // 모달이 방금 열렸음을 표시
+      modalOpenTime = 0; // 시간 초기화
       return true;
     }
   }
@@ -1454,6 +1555,8 @@ function checkUIClick(x, y) {
     ) {
       showModal = true;
       modalOpacity = 0;
+      modalJustOpened = true; // 모달이 방금 열렸음을 표시
+      modalOpenTime = 0; // 시간 초기화
       return true;
     }
   }
@@ -1471,6 +1574,8 @@ function checkUIClick(x, y) {
     ) {
       showModal = true;
       modalOpacity = 0;
+      modalJustOpened = true; // 모달이 방금 열렸음을 표시
+      modalOpenTime = 0; // 시간 초기화
       return true;
     }
   }
@@ -1982,6 +2087,9 @@ function handleCaptureButtonClick(action) {
         // 캡쳐 고정 애니메이션은 멈춤 (버튼 숨김)
         captureAnimation = null;
       }
+      // 안내 텍스트 다시 표시
+      showInstructionText = true;
+      instructionPulseTime = 0;
       break;
     case "delete":
       // 삭제 애니메이션 시작: 버블처럼 터지며 사라짐
@@ -1998,6 +2106,9 @@ function handleCaptureButtonClick(action) {
         // 캡쳐 고정 애니메이션은 멈춤 (버튼 숨김)
         captureAnimation = null;
       }
+      // 안내 텍스트 다시 표시
+      showInstructionText = true;
+      instructionPulseTime = 0;
       break;
   }
 }
