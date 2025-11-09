@@ -1,6 +1,6 @@
 [build]
-  # 빌드 명령어: analyze 폴더에서 빌드 실행
-  command = "cd analyze && npm ci && npm run build"
+  # 정적 사이트이므로 빌드 명령 없음 (또는 필요시 빌드 명령 추가)
+  # command = ""
   # 빌드 결과물이 생성되는 폴더
   publish = "."
 
