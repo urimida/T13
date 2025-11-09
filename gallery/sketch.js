@@ -3039,8 +3039,14 @@ function checkCardClick(x, y) {
 
 // 현재 필터링된 버블들을 가운데 기준으로 부채꼴(호) 배열
 function drawSearchBar() {
-  const responsiveScale = getResponsiveScale();
-  const { W, H, X, Y } = getSearchMetrics();
+  // 검색창 메트릭 (반응형 없이 고정 크기 사용)
+  const NAV_Y = 20;
+  const NAV_H = navigationBar ? navigationBar.height * 0.45 : 64;
+  const NAV_BOTTOM = NAV_Y + NAV_H;
+  const W = width * SEARCH_WIDTH_RATIO * 1.3; // 반응형 스케일 제거
+  const H = 75 * SEARCH_SCALE * 1.3; // 반응형 스케일 제거
+  const X = (width - W) / 2;
+  const Y = NAV_BOTTOM + SEARCH_NAV_GAP;
 
   // interested 이미지만 표시 (배경 컴포넌트 제거)
   if (interestedImage && interestedImage.width > 0) {
