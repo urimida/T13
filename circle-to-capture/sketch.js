@@ -46,7 +46,7 @@ let captureAnimation = null; // 캡쳐 애니메이션 { startX, startY, current
 let darkOverlayOpacity = 0; // 배경 어둡게 오버레이 투명도
 let captureRadius = 0; // 캡쳐된 원의 반지름
 let captureDelayTimer = 0; // 렌즈 표시 후 캡쳐 화면으로 전환하기 위한 타이머
-const CAPTURE_DELAY = 30; // 렌즈 표시 시간 (프레임 수, 약 0.67초)
+const CAPTURE_DELAY = 10; // 렌즈 표시 시간 (프레임 수, 약 0.17초)
 
 // Easing helpers
 const Easing = {
@@ -817,7 +817,10 @@ function captureBubble(circle) {
   if (overlay) overlay.clear();
 }
 
-// 올가미 경로 그리기 (증분 렌더링 최적화)
+// LED 전광판 효과를 위한 펄스 애니메이션
+let lassoPulseTime = 0;
+
+// 올가미 경로 그리기 (증분 렌더링 최적화 + LED 글로우 효과)
 function drawLasso() {
   // 구슬이 생성되면 올가미를 그리지 않음
   if (!isDrawing || drawingPath.length < 2 || fixedLensPosition || !overlay)
@@ -826,18 +829,64 @@ function drawLasso() {
   const ctx = overlay.drawingContext;
   ctx.save();
 
+  // LED 펄스 효과 (시간 기반)
+  lassoPulseTime += 0.15;
+  const pulse = (Math.sin(lassoPulseTime) + 1) * 0.5; // 0~1 사이 값
+  const glowIntensity = 0.3 + pulse * 0.4; // 0.3~0.7 사이로 펄스
+
   // 증분 렌더링: 마지막으로 그린 부분 이후만 추가로 그리기
   const startIndex = Math.max(0, lastDrawnPathIndex - 1); // 이전 점부터 시작하여 연결
+
+  // 경로 그리기 헬퍼 함수
+  const drawPath = (pathStart, pathEnd) => {
+    ctx.beginPath();
+    ctx.moveTo(drawingPath[pathStart].x, drawingPath[pathStart].y);
+    for (let i = pathStart + 1; i <= pathEnd; i++) {
+      ctx.lineTo(drawingPath[i].x, drawingPath[i].y);
+    }
+  };
+
+  // LED 글로우 효과를 위한 여러 레이어 그리기
+  const drawLEDGlow = (pathStart, pathEnd, alpha) => {
+    // 1단계: 뿌연 글로우 레이어들 (넓고 투명한 선들을 먼저 그리기)
+    // 가장 넓은 뿌연 레이어
+    ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.15})`;
+    ctx.lineWidth = 20;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    drawPath(pathStart, pathEnd);
+    ctx.stroke();
+
+    // 중간 뿌연 레이어
+    ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.25})`;
+    ctx.lineWidth = 14;
+    drawPath(pathStart, pathEnd);
+    ctx.stroke();
+
+    // 약간 뿌연 레이어
+    ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.4})`;
+    ctx.lineWidth = 10;
+    drawPath(pathStart, pathEnd);
+    ctx.stroke();
+
+    // 2단계: 진한 메인 LED 선 (뿌연 레이어 위에 그리기)
+    ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.95})`;
+    ctx.lineWidth = 5;
+    drawPath(pathStart, pathEnd);
+    ctx.stroke();
+
+    // 3단계: 가장 진한 중심선
+    ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+    ctx.lineWidth = 3;
+    drawPath(pathStart, pathEnd);
+    ctx.stroke();
+  };
 
   // 경로가 새로 시작되었거나 전체를 다시 그려야 하는 경우
   if (overlayNeedsClear || startIndex === 0) {
     // 전체 경로 다시 그리기
-    ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
-    ctx.beginPath();
-    ctx.moveTo(drawingPath[0].x, drawingPath[0].y);
-    for (let i = 1; i < drawingPath.length; i++) {
-      ctx.lineTo(drawingPath[i].x, drawingPath[i].y);
-    }
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    drawPath(0, drawingPath.length - 1);
 
     // 시작점과 끝점 연결
     if (drawingPath.length > 2) {
@@ -853,33 +902,13 @@ function drawLasso() {
       }
     }
 
-    // 올가미 테두리
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-    ctx.lineWidth = 3;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    ctx.moveTo(drawingPath[0].x, drawingPath[0].y);
-    for (let i = 1; i < drawingPath.length; i++) {
-      ctx.lineTo(drawingPath[i].x, drawingPath[i].y);
-    }
-    ctx.stroke();
+    // LED 글로우 효과로 올가미 테두리 그리기
+    drawLEDGlow(0, drawingPath.length - 1, 0.9 * glowIntensity);
   } else {
     // 증분 렌더링: 마지막 선분만 추가
     if (startIndex < drawingPath.length - 1) {
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-      ctx.lineWidth = 3;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-
-      // 이전 점부터 현재 마지막 점까지 선 그리기
-      const prevPoint = drawingPath[startIndex];
-      ctx.moveTo(prevPoint.x, prevPoint.y);
-      for (let i = startIndex + 1; i < drawingPath.length; i++) {
-        ctx.lineTo(drawingPath[i].x, drawingPath[i].y);
-      }
-      ctx.stroke();
+      // LED 글로우 효과로 마지막 선분 그리기
+      drawLEDGlow(startIndex, drawingPath.length - 1, 0.9 * glowIntensity);
 
       // 채우기도 업데이트 (전체 경로 다시 그리기 - 하지만 최적화됨)
       if (drawingPath.length > 2) {
@@ -887,7 +916,8 @@ function drawLasso() {
         const end = drawingPath[drawingPath.length - 1];
         const distance = dist(end.x, end.y, start.x, start.y);
         if (distance < 100) {
-          ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
           ctx.beginPath();
           ctx.moveTo(drawingPath[0].x, drawingPath[0].y);
           for (let i = 1; i < drawingPath.length; i++) {
