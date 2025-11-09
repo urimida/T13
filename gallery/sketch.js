@@ -2083,7 +2083,7 @@ function getSearchMetrics() {
   const X = (width - W) / 2;
   // 태블릿에서는 간격을 줄이기 위해 반응형 스케일 적용 (화면이 작을수록 간격 작아짐)
   // 태블릿에서 간격을 더 줄이기 위해 스케일을 더 작게 적용
-  const gapScale = Math.min(1, responsiveScale * 0.6); // 태블릿에서 간격을 60%로 줄임
+  const gapScale = Math.min(1, responsiveScale * 0.3); // 태블릿에서 간격을 60%로 줄임
   const gap = SEARCH_NAV_GAP * gapScale;
   const Y = NAV_BOTTOM + gap;
 
@@ -3680,6 +3680,8 @@ function drawArcCarousel() {
   const responsiveScale = getResponsiveScale();
 
   // 먼저 모든 버블의 크기를 계산 (반응형 스케일 적용)
+  // 태블릿에서 버블이 너무 작아지지 않도록 최소 스케일 보장
+  const bubbleScale = Math.max(0.7, responsiveScale); // 최소 70% 크기 보장
   const bubbleRadii = [];
   for (let i = -mid; i <= mid; i++) {
     const distanceFromCenter = Math.abs(i);
@@ -3689,7 +3691,7 @@ function drawArcCarousel() {
     const sizeRatio = 1 - Math.pow(normalizedDistance, 4) * 0.8; // 4제곱으로 더 가파르게
     // 주인공 버블(i=0)만 ARC_HERO_R 사용, 나머지는 ARC_MAX_R 사용
     const maxR = i === 0 ? ARC_HERO_R : ARC_MAX_R;
-    const r = lerp(ARC_MIN_R, maxR, sizeRatio) * responsiveScale;
+    const r = lerp(ARC_MIN_R, maxR, sizeRatio) * bubbleScale;
     bubbleRadii.push({ index: i, r: r });
   }
 
