@@ -665,7 +665,8 @@ function touchEnded() {
 function handlePointerMove(x, y) {
   hasDragged = true; // 드래그 중임을 표시
   if (isDrawing && Number.isFinite(x) && Number.isFinite(y)) {
-    // 마지막 점과의 거리가 충분하면 추가
+    // 마지막 점과의 거리가 충분하면 추가 (거리 임계값을 줄여서 더 부드럽게)
+    const minDistance = 2; // 5에서 2로 줄여서 더 촘촘하게 점 추가
     if (
       drawingPath.length === 0 ||
       dist(
@@ -673,7 +674,7 @@ function handlePointerMove(x, y) {
         y,
         drawingPath[drawingPath.length - 1].x,
         drawingPath[drawingPath.length - 1].y
-      ) > 5
+      ) > minDistance
     ) {
       drawingPath.push({ x: x, y: y });
 

@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "matter-js": "^0.20.0",
-    "poly-decomp-es": "^0.4.2"
-  }
-}
