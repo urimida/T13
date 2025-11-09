@@ -936,7 +936,7 @@ function drawBubbles() {
 function draw() {
   background(255);
   drawBackgroundCovered();
-  drawGridVisualization(); // 그리드 시각화
+  // drawGridVisualization(); // 그리드 시각화 (비활성화)
 
   // ✅ 버블은 더 이상 그리지 않음
   // drawBubbles();  <-- 버블 렌더링 제거
