@@ -7,6 +7,9 @@ let clockImg;
 let illuminationImg;
 let gatheringImg;
 
+// Pretendard 폰트
+let pretendardFont;
+
 // 돋보기 설정 (요청 스펙: 지름 370px)
 const lensDiameter = 370;
 const lensRadius = lensDiameter / 2;
@@ -265,6 +268,9 @@ function preload() {
   clockImg = loadImage("assets/img/digital-clock.png");
   illuminationImg = loadImage("assets/img/Illumination-display.png");
   gatheringImg = loadImage("assets/img/gathering.png");
+
+  // Pretendard 폰트 로드
+  pretendardFont = loadFont("assets/fonts/PretendardVariable.ttf");
 }
 
 function setup() {
@@ -1420,7 +1426,9 @@ function drawInstructionText() {
   // 텍스트 설정
   textAlign(CENTER, CENTER);
   textSize(24 * responsiveScale);
-  textFont("system-ui, -apple-system, sans-serif");
+  if (pretendardFont) {
+    textFont(pretendardFont);
+  }
   const textY = height / 2 + 30 * responsiveScale; // 화면 중앙 약간 아래쪽
 
   // LED 글로우 효과를 위한 여러 레이어 그리기
@@ -1725,7 +1733,9 @@ function drawModal() {
   fill(255, 255, 255, 255 * modalOpacity);
   textAlign(CENTER, CENTER);
   textSize(18 * responsiveScale);
-  textFont("system-ui, -apple-system, sans-serif");
+  if (pretendardFont) {
+    textFont(pretendardFont);
+  }
   text("현재 채집 화면만 체험 가능합니다", modalX, modalY);
 
   pop();
@@ -1760,7 +1770,9 @@ function drawCaptureButtons() {
 
   // 버튼 텍스트 크기 측정 및 배치
   textSize(16 * responsiveScale);
-  textFont("system-ui, -apple-system, sans-serif");
+  if (pretendardFont) {
+    textFont(pretendardFont);
+  }
   textAlign(CENTER, CENTER);
 
   let totalWidth = 0;
@@ -1932,7 +1944,9 @@ function drawFeatureLabels() {
   const radius = 79 * responsiveScale;
 
   textSize(18 * responsiveScale);
-  textFont("system-ui, -apple-system, sans-serif");
+  if (pretendardFont) {
+    textFont(pretendardFont);
+  }
   textAlign(CENTER, CENTER);
 
   // 라벨 위치를 한 번만 계산하고 저장 (랜덤 위치 고정)

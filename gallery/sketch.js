@@ -1064,7 +1064,6 @@ function preload() {
     "crosswalk.png",
     "ginkgo-tree.png",
   ];
-
   // 시각적 언어 카테고리 정의 (이미지 설명 기반)
   // 하나의 사진이 여러 카테고리에 속할 수 있도록 키워드를 확장
   visualLanguageCards = [
