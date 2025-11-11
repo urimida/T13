@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "T13 통합 프로젝트",
   "scripts": {
-    "build": "cd analyze && npm install && npm run build",
-    "build:analyze": "cd analyze && npm install && npm run build"
+    "build": "node build.js",
+    "build:analyze": "node build.js"
   },
   "keywords": [],
   "author": "",
