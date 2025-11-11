@@ -10,6 +10,18 @@ let gatheringImg;
 // Pretendard 폰트
 let pretendardFont;
 
+// 태블릿/모바일 감지 및 성능 최적화
+function isMobileOrTablet() {
+  const ua = navigator.userAgent.toLowerCase();
+  const isMobile =
+    /android|webos|iphone|ipod|blackberry|iemobile|opera mini/i.test(ua);
+  const isTablet = /ipad|android(?!.*mobile)|tablet/i.test(ua);
+  const isTouchDevice =
+    "ontouchstart" in window || navigator.maxTouchPoints > 0;
+  const isSmallScreen = window.innerWidth < 1024 || window.innerHeight < 768;
+  return isMobile || isTablet || (isTouchDevice && isSmallScreen);
+}
+
 // 돋보기 설정 (요청 스펙: 지름 370px)
 const lensDiameter = 370;
 const lensRadius = lensDiameter / 2;
@@ -278,16 +290,24 @@ function setup() {
   c.parent(document.querySelector("main"));
   noStroke();
 
-  // 프레임레이트 제한으로 성능 최적화 (45fps - 체감 차이 거의 없음)
-  frameRate(45);
+  // 태블릿/모바일 최적화
+  const isMobile = isMobileOrTablet();
+  if (isMobile) {
+    pixelDensity(1); // 태블릿에서는 pixelDensity 강제로 1
+    frameRate(30); // 태블릿에서는 30fps로 제한
+  } else {
+    frameRate(45); // 데스크톱에서는 45fps
+  }
 
   overlay = createGraphics(windowWidth, windowHeight);
   overlay.clear(); // 완전 투명
 
   // 렌즈용 오프스크린 버퍼 생성 (저해상도로 성능 최적화)
+  // 태블릿에서는 더 낮은 해상도 사용
+  const bufferScale = isMobile ? 0.4 : 0.5;
   lensBuffer = createGraphics(
-    Math.ceil(windowWidth / 2),
-    Math.ceil(windowHeight / 2)
+    Math.ceil(windowWidth * bufferScale),
+    Math.ceil(windowHeight * bufferScale)
   );
   lensBuffer.pixelDensity(1);
 
@@ -304,10 +324,12 @@ function windowResized() {
   overlay = createGraphics(windowWidth, windowHeight);
   overlay.clear();
 
-  // 렌즈 버퍼도 재생성
+  // 렌즈 버퍼도 재생성 (태블릿 최적화 적용)
+  const isMobile = isMobileOrTablet();
+  const bufferScale = isMobile ? 0.4 : 0.5;
   lensBuffer = createGraphics(
-    Math.ceil(windowWidth / 2),
-    Math.ceil(windowHeight / 2)
+    Math.ceil(windowWidth * bufferScale),
+    Math.ceil(windowHeight * bufferScale)
   );
   lensBuffer.pixelDensity(1);
 

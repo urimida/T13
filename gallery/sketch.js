@@ -85,7 +85,7 @@ let arcTargetIndex = 0; // 목표 버블 인덱스 (스냅용)
 let arcCurrentIndex = 0; // 현재 버블 인덱스 (애니메이션용)
 
 // 성능 최적화 설정
-const MAX_DRAW = 140; // 그릴 최대 버블 수 (LOD)
+let MAX_DRAW = 140; // 그릴 최대 버블 수 (LOD) - 태블릿에서는 동적으로 조정됨
 const SPRITE_STEP = 6; // 반지름 버킷 간격(px) - 스프라이트 캐시용
 
 // 전역 변수 (성능 최적화)
@@ -1421,12 +1421,30 @@ function preload() {
   // setup()에서 화면에 보이는 버블 확인 후 로드
 }
 
+// 태블릿/모바일 감지 및 성능 최적화
+function isMobileOrTablet() {
+  const ua = navigator.userAgent.toLowerCase();
+  const isMobile =
+    /android|webos|iphone|ipod|blackberry|iemobile|opera mini/i.test(ua);
+  const isTablet = /ipad|android(?!.*mobile)|tablet/i.test(ua);
+  const isTouchDevice =
+    "ontouchstart" in window || navigator.maxTouchPoints > 0;
+  const isSmallScreen = window.innerWidth < 1024 || window.innerHeight < 768;
+  return isMobile || isTablet || (isTouchDevice && isSmallScreen);
+}
+
 function setup() {
-  // Windows/데스크톱에서만 pixelDensity(1) 설정 (iPad는 제외)
-  if (!/iPad|iPhone|Macintosh/.test(navigator.userAgent)) {
-    pixelDensity(1); // 윈도우/데스크탑에서 좌표/크기 싱크 맞춤
+  // 태블릿/모바일 최적화
+  const isMobile = isMobileOrTablet();
+  pixelDensity(1); // 모든 기기에서 pixelDensity 1로 통일 (성능 최적화)
+
+  if (isMobile) {
+    frameRate(30); // 태블릿/모바일에서는 30fps로 제한
+    MAX_DRAW = 80; // 태블릿에서는 렌더링 버블 수 감소
+  } else {
+    frameRate(45); // 데스크톱에서는 45fps
+    MAX_DRAW = 140; // 데스크톱에서는 기본값
   }
-  frameRate(45); // 60→45로 캡(시각적 차이는 적고 연산 25%↓)
   createCanvas(windowWidth, windowHeight);
 
   rebuildWorldMetrics(); // 월드 메트릭스 초기화
