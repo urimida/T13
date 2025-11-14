@@ -6,8 +6,9 @@
    3) 스와이프로 배경 이동 탐색
    ========================================================= */
 
-let bubbles = []; // 모든 버블들
-let searchIcon; // 돋보기 아이콘 이미지
+// 전역 변수들 (리소스)
+let searchIcon; // 돋보기 아이콘 이미지 (레거시, 사용 안 함)
+let mikeIcon; // 마이크 아이콘 이미지
 let captureButton; // 캡쳐 버튼 이미지
 let workroomButton; // 워크룸 버튼 이미지
 let navigationBar; // 네비게이션 바 이미지
@@ -21,11 +22,6 @@ let imageLoaded = new Set(); // 로드 완료된 이미지 인덱스
 let bubbleData = []; // 버블 제목/태그 데이터
 let imageFiles = []; // 이미지 파일명 목록 (전역으로 이동)
 let pretendardFont; // Pretendard 폰트
-let showModal = false; // 모달 표시 여부
-let showToggles = false; // 토글 표시 여부
-let selectedToggles = []; // 선택된 토글들 (1~5)
-let previousSelectedToggles = []; // 이전에 선택된 토글들 (카테고리 변경 시 비교용)
-let alignAfterPopStartTime = null; // 팡 터짐 후 정렬 시작 시간
 
 // ---------- CONFIG ----------
 const BG_COLOR = "#1a1b1f";
@@ -66,29 +62,305 @@ const SPRITE_STEP = 6; // 반지름 버킷 간격(px) - 스프라이트 캐시�
 // 전역 변수 (성능 최적화)
 let WORLD_W, WORLD_H; // 월드 크기 (재사용)
 let bgBuffer; // 배경 버퍼
-let animating = true; // 애니메이션 상태
 const SPRITES = new Map(); // 스프라이트 캐시 (key: "bucket|hue", val: {g, size})
 
 // UI sizes
 const NAV_H = 64;
 const SEARCH_W_RATIO = 0.56;
 
-// ---------- STATE for panning ----------
-let offsetX = 0; // X 오프셋 (스와이프로 이동)
-let offsetY = 0; // Y 오프셋
-let isDragging = false; // 드래그 중인지
-let dragStartX = 0; // 드래그 시작 X
-let dragStartY = 0; // 드래그 시작 Y
-let dragOffsetX = 0; // 드래그 시작 시 오프셋 X
-let dragOffsetY = 0; // 드래그 시작 시 오프셋 Y
-let panVelocityX = 0; // X 방향 이동 속도 (관성)
-let panVelocityY = 0; // Y 방향 이동 속도 (관성)
-let snapTargetX = null; // 스냅 타겟 X 오프셋
-let snapTargetY = null; // 스냅 타겟 Y 오프셋
-let snapCompleted = false; // 스냅이 완료되었는지 여부
 const SNAP_SPEED = 0.15; // 스냅 애니메이션 속도 (낮을수록 느림)
 
 // ---------- CLASSES ----------
+// 애니메이션 컨트롤러
+class AnimationController {
+  constructor() {
+    this.animating = true;
+  }
+
+  start() {
+    if (!this.animating) {
+      this.animating = true;
+      loop();
+    }
+  }
+
+  stop() {
+    if (this.animating) {
+      this.animating = false;
+      noLoop();
+    }
+  }
+}
+
+// 패닝 컨트롤러
+class PanController {
+  constructor() {
+    this.offsetX = 0;
+    this.offsetY = 0;
+    this.isDragging = false;
+    this.dragStartX = 0;
+    this.dragStartY = 0;
+    this.dragOffsetX = 0;
+    this.dragOffsetY = 0;
+    this.panVelocityX = 0;
+    this.panVelocityY = 0;
+    this.snapTargetX = null;
+    this.snapTargetY = null;
+    this.snapCompleted = false;
+  }
+
+  startDrag(x, y) {
+    this.isDragging = true;
+    this.dragStartX = x;
+    this.dragStartY = y;
+    this.dragOffsetX = this.offsetX;
+    this.dragOffsetY = this.offsetY;
+    this.panVelocityX = 0;
+    this.panVelocityY = 0;
+    this.snapTargetX = null;
+    this.snapTargetY = null;
+    this.snapCompleted = false;
+  }
+
+  updateDrag(x, y) {
+    if (!this.isDragging) return;
+    const deltaX = x - this.dragStartX;
+    const deltaY = y - this.dragStartY;
+    this.offsetX = this.dragOffsetX + deltaX * PAN_SENSITIVITY;
+    this.offsetY = this.dragOffsetY + deltaY * PAN_SENSITIVITY;
+    this.panVelocityX = deltaX * 0.05 * PAN_SENSITIVITY;
+    this.panVelocityY = deltaY * 0.05 * PAN_SENSITIVITY;
+  }
+
+  endDrag() {
+    this.isDragging = false;
+  }
+
+  update() {
+    if (!this.isDragging) {
+      if (this.snapTargetX !== null && this.snapTargetY !== null) {
+        const dx = this.snapTargetX - this.offsetX;
+        const dy = this.snapTargetY - this.offsetY;
+        const dist = sqrt(dx * dx + dy * dy);
+
+        if (dist < 0.1) {
+          this.offsetX = this.snapTargetX;
+          this.offsetY = this.snapTargetY;
+          this.snapTargetX = null;
+          this.snapTargetY = null;
+          this.panVelocityX = 0;
+          this.panVelocityY = 0;
+          this.snapCompleted = true;
+        } else {
+          const dynamicSpeed = min(SNAP_SPEED * (1 + dist / 1000), 0.25);
+          this.offsetX = lerp(this.offsetX, this.snapTargetX, dynamicSpeed);
+          this.offsetY = lerp(this.offsetY, this.snapTargetY, dynamicSpeed);
+          this.panVelocityX = 0;
+          this.panVelocityY = 0;
+        }
+      } else {
+        this.panVelocityX *= 0.95;
+        this.panVelocityY *= 0.95;
+        this.offsetX += this.panVelocityX;
+        this.offsetY += this.panVelocityY;
+      }
+    }
+  }
+}
+
+// UI 상태 관리자
+class UIStateManager {
+  constructor() {
+    this.showModal = false;
+    this.showToggles = false;
+    this.selectedToggles = [];
+    this.previousSelectedToggles = [];
+  }
+
+  toggleModal() {
+    this.showModal = !this.showModal;
+    if (this.showModal) {
+      this.showToggles = false;
+    }
+  }
+
+  toggleToggles() {
+    this.showToggles = !this.showToggles;
+  }
+
+  selectToggle(index) {
+    if (index === 0) {
+      this.previousSelectedToggles = [...this.selectedToggles];
+      this.selectedToggles = [];
+    } else {
+      this.previousSelectedToggles = [...this.selectedToggles];
+      this.selectedToggles = [index];
+    }
+    this.showToggles = false;
+  }
+}
+
+// 언어 관리자
+class LanguageManager {
+  constructor() {
+    this.groupLanguages = {
+      1: {
+        // 여행자
+        visual: [
+          "깊이감",
+          "메탈릭 쉐이드",
+          "자연광 리플렉션",
+          "미드나잇 톤",
+          "풍경 반사감",
+        ],
+        emotional: [
+          "탐험",
+          "긴장과 기대",
+          "미지로 향함",
+          "고독한 낭만",
+          "체험의 몰입",
+        ],
+      },
+      2: {
+        // 20대 여성
+        visual: [
+          "핑크-옐로우 그라데이션",
+          "젤리 같은 텍스처",
+          "따뜻한 난색 반짝임",
+          "부드러운 곡면",
+          "글로시한 윤기",
+        ],
+        emotional: ["활력", "사랑스러움", "자기표현", "로맨틱", "설렘"],
+      },
+      3: {
+        // 50대 남성
+        visual: [
+          "고명도 대비",
+          "크고 안정된 구형",
+          "차분한 시원색",
+          "투명도 높은 반사광",
+          "균형 잡힌 색 분포",
+        ],
+        emotional: ["보호", "책임감", "신뢰", "안정", "성취"],
+      },
+      4: {
+        // 주부
+        visual: [
+          "소프트 톤",
+          "은은한 파스텔 옐로",
+          "투명한 안정감",
+          "부드러운 난반사",
+          "깨끗한 정결 이미지",
+        ],
+        emotional: ["온기", "안정", "배려", "평온", "따뜻한 일상"],
+      },
+      5: {
+        // 10대 여성
+        visual: [
+          "네온 핑크",
+          "사이버 파스텔",
+          "디지털 글로시",
+          "높은 채도",
+          "K-pop 컬러 팔레트",
+        ],
+        emotional: [
+          "흥미",
+          "자기취향 강도",
+          "아이코닉함",
+          "통통 튀는 귀여움",
+          "즉각적 몰입",
+        ],
+      },
+    };
+  }
+
+  assignLanguagesToBubbles(bubbleData) {
+    for (let i = 0; i < bubbleData.length; i++) {
+      const bubble = bubbleData[i];
+      if (!bubble.attributes || bubble.attributes.length === 0) {
+        bubble.visualTags = [];
+        bubble.emotionalTags = [];
+        continue;
+      }
+
+      const visualTags = [];
+      const emotionalTags = [];
+
+      bubble.attributes.forEach((attr) => {
+        const lang = this.groupLanguages[attr];
+        if (lang) {
+          const visualCount = Math.floor(Math.random() * 2) + 2;
+          const selectedVisual = [];
+          const visualCopy = [...lang.visual];
+          for (let j = 0; j < visualCount && visualCopy.length > 0; j++) {
+            const idx = Math.floor(Math.random() * visualCopy.length);
+            selectedVisual.push(visualCopy[idx]);
+            visualCopy.splice(idx, 1);
+          }
+          visualTags.push(...selectedVisual);
+
+          const emotionalCount = Math.floor(Math.random() * 2) + 2;
+          const selectedEmotional = [];
+          const emotionalCopy = [...lang.emotional];
+          for (let j = 0; j < emotionalCount && emotionalCopy.length > 0; j++) {
+            const idx = Math.floor(Math.random() * emotionalCopy.length);
+            selectedEmotional.push(emotionalCopy[idx]);
+            emotionalCopy.splice(idx, 1);
+          }
+          emotionalTags.push(...selectedEmotional);
+        }
+      });
+
+      bubble.visualTags = [...new Set(visualTags)];
+      bubble.emotionalTags = [...new Set(emotionalTags)];
+    }
+  }
+}
+
+// 버블 매니저
+class BubbleManager {
+  constructor() {
+    this.bubbles = [];
+    this.currentFilteredBubbles = [];
+    this.alignAfterPopStartTime = null;
+  }
+
+  build() {
+    this.bubbles = [];
+    const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
+    let count = 0;
+    const maxImageIndex = Math.min(bubbleImages.length, TOTAL_BUBBLES);
+
+    for (let y = 0; y < gridSize && count < TOTAL_BUBBLES; y++) {
+      for (let x = 0; x < gridSize && count < TOTAL_BUBBLES; x++) {
+        const hueSeed = count + 1;
+        const imageIndex = count < maxImageIndex ? count : null;
+        this.bubbles.push(new Bubble(x, y, hueSeed, imageIndex));
+        count++;
+      }
+    }
+  }
+
+  getFilteredBubbles(selectedToggles) {
+    if (selectedToggles.length === 0) {
+      return this.bubbles;
+    }
+    return this.bubbles.filter((b) => {
+      return (
+        b.attributes &&
+        b.attributes.some((attr) => selectedToggles.includes(attr))
+      );
+    });
+  }
+}
+
+// 전역 인스턴스 생성
+let animationController;
+let panController;
+let uiStateManager;
+let languageManager;
+let bubbleManager;
+
 class FrameCircle {
   constructor(index, cx, cy, r) {
     this.index = index; // 1~8 느낌으로 인덱싱
@@ -125,12 +397,20 @@ class Bubble {
     // 버블 설명 정보
     if (imageIndex !== null && bubbleData[imageIndex]) {
       this.name = bubbleData[imageIndex].title;
-      this.tags = bubbleData[imageIndex].tags;
+      this.visualTags = bubbleData[imageIndex].visualTags || [];
+      this.emotionalTags = bubbleData[imageIndex].emotionalTags || [];
       this.attributes = bubbleData[imageIndex].attributes || []; // 속성 추가
+      // 하위 호환성을 위해 tags도 유지
+      this.tags = [
+        ...(bubbleData[imageIndex].visualTags || []),
+        ...(bubbleData[imageIndex].emotionalTags || []),
+      ];
     } else {
       this.name = `버블 ${
         gridX + gridY * Math.ceil(Math.sqrt(TOTAL_BUBBLES)) + 1
       }`;
+      this.visualTags = [];
+      this.emotionalTags = [];
       this.tags = ["#버블", "#색상", "#기본"];
       this.attributes = []; // 기본 속성 없음
     }
@@ -391,6 +671,9 @@ function bubbleColor(seed) {
 function loadVisibleBubbleImages() {
   const LOAD_MARGIN = 200; // 화면 밖 200px까지 미리 로드
 
+  const bubbles = bubbleManager ? bubbleManager.bubbles : [];
+  if (bubbles.length === 0) return;
+
   for (const b of bubbles) {
     // alpha가 너무 작으면 스킵
     if (b.alpha < 0.01) continue;
@@ -617,18 +900,16 @@ function redrawBackgroundBuffer() {
   }
 }
 
-// 애니메이션 시작/정지 함수
+// 애니메이션 시작/정지 함수 (하위 호환성)
 function startAnim() {
-  if (!animating) {
-    animating = true;
-    loop();
+  if (animationController) {
+    animationController.start();
   }
 }
 
 function stopAnim() {
-  if (animating) {
-    animating = false;
-    noLoop();
+  if (animationController) {
+    animationController.stop();
   }
 }
 
@@ -911,22 +1192,155 @@ function drawBubbleInfo(bubble, centerX, centerY) {
   text(bubble.name, bubble.pos.x + 0.5, titleY);
   text(bubble.name, bubble.pos.x, titleY + 0.5);
 
-  // 태그 (아래쪽)
-  if (bubble.tags && bubble.tags.length > 0) {
-    fill(255, 255, 255, 180); // 0.7 * 255 ≈ 180
+  // 태그 (아래쪽) - 시각적 언어와 감정적 언어 분리 표시
+  const tagsY = infoY + 55;
+  let currentY = tagsY;
+
+  // 시각적 언어 표시 (흰색)
+  if (bubble.visualTags && bubble.visualTags.length > 0) {
+    fill(255, 255, 255, 180); // 흰색
     textSize(14);
     textStyle(NORMAL);
-    const tagsText = bubble.tags.slice(0, 3).join("  "); // 최대 3개 태그, 공백으로 구분
-    const tagsY = infoY + 55;
-    text(tagsText, bubble.pos.x, tagsY);
+    const visualText = bubble.visualTags.slice(0, 3).join("  "); // 최대 3개 태그
+    text(visualText, bubble.pos.x, currentY);
+    currentY += 20; // 다음 줄로
+  }
+
+  // 감정적 언어 표시 (노란색)
+  if (bubble.emotionalTags && bubble.emotionalTags.length > 0) {
+    fill(255, 255, 0, 220); // 노란색
+    textSize(14);
+    textStyle(NORMAL);
+    const emotionalText = bubble.emotionalTags.slice(0, 3).join("  "); // 최대 3개 태그
+    text(emotionalText, bubble.pos.x, currentY);
   }
   pop();
+}
+
+// ---------- 집단별 언어 데이터 ----------
+// 각 집단의 시각적 언어와 감정적 언어 정의
+const groupLanguages = {
+  1: {
+    // 여행자 (traveler)
+    visual: [
+      "깊이감",
+      "메탈릭 쉐이드",
+      "자연광 리플렉션",
+      "미드나잇 톤",
+      "풍경 반사감",
+    ],
+    emotional: [
+      "탐험",
+      "긴장과 기대",
+      "미지로 향함",
+      "고독한 낭만",
+      "체험의 몰입",
+    ],
+  },
+  2: {
+    // 20대 여성 (20s)
+    visual: [
+      "핑크-옐로우 그라데이션",
+      "젤리 같은 텍스처",
+      "따뜻한 난색 반짝임",
+      "부드러운 곡면",
+      "글로시한 윤기",
+    ],
+    emotional: ["활력", "사랑스러움", "자기표현", "로맨틱", "설렘"],
+  },
+  3: {
+    // 50대 남성 (50s)
+    visual: [
+      "고명도 대비",
+      "크고 안정된 구형",
+      "차분한 시원색",
+      "투명도 높은 반사광",
+      "균형 잡힌 색 분포",
+    ],
+    emotional: ["보호", "책임감", "신뢰", "안정", "성취"],
+  },
+  4: {
+    // 주부 (housewife)
+    visual: [
+      "소프트 톤",
+      "은은한 파스텔 옐로",
+      "투명한 안정감",
+      "부드러운 난반사",
+      "깨끗한 정결 이미지",
+    ],
+    emotional: ["온기", "안정", "배려", "평온", "따뜻한 일상"],
+  },
+  5: {
+    // 10대 여성 (10s)
+    visual: [
+      "네온 핑크",
+      "사이버 파스텔",
+      "디지털 글로시",
+      "높은 채도",
+      "K-pop 컬러 팔레트",
+    ],
+    emotional: [
+      "흥미",
+      "자기취향 강도",
+      "아이코닉함",
+      "통통 튀는 귀여움",
+      "즉각적 몰입",
+    ],
+  },
+};
+
+// 버블 데이터에 언어를 자동 할당하는 함수
+function assignLanguagesToBubbles() {
+  for (let i = 0; i < bubbleData.length; i++) {
+    const bubble = bubbleData[i];
+    if (!bubble.attributes || bubble.attributes.length === 0) {
+      bubble.visualTags = [];
+      bubble.emotionalTags = [];
+      continue;
+    }
+
+    const visualTags = [];
+    const emotionalTags = [];
+
+    // 각 속성에 대해 언어 선택 (랜덤하게 선택)
+    bubble.attributes.forEach((attr) => {
+      const lang = groupLanguages[attr];
+      if (lang) {
+        // 시각적 언어 2-3개 선택
+        const visualCount = Math.floor(Math.random() * 2) + 2; // 2-3개
+        const selectedVisual = [];
+        const visualCopy = [...lang.visual];
+        for (let j = 0; j < visualCount && visualCopy.length > 0; j++) {
+          const idx = Math.floor(Math.random() * visualCopy.length);
+          selectedVisual.push(visualCopy[idx]);
+          visualCopy.splice(idx, 1);
+        }
+        visualTags.push(...selectedVisual);
+
+        // 감정적 언어 2-3개 선택
+        const emotionalCount = Math.floor(Math.random() * 2) + 2; // 2-3개
+        const selectedEmotional = [];
+        const emotionalCopy = [...lang.emotional];
+        for (let j = 0; j < emotionalCount && emotionalCopy.length > 0; j++) {
+          const idx = Math.floor(Math.random() * emotionalCopy.length);
+          selectedEmotional.push(emotionalCopy[idx]);
+          emotionalCopy.splice(idx, 1);
+        }
+        emotionalTags.push(...selectedEmotional);
+      }
+    });
+
+    // 중복 제거
+    bubble.visualTags = [...new Set(visualTags)];
+    bubble.emotionalTags = [...new Set(emotionalTags)];
+  }
 }
 
 // ---------- p5 LIFECYCLE ----------
 function preload() {
   // preload() 내에서는 콜백 없이 직접 할당 (p5.js가 자동으로 동기 처리)
   searchIcon = loadImage("assets/public-imgs/lucide_search.svg");
+  mikeIcon = loadImage("assets/public-imgs/mike.png");
   captureButton = loadImage("assets/public-imgs/capture-button.png");
   workroomButton = loadImage("assets/public-imgs/workroom-button.png");
   navigationBar = loadImage("assets/public-imgs/navigation-bar.png");
@@ -1166,6 +1580,9 @@ function preload() {
     bubbleImages.push(null);
   }
 
+  // 버블 데이터에 언어 할당
+  assignLanguagesToBubbles();
+
   // 초기 화면에 보일 버블 이미지만 미리 로드 (성능 최적화)
   // setup()에서 화면에 보이는 버블 확인 후 로드
 }
@@ -1183,6 +1600,13 @@ function isMobileOrTablet() {
 }
 
 function setup() {
+  // 클래스 인스턴스 초기화
+  animationController = new AnimationController();
+  panController = new PanController();
+  uiStateManager = new UIStateManager();
+  languageManager = new LanguageManager();
+  bubbleManager = new BubbleManager();
+
   // 태블릿/모바일 최적화
   const isMobile = isMobileOrTablet();
   pixelDensity(1); // 모든 기기에서 pixelDensity 1로 통일 (성능 최적화)
@@ -1203,11 +1627,8 @@ function setup() {
   createSearchInput();
 
   // 자산 로딩 확인 및 에러 체크
-  if (
-    !searchIcon ||
-    (searchIcon.width !== undefined && searchIcon.width === 0)
-  ) {
-    console.error("searchIcon 로딩 실패");
+  if (!mikeIcon || (mikeIcon.width !== undefined && mikeIcon.width === 0)) {
+    console.error("mikeIcon 로딩 실패");
   }
   if (
     !captureButton ||
@@ -1262,78 +1683,135 @@ function setup() {
   // 초기 화면에 보이는 버블 이미지 로드
   loadVisibleBubbleImages();
 
-  // 모바일 스크롤 방지
-  document.addEventListener(
-    "touchmove",
-    function (e) {
-      e.preventDefault();
-    },
-    { passive: false }
-  );
-
-  document.addEventListener(
-    "touchstart",
-    function (e) {
-      if (e.touches.length > 1) {
-        e.preventDefault(); // 핀치 줌 방지
-      }
-    },
-    { passive: false }
-  );
-
-  // 포인터 이벤트 브릿지 설정 (Windows 터치스크린 지원)
+  // 포인터 이벤트 설정 (모든 입력 통합)
   setupPointerBridges();
 }
 
-// 포인터 이벤트 브릿지 함수 (Windows 터치스크린/펜 지원)
+// 포인터 이벤트 설정 (모든 입력 통합 처리)
 function setupPointerBridges() {
-  // 포인터 다운 → mousePressed 브릿지
-  window.addEventListener("pointerdown", (e) => {
-    if (e.pointerType !== "mouse") {
-      // 마우스가 아닌 포인터(터치/펜)만 처리
-      // p5의 mousePressed는 자동으로 호출되지만, 명시적으로 처리
-      if (typeof mousePressed === "function") {
-        // p5 전역 변수 업데이트 (필요한 경우)
-        // mouseX, mouseY는 이미 p5가 업데이트하므로 추가 작업 불필요
+  const activePointers = new Map(); // 활성 포인터 추적 (pointerId -> {x, y})
+
+  // 포인터 다운 이벤트
+  window.addEventListener(
+    "pointerdown",
+    (e) => {
+      // 캔버스 영역인지 확인
+      const canvas = document.querySelector("canvas");
+      if (!canvas || !canvas.contains(e.target)) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      activePointers.set(e.pointerId, { x, y });
+
+      const handled = handlePointerDown(x, y, e.pointerId);
+
+      // 터치나 펜인 경우 기본 동작 방지
+      if (e.pointerType !== "mouse" && handled) {
+        e.preventDefault();
       }
-    }
-  });
+    },
+    { passive: false }
+  );
 
-  // 포인터 이동 → mouseDragged 브릿지
-  window.addEventListener("pointermove", (e) => {
-    if (isDragging && e.pointerType !== "mouse") {
-      // p5의 mouseDragged는 자동으로 호출됨
-    }
-  });
+  // 포인터 이동 이벤트
+  window.addEventListener(
+    "pointermove",
+    (e) => {
+      if (!activePointers.has(e.pointerId)) return;
 
-  // 포인터 업 → mouseReleased 브릿지
-  window.addEventListener("pointerup", (e) => {
-    if (e.pointerType !== "mouse") {
-      // p5의 mouseReleased는 자동으로 호출됨
-    }
-  });
+      const canvas = document.querySelector("canvas");
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      activePointers.set(e.pointerId, { x, y });
+
+      handlePointerMove(x, y, e.pointerId);
+
+      // 드래그 중이면 기본 동작 방지
+      if (
+        panController &&
+        panController.isDragging &&
+        e.pointerType !== "mouse"
+      ) {
+        e.preventDefault();
+      }
+    },
+    { passive: false }
+  );
+
+  // 포인터 업 이벤트
+  window.addEventListener(
+    "pointerup",
+    (e) => {
+      if (!activePointers.has(e.pointerId)) return;
+
+      const canvas = document.querySelector("canvas");
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      handlePointerUp(x, y, e.pointerId);
+
+      activePointers.delete(e.pointerId);
+
+      // 터치나 펜인 경우 기본 동작 방지
+      if (e.pointerType !== "mouse") {
+        e.preventDefault();
+      }
+    },
+    { passive: false }
+  );
+
+  // 포인터 취소 이벤트 (예: 다중 터치로 인한 취소)
+  window.addEventListener(
+    "pointercancel",
+    (e) => {
+      if (!activePointers.has(e.pointerId)) return;
+
+      const canvas = document.querySelector("canvas");
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      // 포인터 업과 동일하게 처리
+      handlePointerUp(x, y, e.pointerId);
+
+      activePointers.delete(e.pointerId);
+
+      if (e.pointerType !== "mouse") {
+        e.preventDefault();
+      }
+    },
+    { passive: false }
+  );
 }
 
 function createSearchInput() {
   const responsiveScale = getResponsiveScale();
   const { W, H, X, Y } = getSearchMetrics();
 
-  // 아이콘 영역을 제외한 텍스트 입력 영역 - 30% 증가
-  const iconSize = 24 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3;
-  const iconX = X + 24 * SEARCH_SCALE * responsiveScale * 1.3;
-  const textStartX =
-    iconX + iconSize + 16 * SEARCH_SCALE * responsiveScale * 1.3;
-  const textWidth =
-    W - (textStartX - X) - 24 * SEARCH_SCALE * responsiveScale * 1.3;
+  // 마이크 아이콘과 텍스트를 고려한 입력 영역 설정
+  // 입력 필드는 투명하게 하여 클릭 이벤트만 처리
+  const iconSize = 40 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3;
+  const textY = Y + H / 2 + 20; // 텍스트 위치
 
   searchInput = createInput("");
   searchInput.attribute("placeholder", "");
-  searchInput.position(textStartX, Y);
-  searchInput.size(textWidth, H);
+  searchInput.position(X, Y);
+  searchInput.size(W, H);
   searchInput.style("background", "transparent");
   searchInput.style("border", "none");
   searchInput.style("outline", "none");
-  searchInput.style("color", "rgba(255,255,255,0.8)");
+  searchInput.style("color", "transparent"); // 텍스트는 보이지 않게 (p5에서 직접 그리므로)
   searchInput.style(
     "font-size",
     `${16 * SEARCH_SCALE * responsiveScale * 1.2 * 1.5 * 1.3}px`
@@ -1360,57 +1838,51 @@ function draw() {
     background(BG_COLOR);
   }
 
-  // 패닝 애니메이션 업데이트 (관성 및 스냅)
-  if (!isDragging) {
-    // 스냅 타겟이 있으면 부드럽게 스냅
-    if (snapTargetX !== null && snapTargetY !== null) {
-      const dx = snapTargetX - offsetX;
-      const dy = snapTargetY - offsetY;
-      const dist = sqrt(dx * dx + dy * dy);
+  // 패닝 애니메이션 업데이트 (클래스 사용)
+  if (panController) {
+    panController.update();
 
-      // 목표 위치에 충분히 가까우면 스냅 완료
-      if (dist < 0.1) {
-        offsetX = snapTargetX;
-        offsetY = snapTargetY;
-        snapTargetX = null;
-        snapTargetY = null;
-        panVelocityX = 0;
-        panVelocityY = 0;
-        snapCompleted = true; // 스냅 완료 표시
-        // 중앙 버블이 있으면 빛 효과를 위해 애니메이션 계속 실행
-        // stopAnim()은 나중에 중앙 버블 확인 후 호출
-      } else {
-        // 부드럽게 타겟으로 이동 (거리에 따라 속도 조정)
-        const dx = snapTargetX - offsetX;
-        const dy = snapTargetY - offsetY;
-        const dist = sqrt(dx * dx + dy * dy);
-
-        // 거리가 멀수록 더 빠르게, 가까울수록 더 느리게 (자연스러운 감속)
-        const dynamicSpeed = min(SNAP_SPEED * (1 + dist / 1000), 0.25);
-
-        offsetX = lerp(offsetX, snapTargetX, dynamicSpeed);
-        offsetY = lerp(offsetY, snapTargetY, dynamicSpeed);
-        panVelocityX = 0; // 스냅 중에는 관성 무시
-        panVelocityY = 0;
-      }
-    } else {
-      // 관성 이동
-      panVelocityX *= 0.95; // 감쇠
-      panVelocityY *= 0.95;
-      offsetX += panVelocityX;
-      offsetY += panVelocityY;
-
-      // 속도가 매우 작아지면 스냅 시작 (한 번만)
-      if (abs(panVelocityX) < 0.1 && abs(panVelocityY) < 0.1) {
-        panVelocityX = 0;
-        panVelocityY = 0;
-        // 스냅 타겟이 없고, 아직 스냅이 완료되지 않았을 때만 스냅 시작
-        if (snapTargetX === null && snapTargetY === null && !snapCompleted) {
-          snapToCenterBubble();
-        }
+    // 속도가 매우 작아지면 스냅 시작 (한 번만)
+    if (
+      !panController.isDragging &&
+      abs(panController.panVelocityX) < 0.1 &&
+      abs(panController.panVelocityY) < 0.1
+    ) {
+      panController.panVelocityX = 0;
+      panController.panVelocityY = 0;
+      // 스냅 타겟이 없고, 아직 스냅이 완료되지 않았을 때만 스냅 시작
+      if (
+        panController.snapTargetX === null &&
+        panController.snapTargetY === null &&
+        !panController.snapCompleted
+      ) {
+        snapToCenterBubble();
       }
     }
   }
+
+  // 하위 호환성을 위한 별칭 (기존 코드와의 호환성 유지)
+  const offsetX = panController ? panController.offsetX : 0;
+  const offsetY = panController ? panController.offsetY : 0;
+  const isDragging = panController ? panController.isDragging : false;
+  const snapTargetX = panController ? panController.snapTargetX : null;
+  const snapTargetY = panController ? panController.snapTargetY : null;
+  const snapCompleted = panController ? panController.snapCompleted : false;
+  const panVelocityX = panController ? panController.panVelocityX : 0;
+  const panVelocityY = panController ? panController.panVelocityY : 0;
+  const bubbles = bubbleManager ? bubbleManager.bubbles : [];
+  const showModal = uiStateManager ? uiStateManager.showModal : false;
+  let showToggles = uiStateManager ? uiStateManager.showToggles : false;
+  const selectedToggles = uiStateManager ? uiStateManager.selectedToggles : [];
+  const previousSelectedToggles = uiStateManager
+    ? uiStateManager.previousSelectedToggles
+    : [];
+  const alignAfterPopStartTime = bubbleManager
+    ? bubbleManager.alignAfterPopStartTime
+    : null;
+  const currentFilteredBubbles = bubbleManager
+    ? bubbleManager.currentFilteredBubbles
+    : [];
 
   // 중심 위치 계산 (검색창 아래 영역의 중앙)
   const { H: SEARCH_H, bottom: SEARCH_BOTTOM } = getSearchMetrics();
@@ -1473,7 +1945,9 @@ function draw() {
       }
     });
     // 필터링되지 않았으므로 모든 버블 사용
-    currentFilteredBubbles = bubbles;
+    if (bubbleManager) {
+      bubbleManager.currentFilteredBubbles = bubbles;
+    }
   }
 
   // 팡 터지는 애니메이션 업데이트
@@ -1680,6 +2154,7 @@ function draw() {
   } else {
     // 중앙 버블이 없고 모든 움직임이 멈췄으면 애니메이션 정지
     // 단, 모달이 열려있으면 애니메이션 계속 실행
+    const showModal = uiStateManager ? uiStateManager.showModal : false;
     if (
       snapTargetX === null &&
       snapTargetY === null &&
@@ -1746,18 +2221,12 @@ function windowResized() {
   if (searchInput) {
     const responsiveScale = getResponsiveScale();
     const { W, H, X, Y } = getSearchMetrics();
-    const iconSize = 24 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3;
-    const iconX = X + 24 * SEARCH_SCALE * responsiveScale * 1.3;
-    const textStartX =
-      iconX + iconSize + 16 * SEARCH_SCALE * responsiveScale * 1.3;
-    const textWidth =
-      W - (textStartX - X) - 24 * SEARCH_SCALE * responsiveScale * 1.3;
 
-    searchInput.position(textStartX, Y);
-    searchInput.size(textWidth, H);
+    searchInput.position(X, Y);
+    searchInput.size(W, H);
     searchInput.style(
       "font-size",
-      `${16 * SEARCH_SCALE * responsiveScale * 1.2 * 1.5}px`
+      `${16 * SEARCH_SCALE * responsiveScale * 1.2 * 1.5 * 1.3}px`
     );
     searchInput.style("text-align", "center"); // 텍스트 중앙 정렬
     searchInput.style("line-height", `${H}px`); // 세로 중앙 정렬을 위한 line-height
@@ -1799,9 +2268,6 @@ function getSearchMetrics() {
 }
 
 // 중앙 버블을 화면 중앙에 고정하는 함수 (타겟만 설정)
-// filteredBubbles를 전역에서 접근할 수 있도록 변수로 저장
-let currentFilteredBubbles = [];
-
 function snapToCenterBubble() {
   // 중심 위치 계산
   const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
@@ -1814,6 +2280,12 @@ function snapToCenterBubble() {
   const centerY = BUBBLE_AREA_CENTER - 70; // 검색창 아래 영역의 중앙에서 70픽셀 위 (더 위로)
 
   // 필터링된 버블만 사용 (없으면 모든 버블 사용)
+  const currentFilteredBubbles = bubbleManager
+    ? bubbleManager.currentFilteredBubbles
+    : [];
+  const bubbles = bubbleManager ? bubbleManager.bubbles : [];
+  const offsetX = panController ? panController.offsetX : 0;
+  const offsetY = panController ? panController.offsetY : 0;
   const bubblesToUse =
     currentFilteredBubbles.length > 0 ? currentFilteredBubbles : bubbles;
 
@@ -1896,8 +2368,10 @@ function snapToCenterBubble() {
     }
 
     // 타겟 오프셋 설정 (부드럽게 이동하도록)
-    snapTargetX = targetOffsetX;
-    snapTargetY = targetOffsetY;
+    if (panController) {
+      panController.snapTargetX = targetOffsetX;
+      panController.snapTargetY = targetOffsetY;
+    }
 
     // 애니메이션 시작
     startAnim();
@@ -2051,39 +2525,30 @@ function computeSafeBubbleRadii() {
 }
 
 function buildBubbles() {
-  bubbles = [];
+  if (bubbleManager) {
+    bubbleManager.build();
 
-  // 35개 버블 생성 (헥사곤 그리드 패턴)
-  const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES)); // 대략 6x6 그리드
-  let count = 0;
-  const maxImageIndex = Math.min(bubbleImages.length, TOTAL_BUBBLES);
+    // 초기 오프셋을 중앙 버블이 화면 중앙에 오도록 설정
+    const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
+    const centerGridX = Math.floor(gridSize / 2);
+    const centerGridY = Math.floor(gridSize / 2);
+    const centerHexX = centerGridX * HEX_SPACING * 1.5;
+    const centerHexY =
+      centerGridY * HEX_SPACING * sqrt(3) +
+      ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
 
-  for (let y = 0; y < gridSize && count < TOTAL_BUBBLES; y++) {
-    for (let x = 0; x < gridSize && count < TOTAL_BUBBLES; x++) {
-      const hueSeed = count + 1;
-      // 이미지가 있으면 이미지 인덱스 사용, 없으면 null (색상 사용)
-      const imageIndex = count < maxImageIndex ? count : null;
-      bubbles.push(new Bubble(x, y, hueSeed, imageIndex));
-      count++;
+    if (panController) {
+      panController.offsetX = width * CENTER_X_RATIO - centerHexX;
+      panController.offsetY = height * CENTER_Y_RATIO - centerHexY;
     }
   }
-
-  // 초기 오프셋을 중앙 버블이 화면 중앙에 오도록 설정
-  const centerGridX = Math.floor(gridSize / 2);
-  const centerGridY = Math.floor(gridSize / 2);
-  const centerHexX = centerGridX * HEX_SPACING * 1.5;
-  const centerHexY =
-    centerGridY * HEX_SPACING * sqrt(3) +
-    ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
-
-  offsetX = width * CENTER_X_RATIO - centerHexX;
-  offsetY = height * CENTER_Y_RATIO - centerHexY;
 }
 
-// ---------- PANNING (스와이프) ----------
-function mousePressed() {
+// ---------- POINTER EVENTS (통합 입력 처리) ----------
+// 포인터 이벤트 핸들러 (마우스, 터치, 펜 모두 지원)
+function handlePointerDown(x, y, pointerId) {
   // 검색창 클릭 확인 (드래그 방지 전에 확인)
-  const isSearchBarClick = checkSearchBarClick(mouseX, mouseY);
+  const isSearchBarClick = checkSearchBarClick(x, y);
 
   // 검색창이 아닌 곳을 클릭하면 input 비활성화하여 드래그 확보
   if (!isSearchBarClick && searchInput) {
@@ -2091,77 +2556,71 @@ function mousePressed() {
   }
 
   // 네비게이션 바 클릭 확인
-  if (navigationBar && checkNavBarClick(mouseX, mouseY)) {
-    showModal = true;
-    showToggles = false; // 모달 열릴 때 토글 닫기
+  if (navigationBar && checkNavBarClick(x, y)) {
+    if (uiStateManager) {
+      uiStateManager.showModal = true;
+      uiStateManager.showToggles = false;
+    }
     startAnim(); // 모달 애니메이션을 위해 애니메이션 시작
-    return;
+    return true; // 이벤트 처리됨
   }
 
   // 모달이 열려있으면 닫기
-  if (showModal) {
-    showModal = false;
-    return;
+  if (uiStateManager && uiStateManager.showModal) {
+    uiStateManager.showModal = false;
+    return true; // 이벤트 처리됨
   }
 
   // 토글이 열려있으면 토글 클릭 확인
-  if (showToggles) {
-    const clickedToggle = checkToggleClick(mouseX, mouseY);
+  if (uiStateManager && uiStateManager.showToggles) {
+    const clickedToggle = checkToggleClick(x, y);
     if (clickedToggle !== null) {
       // 토글 클릭 시 바로 적용
       toggleSelect(clickedToggle);
-      return;
+      return true; // 이벤트 처리됨
     }
     // 토글 외부 클릭 시 닫기
     if (!isSearchBarClick) {
-      showToggles = false;
+      uiStateManager.showToggles = false;
     }
   }
 
   // 검색창 클릭 확인
   if (isSearchBarClick) {
     // 검색창 클릭 시 항상 전체보기로 전환하고 토글 열기
-    if (selectedToggles.length > 0) {
+    if (uiStateManager && uiStateManager.selectedToggles.length > 0) {
       toggleSelect(0); // 전체보기로 전환
     }
-    showToggles = true; // 토글 항상 열기
+    if (uiStateManager) {
+      uiStateManager.showToggles = true; // 토글 항상 열기
+    }
     startAnim();
-    return;
+    return true; // 이벤트 처리됨
   }
 
   startAnim(); // 애니메이션 시작
-  isDragging = true;
-  dragStartX = mouseX;
-  dragStartY = mouseY;
-  dragOffsetX = offsetX;
-  dragOffsetY = offsetY;
-  panVelocityX = 0;
-  panVelocityY = 0;
-  // 드래그 시작 시 스냅 타겟 취소 및 스냅 완료 플래그 리셋
-  snapTargetX = null;
-  snapTargetY = null;
-  snapCompleted = false;
+
+  // 패닝 컨트롤러 사용
+  if (panController) {
+    panController.startDrag(x, y);
+  }
+
+  return false; // 드래그 시작, 기본 동작 허용
 }
 
-function mouseDragged() {
-  if (!isDragging) return;
+function handlePointerMove(x, y, pointerId) {
+  if (!panController || !panController.isDragging) return;
   startAnim(); // 애니메이션 시작
 
-  const deltaX = mouseX - dragStartX;
-  const deltaY = mouseY - dragStartY;
-
-  // 오프셋 업데이트 (감도 적용)
-  offsetX = dragOffsetX + deltaX * PAN_SENSITIVITY;
-  offsetY = dragOffsetY + deltaY * PAN_SENSITIVITY;
-
-  // 속도 계산 (관성용) - 감도 적용
-  panVelocityX = deltaX * 0.05 * PAN_SENSITIVITY;
-  panVelocityY = deltaY * 0.05 * PAN_SENSITIVITY;
+  // 패닝 컨트롤러 사용
+  panController.updateDrag(x, y);
 }
 
-function mouseReleased() {
-  if (!isDragging) return;
-  isDragging = false;
+function handlePointerUp(x, y, pointerId) {
+  if (!panController || !panController.isDragging) return;
+
+  // 패닝 컨트롤러 사용
+  panController.endDrag();
 
   // input 다시 활성화
   if (searchInput) {
@@ -2173,97 +2632,6 @@ function mouseReleased() {
   snapToCenterBubble();
 
   // 관성은 draw()에서 처리됨
-}
-
-// ---------- TOUCH EVENTS (모바일 지원) ----------
-function touchStarted() {
-  if (touches.length > 0) {
-    const touch = touches[0];
-
-    // 네비게이션 바 클릭 확인
-    if (navigationBar && checkNavBarClick(touch.x, touch.y)) {
-      showModal = true;
-      showToggles = false; // 모달 열릴 때 토글 닫기
-      startAnim(); // 모달 애니메이션을 위해 애니메이션 시작
-      return false;
-    }
-
-    // 모달이 열려있으면 닫기
-    if (showModal) {
-      showModal = false;
-      return false;
-    }
-
-    // 토글이 열려있으면 토글 클릭 확인
-    if (showToggles) {
-      const clickedToggle = checkToggleClick(touch.x, touch.y);
-      if (clickedToggle !== null) {
-        // 토글 클릭 시 바로 적용
-        toggleSelect(clickedToggle);
-        return false;
-      }
-      // 토글 외부 클릭 시 닫기
-      if (!checkSearchBarClick(touch.x, touch.y)) {
-        showToggles = false;
-      }
-    }
-
-    // 검색창 클릭 확인
-    if (checkSearchBarClick(touch.x, touch.y)) {
-      // 검색창 클릭 시 항상 전체보기로 전환하고 토글 열기
-      if (selectedToggles.length > 0) {
-        toggleSelect(0); // 전체보기로 전환
-      }
-      showToggles = true; // 토글 항상 열기
-      startAnim();
-      return false;
-    }
-
-    startAnim(); // 애니메이션 시작
-    isDragging = true;
-    dragStartX = touch.x;
-    dragStartY = touch.y;
-    dragOffsetX = offsetX;
-    dragOffsetY = offsetY;
-    panVelocityX = 0;
-    panVelocityY = 0;
-    // 드래그 시작 시 스냅 타겟 취소 및 스냅 완료 플래그 리셋
-    snapTargetX = null;
-    snapTargetY = null;
-    snapCompleted = false;
-    return false; // 기본 동작 방지
-  }
-  return false;
-}
-
-function touchMoved() {
-  if (!isDragging || touches.length === 0) return false;
-  startAnim(); // 애니메이션 시작
-  const touch = touches[0];
-
-  const deltaX = touch.x - dragStartX;
-  const deltaY = touch.y - dragStartY;
-
-  // 오프셋 업데이트 (감도 적용)
-  offsetX = dragOffsetX + deltaX * PAN_SENSITIVITY;
-  offsetY = dragOffsetY + deltaY * PAN_SENSITIVITY;
-
-  // 속도 계산 (관성용) - 감도 적용
-  panVelocityX = deltaX * 0.05 * PAN_SENSITIVITY;
-  panVelocityY = deltaY * 0.05 * PAN_SENSITIVITY;
-
-  return false; // 기본 동작 방지
-}
-
-function touchEnded() {
-  if (!isDragging) return false;
-  isDragging = false;
-
-  // 드래그가 끝난 직후 바로 중앙 버블로 스냅
-  // 관성이 시작되기 전에 스냅하여 버블이 흐르지 않도록 함
-  snapToCenterBubble();
-
-  return false; // 기본 동작 방지
 }
 
 // ---------- UI helpers ----------
@@ -2308,23 +2676,41 @@ function drawNavBar() {
   pop();
 }
 
-// 네비게이션 바 클릭 확인
+// 네비게이션 바 클릭 확인 (실제 네비게이션 바 이미지 영역만)
 function checkNavBarClick(x, y) {
-  if (!navigationBar) return false;
+  if (!captureButton || !workroomButton || !navigationBar) return false;
 
-  // 반응형 스케일 계산 (헬퍼 함수 사용)
+  // 반응형 스케일 계산 (헬퍼 함수 사용) - drawNavBar와 동일한 계산
   const responsiveScale = getResponsiveScale();
 
-  const BUTTON_W = captureButton
-    ? captureButton.width * 0.8 * responsiveScale
-    : 0;
+  // 버튼 크기 (drawNavBar와 동일)
+  const BUTTON_W = captureButton.width * 0.8 * responsiveScale;
+  const BUTTON_H = captureButton.height * 0.8 * responsiveScale;
+
+  // 네비게이션 바 크기 (drawNavBar와 정확히 동일)
   const NAV_W = navigationBar.width * 0.65 * responsiveScale;
   const NAV_H = navigationBar.height * 0.65 * responsiveScale;
   const Y = 20;
   const navBarX = (width - NAV_W) / 2;
 
-  // 네비게이션 바 영역 확인
-  return x >= navBarX && x <= navBarX + NAV_W && y >= Y && y <= Y + NAV_H;
+  // 네비게이션 바 이미지 영역만 클릭 가능하도록 제한
+  // 버튼 영역은 제외하고 네비게이션 바 이미지가 실제로 그려지는 영역만 확인
+  // 위아래로 50%만 인식 (중앙 50% 영역)
+  const NAV_H_50 = NAV_H * 0.5; // 높이의 50%
+  const NAV_Y_CENTER = Y + NAV_H * 0.25; // 상단 25% 지점부터 시작
+  const NAV_Y_BOTTOM = NAV_Y_CENTER + NAV_H_50; // 상단 25% + 50% = 75% 지점까지
+
+  const isInNavBarArea =
+    x >= navBarX &&
+    x <= navBarX + NAV_W &&
+    y >= NAV_Y_CENTER &&
+    y <= NAV_Y_BOTTOM;
+  const isInLeftButton = x >= 0 && x <= BUTTON_W && y >= Y && y <= Y + BUTTON_H;
+  const isInRightButton =
+    x >= width - BUTTON_W && x <= width && y >= Y && y <= Y + BUTTON_H;
+
+  // 네비게이션 바 영역이면서 버튼 영역이 아닌 경우만 true
+  return isInNavBarArea && !isInLeftButton && !isInRightButton;
 }
 
 // 글래스모피즘 스타일 모달 그리기
@@ -2452,58 +2838,36 @@ function drawSearchBar() {
   const responsiveScale = getResponsiveScale();
   const { W, H, X, Y } = getSearchMetrics();
 
-  // 바 배경 - linear gradient
-  noStroke();
-  drawingContext.save();
+  // UI 상태 가져오기
+  const showToggles = uiStateManager ? uiStateManager.showToggles : false;
+  const selectedToggles = uiStateManager ? uiStateManager.selectedToggles : [];
 
-  // box-shadow - 30% 증가
-  drawingContext.shadowBlur = 30 * SEARCH_SCALE * responsiveScale * 1.3;
-  drawingContext.shadowColor = "rgba(135, 135, 135, 0.30)";
-  drawingContext.shadowOffsetX = 7 * SEARCH_SCALE * responsiveScale * 1.3;
-  drawingContext.shadowOffsetY = 7 * SEARCH_SCALE * responsiveScale * 1.3;
-
-  // linear gradient
-  const gradient = drawingContext.createLinearGradient(X, Y, X, Y + H);
-  gradient.addColorStop(0, "rgba(255, 255, 255, 0.42)");
-  gradient.addColorStop(1, "rgba(255, 255, 255, 0.28)");
-  drawingContext.fillStyle = gradient;
-
-  // rounded rect (수동으로 path 그리기) - 30% 증가
-  const radius = 48 * SEARCH_SCALE * responsiveScale * 1.3;
-  drawingContext.beginPath();
-  drawingContext.moveTo(X + radius, Y);
-  drawingContext.lineTo(X + W - radius, Y);
-  drawingContext.quadraticCurveTo(X + W, Y, X + W, Y + radius);
-  drawingContext.lineTo(X + W, Y + H - radius);
-  drawingContext.quadraticCurveTo(X + W, Y + H, X + W - radius, Y + H);
-  drawingContext.lineTo(X + radius, Y + H);
-  drawingContext.quadraticCurveTo(X, Y + H, X, Y + H - radius);
-  drawingContext.lineTo(X, Y + radius);
-  drawingContext.quadraticCurveTo(X, Y, X + radius, Y);
-  drawingContext.closePath();
-  drawingContext.fill();
-
-  drawingContext.restore();
-
-  // 돋보기 아이콘 - 30% 증가
-  if (searchIcon) {
-    const iconSize = 24 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3; // 1.5배 * 1.3
-    const iconX = X + 24 * SEARCH_SCALE * responsiveScale * 1.3;
-    const iconY = Y + (H - iconSize) / 2;
+  // 마이크 아이콘 - 중앙에 배치 (크기 3배 * 2배 = 6배, 화질 개선)
+  if (mikeIcon) {
+    const iconSize = 40 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3 * 4; // 3배 * 2배 = 6배 크게
+    const iconX = X + (W - iconSize) / 2; // 중앙 정렬
+    const iconY = Y + (H - iconSize) / 2 + 20; // 20픽셀 아래로 이동
     imageMode(CORNER);
-    tint(255, 255, 255, 165); // rgba(255,255,255,0.65) 효과
-    image(searchIcon, iconX, iconY, iconSize, iconSize);
+
+    // 화질 개선 설정
+    push();
+    drawingContext.save();
+    drawingContext.imageSmoothingEnabled = true;
+    drawingContext.imageSmoothingQuality = "high";
+
+    tint(255, 255, 255, 200); // rgba(255,255,255,0.78) 효과
+    image(mikeIcon, iconX, iconY, iconSize, iconSize);
     noTint(); // tint 효과 제거
+
+    drawingContext.restore();
+    pop();
   }
 
-  // 플레이스홀더는 input의 placeholder로 처리되므로 제거
-  // 입력 필드가 있으면 텍스트를 그리지 않음
-
-  // 선택된 토글이 있으면 검색창에 표시 (짧은 형식)
+  // 선택된 토글이 있으면 마이크 아래에 텍스트 표시
   if (!showToggles) {
     push();
     noStroke();
-    textAlign(CENTER, CENTER); // 가로, 세로 모두 중앙 정렬
+    textAlign(CENTER, TOP); // 가로 중앙, 세로 상단 정렬
 
     if (pretendardFont) {
       textFont(pretendardFont);
@@ -2513,45 +2877,57 @@ function drawSearchBar() {
     if (selectedToggles.length === 0) {
       displayText = "전체 모아보기";
     } else {
-      const shortLabels = [
-        "여행자",
-        "20대 여성",
-        "50대 남성",
-        "주부",
-        "10대 여성",
+      const fullLabels = [
+        "여행자의 취향만 모아보고 싶어",
+        "20대 여성의 취향만 모아보고 싶어",
+        "50대 남성의 취향만 모아보고 싶어",
+        "주부들의 취향만 모아보고 싶어",
+        "10대 여성의 취향만 모아보고 싶어",
       ];
-      displayText = selectedToggles.map((t) => shortLabels[t - 1]).join(", ");
+      displayText = selectedToggles.map((t) => fullLabels[t - 1]).join(", ");
     }
 
     fill(255, 255, 255, 200);
     textSize(16 * SEARCH_SCALE * responsiveScale * 2 * 1.3); // 2배 * 1.3 (30% 증가)
     textStyle(NORMAL);
-    // 검색창 중앙에 위치
+    // 마이크 아래에 위치 (더 위로 올림)
+    const iconSize = 40 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3 * 4; // 마이크 아이콘 크기와 동일
+    const iconY = Y + (H - iconSize) / 2 + 20; // 마이크 Y 위치와 동일하게 계산
     const textX = X + W / 2; // 검색창 가로 중앙
-    const textY = Y + H / 2; // 검색창 세로 중앙
+    const textY = iconY + iconSize - 10; // 마이크 아래, 더 위로 올림 (기존 +20에서 -10으로 변경)
     text(displayText, textX, textY);
     pop();
   }
 }
 
-// 검색창 클릭 확인
+// 검색창 클릭 확인 (마이크 이미지 영역만)
 function checkSearchBarClick(x, y) {
+  const responsiveScale = getResponsiveScale();
   const { W, H, X, Y } = getSearchMetrics();
 
-  return x >= X && x <= X + W && y >= Y && y <= Y + H;
+  // 마이크 이미지의 실제 크기와 위치 계산 (drawSearchBar와 동일)
+  const iconSize = 40 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3 * 3 * 2; // 3배 * 2배 = 6배 크게
+  const iconX = X + (W - iconSize) / 2; // 중앙 정렬
+  const iconY = Y + (H - iconSize) / 2 - 30 + 20 + 10; // 20픽셀 더 아래로 이동 + 10픽셀 추가
+
+  // 마이크 이미지 영역만 클릭 가능하도록 제한
+  return (
+    x >= iconX && x <= iconX + iconSize && y >= iconY && y <= iconY + iconSize
+  );
 }
 
 // 토글 클릭 확인
 function checkToggleClick(x, y) {
+  const showToggles = uiStateManager ? uiStateManager.showToggles : false;
   if (!showToggles) return null;
 
   const toggleLabels = [
     "전체 보기",
-    "여행자의 취향 탐색",
-    "20대 여성의 취향 탐색",
-    "50대 남성의 취향 탐색",
-    "주부들의 취향 탐색",
-    "10대 여성의 취향 탐색",
+    "여행자의 취향만 모아보고 싶어",
+    "20대 여성의 취향만 모아보고 싶어",
+    "50대 남성의 취향만 모아보고 싶어",
+    "주부들의 취향만 모아보고 싶어",
+    "10대 여성의 취향만 모아보고 싶어",
   ];
 
   const toggleWidth = 300;
@@ -2578,11 +2954,17 @@ function checkToggleClick(x, y) {
 
 // 토글 선택/해제 (한 번에 하나만 선택 가능)
 function toggleSelect(toggleIndex) {
+  if (!uiStateManager || !bubbleManager || !panController) return;
+
+  const bubbles = bubbleManager.bubbles;
+  const selectedToggles = uiStateManager.selectedToggles;
+  const previousSelectedToggles = uiStateManager.previousSelectedToggles;
+
   // toggleIndex: 0 = 전체 보기, 1~5 = 각 카테고리
   if (toggleIndex === 0) {
     // 전체 보기 선택
-    previousSelectedToggles = [...selectedToggles]; // 이전 선택 저장
-    selectedToggles = [];
+    uiStateManager.previousSelectedToggles = [...selectedToggles]; // 이전 선택 저장
+    uiStateManager.selectedToggles = [];
     // 모든 버블 복구 및 원래 그리드 위치로 복원
     const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
     bubbles.forEach((b, index) => {
@@ -2595,7 +2977,7 @@ function toggleSelect(toggleIndex) {
       b.gridX = index % gridSize;
       b.gridY = Math.floor(index / gridSize);
     });
-    currentFilteredBubbles = bubbles;
+    bubbleManager.currentFilteredBubbles = bubbles;
 
     // 원래 그리드의 중심으로 정렬
     const centerGridX = Math.floor(gridSize / 2);
@@ -2613,17 +2995,17 @@ function toggleSelect(toggleIndex) {
     const centerX = width * CENTER_X_RATIO;
     const centerY = BUBBLE_AREA_CENTER - 20;
 
-    snapTargetX = centerX - centerHexX;
-    snapTargetY = centerY - centerHexY;
-    snapCompleted = false;
+    panController.snapTargetX = centerX - centerHexX;
+    panController.snapTargetY = centerY - centerHexY;
+    panController.snapCompleted = false;
   } else {
     // 카테고리 선택 (1~5를 1~5로 매핑)
     const categoryIndex = toggleIndex; // 1~5
 
     // 이전 선택된 토글 저장 (카테고리 변경 비교용)
-    previousSelectedToggles = [...selectedToggles];
+    uiStateManager.previousSelectedToggles = [...selectedToggles];
 
-    selectedToggles = [categoryIndex];
+    uiStateManager.selectedToggles = [categoryIndex];
 
     // 필터링된 버블 찾기 및 복구
     const filteredBubbles = bubbles.filter((b) => {
@@ -2690,13 +3072,16 @@ function toggleSelect(toggleIndex) {
 
 // 토글 UI 그리기
 function drawToggles() {
+  const showToggles = uiStateManager ? uiStateManager.showToggles : false;
+  const selectedToggles = uiStateManager ? uiStateManager.selectedToggles : [];
+
   const toggleLabels = [
     "전체 보기",
-    "여행자의 취향 탐색",
-    "20대 여성의 취향 탐색",
-    "50대 남성의 취향 탐색",
-    "주부들의 취향 탐색",
-    "10대 여성의 취향 탐색",
+    "여행자의 취향만 모아보고 싶어",
+    "20대 여성의 취향만 모아보고 싶어",
+    "50대 남성의 취향만 모아보고 싶어",
+    "주부들의 취향만 모아보고 싶어",
+    "10대 여성의 취향만 모아보고 싶어",
   ];
 
   const toggleWidth = 300;
@@ -2781,7 +3166,7 @@ function drawToggles() {
     drawingContext.fill();
     drawingContext.stroke();
 
-    // 텍스트
+    // 텍스트 (LED 빛번짐 효과)
     push();
     noStroke();
     textAlign(CENTER, CENTER);
@@ -2790,14 +3175,38 @@ function drawToggles() {
       textFont(pretendardFont);
     }
 
+    const textX = toggleX + toggleWidth / 2;
+    const textY = toggleY + toggleHeight / 2;
+
+    // LED 빛번짐 효과 (그림자 효과)
+    drawingContext.save();
+    if (isSelected) {
+      // 선택된 경우 더 강한 LED 효과
+      drawingContext.shadowBlur = 20;
+      drawingContext.shadowColor = "rgba(255, 255, 255, 0.8)";
+      drawingContext.shadowOffsetX = 0;
+      drawingContext.shadowOffsetY = 0;
+    } else {
+      // 선택되지 않은 경우 약한 LED 효과
+      drawingContext.shadowBlur = 12;
+      drawingContext.shadowColor = "rgba(255, 255, 255, 0.5)";
+      drawingContext.shadowOffsetX = 0;
+      drawingContext.shadowOffsetY = 0;
+    }
+
     fill(255, 255, 255, isSelected ? 255 : 200);
     textSize(16);
     textStyle(NORMAL);
-    text(
-      toggleLabels[i],
-      toggleX + toggleWidth / 2,
-      toggleY + toggleHeight / 2
-    );
+    text(toggleLabels[i], textX, textY);
+
+    // 추가 빛번짐 효과 (더 강한 글로우)
+    if (isSelected) {
+      drawingContext.shadowBlur = 30;
+      drawingContext.shadowColor = "rgba(255, 255, 255, 0.6)";
+      text(toggleLabels[i], textX, textY);
+    }
+
+    drawingContext.restore();
     pop();
   }
 
