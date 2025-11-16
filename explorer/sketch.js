@@ -1591,9 +1591,9 @@ function setup() {
   const isMobile = isMobileOrTablet();
   
   if (isMobile) {
-    pixelDensity(2); // 태블릿/모바일에서도 텍스트 화질 개선을 위해 2로 설정
-    frameRate(30); // 태블릿/모바일에서는 30fps로 제한
-    MAX_DRAW = 80; // 태블릿에서는 렌더링 버블 수 감소
+    pixelDensity(1); // 태블릿/모바일에서는 성능을 위해 1로 설정 (화질은 약간 떨어지지만 성능 크게 향상)
+    frameRate(20); // 태블릿/모바일에서는 20fps로 제한 (성능 개선)
+    MAX_DRAW = 50; // 태블릿에서는 렌더링 버블 수 대폭 감소
   } else {
     pixelDensity(2); // 데스크톱에서는 텍스트 화질 개선을 위해 2로 설정
     frameRate(45); // 데스크톱에서는 45fps
@@ -3254,8 +3254,7 @@ function drawTagFilteredBubbles(selectedTag, groupIndex) {
 
   if (filteredBubbles.length === 0) return;
   
-  // 디버깅: 필터링된 버블 개수 확인
-  console.log(`[drawTagFilteredBubbles] 태그 "${selectedTag}", 그룹 ${groupIndex}: 필터링된 버블 ${filteredBubbles.length}개`);
+  // 디버깅 제거 (성능 개선)
 
   const responsiveScale = getResponsiveScale();
   const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
@@ -3282,7 +3281,10 @@ function drawTagFilteredBubbles(selectedTag, groupIndex) {
 
   // 모든 필터링된 버블 표시 (제한 제거)
   const totalBubbles = filteredBubbles.length;
-  const visibleCount = totalBubbles; // 모든 버블 표시
+  // 태블릿 성능 개선: 최대 30개만 표시
+  const isMobile = isMobileOrTablet();
+  const maxVisibleBubbles = isMobile ? 30 : totalBubbles;
+  const visibleCount = Math.min(totalBubbles, maxVisibleBubbles);
   
   // 버블 간격 계산 (버블 개수에 따라 동적으로 조정)
   const angleStep = totalBubbles > 0 ? (Math.PI * 2) / totalBubbles : 0;
@@ -3422,15 +3424,16 @@ function drawGroupViewBubbles(groupIndex) {
   const orbitTilt = Math.cos(tiltAngle) * 0.85; // Y축 압축 비율 (더 크게: 0.85배)
   const orbitStretch = 1.3; // X축 늘리기 (더 멀리 퍼지게: 1.3배)
 
-  // 모든 필터링된 버블 표시 (제한 제거)
+  // 태블릿 성능 개선: 최대 30개만 표시
   const totalBubbles = groupBubbles.length;
-  const visibleCount = totalBubbles; // 모든 버블 표시
+  const isMobile = isMobileOrTablet();
+  const maxVisibleBubbles = isMobile ? 30 : totalBubbles;
+  const visibleCount = Math.min(totalBubbles, maxVisibleBubbles);
   
   // 버블 간격 계산 (버블 개수에 따라 동적으로 조정)
   const angleStep = totalBubbles > 0 ? (Math.PI * 2) / totalBubbles : 0;
   
-  // 디버깅: 그룹 버블 개수 확인
-  console.log(`[drawGroupViewBubbles] 그룹 ${groupIndex}: 필터링된 버블 ${totalBubbles}개`);
+  // 디버깅 제거 (성능 개선)
   
   // 버블을 Y축 위치에 따라 분류 (아래쪽/위쪽)
   const bubblesBelow = []; // 중심 이미지 아래 (앞에 그려야 함)
