@@ -459,7 +459,7 @@ function loadBubbleImage(imageIndex) {
   imageLoading.add(imageIndex);
 
   loadImage(
-    `../explorer/assets/bubble-imgs/${imageFiles[imageIndex]}`,
+    `../public/assets/bubble-imgs/${imageFiles[imageIndex]}`,
     (img) => {
       // 로드 성공
       bubbleImages[imageIndex] = img;
@@ -1009,61 +1009,26 @@ function drawBubbleInfoInCircle(bubble, x, y, r) {
 // ---------- p5 LIFECYCLE ----------
 function preload() {
   // preload() 내에서는 콜백 없이 직접 할당 (p5.js가 자동으로 동기 처리)
-  searchIcon = loadImage("../explorer/assets/public-imgs/lucide_search.svg");
-  interestedImage = loadImage("../explorer/assets/public-imgs/interested.png");
+  searchIcon = loadImage("../public/assets/public-imgs/lucide_search.svg");
+  interestedImage = loadImage("../public/assets/public-imgs/interested.png");
   captureButton = loadImage(
-    "../explorer/assets/public-imgs/capture-button.png"
+    "../public/assets/public-imgs/capture-button.png"
   );
   workroomButton = loadImage(
-    "../explorer/assets/public-imgs/workroom-button.png"
+    "../public/assets/public-imgs/workroom-button.png"
   );
   navigationBar = loadImage(
-    "../explorer/assets/public-imgs/navigation-bar2.png"
+    "../public/assets/public-imgs/navigation-bar2.png"
   );
-  bgImage = loadImage("../explorer/assets/public-imgs/bg.png");
-  bubbleCap = loadImage("../explorer/assets/public-imgs/bubble-cap.png");
+  bgImage = loadImage("../public/assets/public-imgs/bg.png");
+  bubbleCap = loadImage("../public/assets/public-imgs/bubble-cap.png");
 
   // Pretendard 폰트 로드
-  pretendardFont = loadFont("../explorer/assets/fonts/PretendardVariable.ttf");
+  pretendardFont = loadFont("../public/assets/fonts/PretendardVariable.ttf");
 
-  // 버블 이미지 데이터 정의 (전역 변수로 이동)
-  imageFiles = [
-    "akihabara.png",
-    "cafe.jpg",
-    "home.jpg",
-    "kyeongbokgung.png",
-    "paris.png",
-    "park.jpg",
-    "pool.jpg",
-    "Praha.png",
-    "rainy.png",
-    "school.jpg",
-    "seoul.jpg",
-    "street.png",
-    "terrace.jpg",
-    "town.png",
-    "work.jpg",
-    "building.jpg",
-    "water-glitter.jpg",
-    "hamburger.jpg",
-    "neon-sign.jpg",
-    "hot-sauce.jpg",
-    "firework.jpg",
-    "fallen-leaf.jpg",
-    "sweater.jpg",
-    "balloon-dog.png",
-    "construction.jpg",
-    "library.png",
-    "running.png",
-    "samgyeopsal.png",
-    "basketball.png",
-    "hongdae.png",
-    "aquarium.png",
-    "super-market.png",
-    "jeju.png",
-    "crosswalk.png",
-    "ginkgo-tree.png",
-  ];
+  // 공용 버블 데이터 JSON은 setup()에서 비동기로 로드
+  // (preload에서 loadJSON이 제대로 작동하지 않을 수 있음)
+
   // 시각적 언어 카테고리 정의 (이미지 설명 기반)
   // 하나의 사진이 여러 카테고리에 속할 수 있도록 키워드를 확장
   visualLanguageCards = [
@@ -1170,7 +1135,7 @@ function preload() {
   cardImages = [];
   visualLanguageCards.forEach((card) => {
     if (card.imageFile) {
-      const img = loadImage(`../explorer/assets/bubble-imgs/${card.imageFile}`);
+      const img = loadImage(`../public/assets/bubble-imgs/${card.imageFile}`);
       cardImages.push(img);
       card.image = img; // 카드 객체에 이미지 참조 저장
     } else {
@@ -1179,41 +1144,10 @@ function preload() {
     }
   });
 
-  // 태그를 분석하여 시각적 언어 속성 자동 매핑
-  // 하나의 사진이 여러 카테고리에 속할 수 있도록 개선
-  function mapTagsToVisualLanguage(tags) {
-    const attributes = [];
-    // 태그를 공백으로 합친 전체 문자열
-    const tagString = tags.join(" ").toLowerCase();
-    // 각 태그를 개별적으로도 확인 (더 정확한 매핑을 위해)
-    const individualTags = tags.map((tag) =>
-      tag.toLowerCase().replace("#", "").trim()
-    );
+  // mapTagsToVisualLanguage 함수는 전역으로 이동 (loadBubbleDataFromJSON에서 사용)
 
-    // 각 카드의 visualAttributes와 태그를 비교
-    visualLanguageCards.forEach((card) => {
-      // 전체 태그 문자열에서 확인
-      const matchesInString = card.visualAttributes.some((attr) =>
-        tagString.includes(attr.toLowerCase())
-      );
-
-      // 개별 태그에서도 확인 (더 정확한 매칭)
-      const matchesInTags = card.visualAttributes.some((attr) => {
-        const attrLower = attr.toLowerCase();
-        return individualTags.some(
-          (tag) => tag.includes(attrLower) || attrLower.includes(tag)
-        );
-      });
-
-      // 둘 중 하나라도 매칭되면 해당 카테고리에 속함
-      if (matchesInString || matchesInTags) {
-        attributes.push(card.id);
-      }
-    });
-
-    return attributes;
-  }
-
+  // 기존 하드코딩된 데이터 제거 (JSON으로 대체됨)
+  /*
   bubbleData = [
     {
       title: "아키하바라의 밤거리",
@@ -1399,6 +1333,7 @@ function preload() {
       attributes: [3, 4],
     }, // 50대 남성, 주부
   ];
+  */
 
   // 모든 버블 데이터에 시각적 언어 속성 자동 매핑
   bubbleData.forEach((data) => {
@@ -1433,6 +1368,99 @@ function isMobileOrTablet() {
   return isMobile || isTablet || (isTouchDevice && isSmallScreen);
 }
 
+// 태그를 분석하여 시각적 언어 속성 자동 매핑
+// 하나의 사진이 여러 카테고리에 속할 수 있도록 개선
+function mapTagsToVisualLanguage(tags) {
+  const attributes = [];
+  // 태그를 공백으로 합친 전체 문자열
+  const tagString = tags.join(" ").toLowerCase();
+  // 각 태그를 개별적으로도 확인 (더 정확한 매핑을 위해)
+  const individualTags = tags.map((tag) =>
+    tag.toLowerCase().replace("#", "").trim()
+  );
+
+  // 각 카드의 visualAttributes와 태그를 비교
+  visualLanguageCards.forEach((card) => {
+    // 전체 태그 문자열에서 확인
+    const matchesInString = card.visualAttributes.some((attr) =>
+      tagString.includes(attr.toLowerCase())
+    );
+
+    // 개별 태그에서도 확인 (더 정확한 매칭)
+    const matchesInTags = card.visualAttributes.some((attr) => {
+      const attrLower = attr.toLowerCase();
+      return individualTags.some(
+        (tag) => tag.includes(attrLower) || attrLower.includes(tag)
+      );
+    });
+
+    // 둘 중 하나라도 매칭되면 해당 카테고리에 속함
+    if (matchesInString || matchesInTags) {
+      attributes.push(card.id);
+    }
+  });
+
+  return attributes;
+}
+
+// 공용 버블 데이터 JSON 비동기 로드 함수
+async function loadBubbleDataFromJSON() {
+  try {
+    const response = await fetch("../public/assets/data/bubbles.json");
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const bubblesJson = await response.json();
+    
+    console.log("[Gallery] JSON 로드 성공:", bubblesJson);
+    
+    // 버블 이미지 데이터 정의 (JSON에서 로드)
+    if (bubblesJson && bubblesJson.imageFiles && Array.isArray(bubblesJson.imageFiles)) {
+      imageFiles = bubblesJson.imageFiles;
+      console.log(`[Gallery] JSON에서 ${imageFiles.length}개의 이미지 파일 로드됨`);
+    } else {
+      console.error("[Gallery] JSON에서 imageFiles를 로드할 수 없습니다", bubblesJson);
+    }
+    
+    // 버블 데이터 (JSON에서 로드)
+    if (bubblesJson && bubblesJson.bubbles && Array.isArray(bubblesJson.bubbles)) {
+      bubbleData = bubblesJson.bubbles.map(bubble => ({
+        title: bubble.title,
+        tags: bubble.tags,
+        attributes: bubble.attributes
+      }));
+      console.log(`[Gallery] JSON에서 ${bubbleData.length}개의 버블 데이터 로드됨`);
+      
+      // 버블 이미지 배열 초기화 (지연 로딩을 위해 null로 초기화)
+      for (let i = 0; i < imageFiles.length; i++) {
+        bubbleImages.push(null);
+      }
+      
+      // 모든 버블 데이터에 시각적 언어 속성 자동 매핑
+      bubbleData.forEach((data) => {
+        data.visualLanguageAttributes = mapTagsToVisualLanguage(data.tags);
+      });
+      
+      // 각 카드의 버블 개수 계산
+      visualLanguageCards.forEach((card) => {
+        card.count = bubbleData.filter((data) =>
+          data.visualLanguageAttributes.includes(card.id)
+        ).length;
+      });
+      
+      // 버블 재생성 (JSON 데이터가 로드된 후)
+      buildBubbles();
+      console.log(`[Gallery] 버블 재생성 완료`);
+    } else {
+      console.error("[Gallery] JSON에서 bubbles를 로드할 수 없습니다", bubblesJson);
+    }
+  } catch (error) {
+    console.error("[Gallery] JSON 로드 중 오류 발생:", error);
+    bubbleData = [];
+    imageFiles = [];
+  }
+}
+
 function setup() {
   // 태블릿/모바일 최적화
   const isMobile = isMobileOrTablet();
@@ -1448,7 +1476,9 @@ function setup() {
   createCanvas(windowWidth, windowHeight);
 
   rebuildWorldMetrics(); // 월드 메트릭스 초기화
-  buildBubbles();
+  
+  // 공용 버블 데이터 JSON 비동기 로드 (로드 완료 후 버블 생성)
+  loadBubbleDataFromJSON();
 
   // 검색 입력 필드 생성 (interested 이미지 사용 시 숨김)
   // createSearchInput(); // interested 이미지 사용으로 인해 주석 처리
