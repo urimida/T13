@@ -1784,38 +1784,8 @@ function setupPointerBridges() {
 }
 
 function createSearchInput() {
-  const responsiveScale = getResponsiveScale();
-  const { W, H, X, Y } = getSearchMetrics();
-
-  // 마이크 아이콘과 텍스트를 고려한 입력 영역 설정
-  // 입력 필드는 투명하게 하여 클릭 이벤트만 처리
-  const iconSize = 40 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3;
-  const textY = Y + H / 2 + 20; // 텍스트 위치
-
-  searchInput = createInput("");
-  searchInput.attribute("placeholder", "");
-  searchInput.position(X, Y);
-  searchInput.size(W, H);
-  searchInput.style("background", "transparent");
-  searchInput.style("border", "none");
-  searchInput.style("outline", "none");
-  searchInput.style("color", "transparent"); // 텍스트는 보이지 않게 (p5에서 직접 그리므로)
-  searchInput.style(
-    "font-size",
-    `${16 * SEARCH_SCALE * responsiveScale * 1.2 * 1.5 * 1.3}px`
-  );
-  searchInput.style("font-family", "inherit");
-  searchInput.style("padding", "0");
-  searchInput.style("margin", "0");
-  searchInput.style("z-index", "1000"); // 가장 위에 표시
-  searchInput.style("text-align", "center"); // 텍스트 중앙 정렬
-  searchInput.style("line-height", `${H}px`); // 세로 중앙 정렬을 위한 line-height
-
-  // Windows에서 레이어 문제 방지: pointer-events 및 위치 제어
-  searchInput.style("pointer-events", "auto"); // 포커스 가능
-  searchInput.style("position", "absolute");
-  searchInput.style("overflow", "hidden");
-  searchInput.style("white-space", "nowrap");
+  // 입력 필드 제거 - 더 이상 사용하지 않음
+  searchInput = null;
 }
 
 function draw() {
