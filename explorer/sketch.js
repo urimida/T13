@@ -1820,6 +1820,10 @@ function draw() {
         bubbleRotationState.angularVelocity = 0;
       }
     }
+    
+    // 각도 정규화 (오버플로우 방지) - 2π로 모듈로 연산하여 0~2π 범위로 유지
+    const TWO_PI = Math.PI * 2;
+    bubbleRotationState.rotationAngle = ((bubbleRotationState.rotationAngle % TWO_PI) + TWO_PI) % TWO_PI;
   } else {
     // 태그/그룹 뷰가 아닐 때는 회전 상태 초기화
     bubbleRotationState.rotationAngle = 0;
@@ -3990,6 +3994,10 @@ function handleRotationDrag(x, y) {
   
   // 회전 각도 업데이트
   bubbleRotationState.rotationAngle += angleDelta * dragSensitivity;
+  
+  // 각도 정규화 (드래그 중에도 오버플로우 방지)
+  const TWO_PI = Math.PI * 2;
+  bubbleRotationState.rotationAngle = ((bubbleRotationState.rotationAngle % TWO_PI) + TWO_PI) % TWO_PI;
   
   // 마지막 드래그 속도를 관성으로 저장 (튕겨 나가는 느낌)
   const timeDelta = deltaTime / 1000; // 초 단위
