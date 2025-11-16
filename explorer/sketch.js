@@ -45,15 +45,13 @@ const LONG_PRESS_DURATION = 500; // 0.5초 이상 누르면 길게 누르기로 
 
 // 버블 회전 제어 상태 (태그/그룹 뷰에서 사용)
 let bubbleRotationState = {
-  rotationAngle: 0, // 현재 회전 각도
-  rotationVelocity: 0, // 회전 속도 (자동 회전 + 드래그 속도)
+  rotationAngle: 0, // 현재 회전 각도 (기준 각도)
+  angularVelocity: 0, // 회전 속도 (관성)
   isDragging: false, // 드래그 중인지 여부
-  lastMouseX: 0, // 마지막 마우스 X 위치
-  lastMouseY: 0, // 마지막 마우스 Y 위치
-  dragStartX: 0, // 드래그 시작 X 위치
-  dragStartY: 0, // 드래그 시작 Y 위치
-  dragStartAngle: 0, // 드래그 시작 시각의 회전 각도
-  autoRotationSpeed: 0.0001 // 자동 회전 속도
+  lastX: 0, // 직전에 마우스가 있던 x
+  lastY: 0, // 직전에 마우스가 있던 y
+  userOverride: false, // 유저가 한 번이라도 손댄 이후엔 자동 회전 끄기
+  autoSpeed: 0.01 // 자동으로 돌아가는 기본 속도
 };
 
 // ---------- CONFIG ----------
@@ -1593,7 +1591,7 @@ function setup() {
   const isMobile = isMobileOrTablet();
   
   if (isMobile) {
-    pixelDensity(1); // 모바일에서는 성능을 위해 1로 유지
+    pixelDensity(2); // 태블릿/모바일에서도 텍스트 화질 개선을 위해 2로 설정
     frameRate(30); // 태블릿/모바일에서는 30fps로 제한
     MAX_DRAW = 80; // 태블릿에서는 렌더링 버블 수 감소
   } else {
@@ -1836,34 +1834,28 @@ function draw() {
 
   // 버블 회전 각도 업데이트 (태그 필터링 또는 그룹 뷰가 활성화된 경우)
   if (hasTagFilter || showGroupView) {
-    if (bubbleRotationState.isDragging) {
-      // 드래그 중일 때는 회전 각도는 이벤트 핸들러에서 업데이트됨
-      // draw()에서는 아무것도 하지 않음
-    } else {
-      // 드래그가 아닐 때는 자동 회전 + 관성 적용
-      // autoRotationSpeed는 밀리초당 각도 (기존: millis() * 0.0001)
-      const autoRotationDelta = deltaTime * bubbleRotationState.autoRotationSpeed;
-      bubbleRotationState.rotationAngle += autoRotationDelta;
+    // 1) 자동 회전 (유저가 아직 안 건드렸으면만)
+    if (!bubbleRotationState.userOverride && !bubbleRotationState.isDragging) {
+      bubbleRotationState.rotationAngle += bubbleRotationState.autoSpeed;
+    }
+    
+    // 2) 관성 회전 (드래그로 생긴 속도) - 드래그 중이 아닐 때만
+    if (!bubbleRotationState.isDragging) {
+      bubbleRotationState.rotationAngle += bubbleRotationState.angularVelocity;
       
-      // 관성 적용 (velocity가 있으면 추가)
-      if (Math.abs(bubbleRotationState.rotationVelocity) > 0.00001) {
-        const velocityDelta = bubbleRotationState.rotationVelocity * (deltaTime / 1000);
-        bubbleRotationState.rotationAngle += velocityDelta;
-        
-        // 관성 감쇠
-        bubbleRotationState.rotationVelocity *= 0.98; // 점진적으로 감속
-        
-        // 속도가 매우 작아지면 0으로 설정
-        if (Math.abs(bubbleRotationState.rotationVelocity) < 0.00001) {
-          bubbleRotationState.rotationVelocity = 0;
-        }
+      // 마찰(감속) – 숫자 낮출수록 빨리 멈춤
+      bubbleRotationState.angularVelocity *= 0.92;
+      
+      if (Math.abs(bubbleRotationState.angularVelocity) < 0.0001) {
+        bubbleRotationState.angularVelocity = 0;
       }
     }
   } else {
     // 태그/그룹 뷰가 아닐 때는 회전 상태 초기화
     bubbleRotationState.rotationAngle = 0;
-    bubbleRotationState.rotationVelocity = 0;
+    bubbleRotationState.angularVelocity = 0;
     bubbleRotationState.isDragging = false;
+    bubbleRotationState.userOverride = false;
   }
 
   // 패닝 애니메이션 업데이트 (클래스 사용) - 중간 단계에서도 활성화
@@ -2531,13 +2523,6 @@ function handlePointerDown(x, y, pointerId) {
 
   // 중간 단계 화면 클릭 처리
   if (uiStateManager && uiStateManager.showGroupView && uiStateManager.selectedGroup) {
-    // 뒤로가기 버튼 클릭 확인
-    if (checkBackButtonClick(x, y)) {
-      uiStateManager.backToMainView();
-      startAnim();
-      return true;
-    }
-
     // 태그 클릭 확인
     const clickedTag = checkTagClick(x, y, uiStateManager.selectedGroup);
     if (clickedTag) {
@@ -3784,53 +3769,6 @@ function drawGroupView(groupIndex) {
     pop();
   }
 
-  // 뒤로가기 버튼 그리기
-  const backButtonSize = 50;
-  const backButtonX = 30;
-  const backButtonY = 30;
-
-  push();
-  drawingContext.save();
-
-  // 뒤로가기 버튼 배경
-  const backGradient = drawingContext.createRadialGradient(
-    backButtonX,
-    backButtonY,
-    0,
-    backButtonX,
-    backButtonY,
-    backButtonSize / 2
-  );
-  backGradient.addColorStop(0, "rgba(255, 255, 255, 0.2)");
-  backGradient.addColorStop(1, "rgba(255, 255, 255, 0.1)");
-  drawingContext.fillStyle = backGradient;
-
-  drawingContext.beginPath();
-  drawingContext.arc(backButtonX, backButtonY, backButtonSize / 2, 0, Math.PI * 2);
-  drawingContext.fill();
-
-  drawingContext.strokeStyle = "rgba(255, 255, 255, 0.4)";
-  drawingContext.lineWidth = 2;
-  drawingContext.stroke();
-
-  // 뒤로가기 화살표 그리기
-  drawingContext.strokeStyle = "rgba(255, 255, 255, 0.9)";
-  drawingContext.lineWidth = 3;
-  drawingContext.lineCap = "round";
-  drawingContext.lineJoin = "round";
-
-  drawingContext.beginPath();
-  drawingContext.moveTo(backButtonX + 8, backButtonY);
-  drawingContext.lineTo(backButtonX - 8, backButtonY);
-  drawingContext.moveTo(backButtonX - 8, backButtonY);
-  drawingContext.lineTo(backButtonX - 3, backButtonY - 5);
-  drawingContext.moveTo(backButtonX - 8, backButtonY);
-  drawingContext.lineTo(backButtonX - 3, backButtonY + 5);
-  drawingContext.stroke();
-
-  drawingContext.restore();
-  pop();
-
   drawingContext.restore();
   pop();
 }
@@ -4037,11 +3975,8 @@ function handleRotationStart(x, y) {
   
   if (dist <= controlRadius) {
     bubbleRotationState.isDragging = true;
-    bubbleRotationState.dragStartX = x;
-    bubbleRotationState.dragStartY = y;
-    bubbleRotationState.lastMouseX = x;
-    bubbleRotationState.lastMouseY = y;
-    bubbleRotationState.dragStartAngle = bubbleRotationState.rotationAngle;
+    bubbleRotationState.lastX = x;
+    bubbleRotationState.lastY = y;
     return true; // 회전 제어 시작됨
   }
   
@@ -4058,17 +3993,17 @@ function handleRotationDrag(x, y) {
   const centerX = width / 2;
   const centerY = (SEARCH_BOTTOM + height) / 2;
   
-  // 드래그 시작 위치와 현재 위치의 각도 차이 계산
-  const startDx = bubbleRotationState.dragStartX - centerX;
-  const startDy = bubbleRotationState.dragStartY - centerY;
-  const startAngle = Math.atan2(startDy, startDx);
+  // 이전 위치와 현재 위치의 각도 차이 계산
+  const prevDx = bubbleRotationState.lastX - centerX;
+  const prevDy = bubbleRotationState.lastY - centerY;
+  const prevAngle = Math.atan2(prevDy, prevDx);
   
   const currDx = x - centerX;
   const currDy = y - centerY;
   const currAngle = Math.atan2(currDy, currDx);
   
   // 각도 차이 계산 (회전 방향 고려)
-  let angleDelta = currAngle - startAngle;
+  let angleDelta = currAngle - prevAngle;
   
   // 각도 차이를 -π ~ π 범위로 정규화
   if (angleDelta > Math.PI) {
@@ -4077,35 +4012,35 @@ function handleRotationDrag(x, y) {
     angleDelta += 2 * Math.PI;
   }
   
-  // 회전 각도 업데이트 (누적)
-  bubbleRotationState.rotationAngle = bubbleRotationState.dragStartAngle + angleDelta;
+  // 드래그 감도 조절
+  const dragSensitivity = 1.0; // 드래그한 각도를 얼마나 반영할지
   
-  // 이전 위치와 현재 위치의 각도 차이로 속도 계산
-  const prevDx = bubbleRotationState.lastMouseX - centerX;
-  const prevDy = bubbleRotationState.lastMouseY - centerY;
-  const prevAngle = Math.atan2(prevDy, prevDx);
+  // 회전 각도 업데이트
+  bubbleRotationState.rotationAngle += angleDelta * dragSensitivity;
   
-  let velocityAngleDelta = currAngle - prevAngle;
-  if (velocityAngleDelta > Math.PI) {
-    velocityAngleDelta -= 2 * Math.PI;
-  } else if (velocityAngleDelta < -Math.PI) {
-    velocityAngleDelta += 2 * Math.PI;
-  }
-  
-  // 속도 계산 (스와이프 속도에 비례)
+  // 마지막 드래그 속도를 관성으로 저장 (튕겨 나가는 느낌)
   const timeDelta = deltaTime / 1000; // 초 단위
-  if (timeDelta > 0 && Math.abs(velocityAngleDelta) > 0.001) {
-    bubbleRotationState.rotationVelocity = velocityAngleDelta / timeDelta * 0.8; // 감도 조절
+  if (timeDelta > 0 && Math.abs(angleDelta) > 0.001) {
+    bubbleRotationState.angularVelocity = (angleDelta * dragSensitivity) / timeDelta * 0.5;
   }
+  
+  // 유저가 손댄 순간부터는 자동 회전 종료
+  bubbleRotationState.userOverride = true;
   
   // 마지막 위치 업데이트
-  bubbleRotationState.lastMouseX = x;
-  bubbleRotationState.lastMouseY = y;
+  bubbleRotationState.lastX = x;
+  bubbleRotationState.lastY = y;
 }
 
 function handleRotationEnd() {
   if (bubbleRotationState.isDragging) {
     bubbleRotationState.isDragging = false;
+    
+    // 거의 안 움직인 상태에서 떼면 그냥 멈춘 느낌 나도록
+    if (Math.abs(bubbleRotationState.angularVelocity) < 0.0001) {
+      bubbleRotationState.angularVelocity = 0;
+    }
+    
     // 관성은 draw() 함수에서 처리됨
   }
 }
