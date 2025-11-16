@@ -759,6 +759,10 @@ class Bubble {
     push();
     drawingContext.save();
 
+    // 이미지 렌더링 품질 개선
+    drawingContext.imageSmoothingEnabled = true;
+    drawingContext.imageSmoothingQuality = "high";
+
     // 팡 터지는 애니메이션
     if (this.isPopping && this.popProgress < 1.0) {
       const scale = 1.0 + this.popProgress * 1.5; // 1.0에서 2.5배까지
@@ -899,6 +903,10 @@ function getBubbleSprite(r, hueSeed, imageIndex = null) {
   const size = bucket * 2;
   const g = createGraphics(size, size);
   g.noStroke();
+  
+  // 스프라이트 품질 개선 설정
+  g.drawingContext.imageSmoothingEnabled = true;
+  g.drawingContext.imageSmoothingQuality = "high";
 
   // 이미지가 있으면 이미지 사용, 없으면 색상 사용
   if (
@@ -1591,7 +1599,7 @@ function setup() {
   const isMobile = isMobileOrTablet();
   
   if (isMobile) {
-    pixelDensity(1); // 태블릿/모바일에서는 성능을 위해 1로 설정 (화질은 약간 떨어지지만 성능 크게 향상)
+    pixelDensity(2); // 태블릿/모바일에서도 화질 유지를 위해 2로 설정
     frameRate(20); // 태블릿/모바일에서는 20fps로 제한 (성능 개선)
     MAX_DRAW = 50; // 태블릿에서는 렌더링 버블 수 대폭 감소
   } else {
@@ -1607,7 +1615,7 @@ function setup() {
   drawingContext.imageSmoothingEnabled = true;
   drawingContext.imageSmoothingQuality = "high";
   
-  // 텍스트 렌더링 품질 추가 개선 (서브픽셀 렌더링 활성화)
+  // 추가 화질 개선 설정
   if (drawingContext.fontKerning !== undefined) {
     drawingContext.fontKerning = "normal";
   }
@@ -3571,6 +3579,11 @@ function drawGroupView(groupIndex) {
   // 집단 이미지 그리기 (원형으로 클리핑)
   push();
   drawingContext.save();
+  
+  // 이미지 렌더링 품질 개선
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  
   drawingContext.beginPath();
   drawingContext.arc(imageX, imageY, imageSize / 2, 0, Math.PI * 2);
   drawingContext.clip();
@@ -3616,6 +3629,11 @@ function drawGroupView(groupIndex) {
     push();
     imageMode(CENTER);
     drawingContext.save();
+    
+    // 이미지 렌더링 품질 개선
+    drawingContext.imageSmoothingEnabled = true;
+    drawingContext.imageSmoothingQuality = "high";
+    
     image(bubbleCap, imageX, imageY, imageSize, imageSize);
     drawingContext.restore();
     pop();
@@ -3735,8 +3753,11 @@ function drawGroupView(groupIndex) {
       drawingContext.shadowOffsetX = 0;
       drawingContext.shadowOffsetY = 2;
       
-      // 텍스트 화질 개선: 정수 반올림 제거
-      text(tag, tagX, tagY - 5); // 텍스트를 3픽셀 위로 올림
+      // 텍스트 화질 개선: 서브픽셀 렌더링을 위해 정수 반올림 제거
+      // 정확한 위치 계산으로 선명한 텍스트 렌더링
+      const textX = tagX;
+      const textY = tagY - 5;
+      text(tag, textX, textY);
       
       drawingContext.restore();
       pop();
