@@ -62,6 +62,7 @@ const BUBBLE_GLOSS = true;
 const TOTAL_BUBBLES = 35; // 총 버블 개수 (35개로 제한)
 const BASE_BUBBLE_RADIUS = 22; // 기본 버블 반지름
 const MAX_BUBBLE_RADIUS = 130; // 최대 버블 반지름 (중심) - 더 크게
+const SPRITE_BASE_RADIUS = Math.ceil(MAX_BUBBLE_RADIUS * 1.5); // 스프라이트 기본 반지름 (확대 여유)
 // 최소 버블 반지름 (화면 크기에 비례하게 계산되지만, 최소 30px 보장)
 const MIN_BUBBLE_RADIUS_BASE = 30; // 기본 최소값
 // 하위 호환성을 위해 MIN_BUBBLE_RADIUS도 유지 (함수 내부에서 동적으로 계산)
@@ -755,7 +756,9 @@ class Bubble {
     if (this.alpha < 0.01) return;
 
     // 스프라이트 캐시 사용 (성능 최적화)
-    const { g, size } = getBubbleSprite(this.r, this.hueSeed, this.imageIndex);
+    const sprite = getBubbleSprite(this.r, this.hueSeed, this.imageIndex);
+    const g = sprite.g;
+    const baseSize = this.r * 2;
     push();
     drawingContext.save();
 
@@ -766,15 +769,16 @@ class Bubble {
     // 팡 터지는 애니메이션
     if (this.isPopping && this.popProgress < 1.0) {
       const scale = 1.0 + this.popProgress * 1.5; // 1.0에서 2.5배까지
-      const scaledSize = size * scale;
+      const drawSize = baseSize * scale;
       drawingContext.globalAlpha = this.alpha; // 투명도 적용
       imageMode(CENTER);
-      image(g, x, y, scaledSize, scaledSize); // 크기가 커지면서 그리기
+      image(g, x, y, drawSize, drawSize); // 크기가 커지면서 그리기
     } else {
       // 일반 버블 그리기
+      const drawSize = baseSize;
       drawingContext.globalAlpha = this.alpha; // 투명도 적용
       imageMode(CENTER);
-      image(g, x, y, size, size); // 매 프레임 경량 복사만
+      image(g, x, y, drawSize, drawSize); // 매 프레임 경량 복사만
     }
 
     drawingContext.restore();
@@ -891,16 +895,17 @@ function invalidateSpriteCacheForImage(imageIndex) {
 
 // 스프라이트 캐시 시스템 (성능 최적화)
 function getBubbleSprite(r, hueSeed, imageIndex = null) {
-  const bucket = Math.max(6, Math.round(r / SPRITE_STEP) * SPRITE_STEP);
-  const h =
+  const baseRadius = SPRITE_BASE_RADIUS;
+  const size = baseRadius * 2;
+  const center = size / 2;
+
+  const key =
     imageIndex !== null
-      ? `img${imageIndex}`
-      : Math.floor((hueSeed * 137.5) % 360);
-  const key = `${bucket}|${h}`;
+      ? `img|${imageIndex}`
+      : `color|${Math.floor((hueSeed * 137.5) % 360)}`;
 
   if (SPRITES.has(key)) return SPRITES.get(key);
 
-  const size = bucket * 2;
   const g = createGraphics(size, size);
   g.noStroke();
   
@@ -908,7 +913,6 @@ function getBubbleSprite(r, hueSeed, imageIndex = null) {
   g.drawingContext.imageSmoothingEnabled = true;
   g.drawingContext.imageSmoothingQuality = "high";
 
-  // 이미지가 있으면 이미지 사용, 없으면 색상 사용
   if (
     imageIndex !== null &&
     bubbleImages[imageIndex] &&
@@ -922,7 +926,7 @@ function getBubbleSprite(r, hueSeed, imageIndex = null) {
     // 클리핑 마스크로 원형으로 자르기
     g.drawingContext.save();
     g.drawingContext.beginPath();
-    g.drawingContext.arc(bucket, bucket, bucket, 0, Math.PI * 2);
+    g.drawingContext.arc(center, center, baseRadius, 0, Math.PI * 2);
     g.drawingContext.clip();
 
     // 이미지 그리기 (크롭 및 스케일)
@@ -930,22 +934,18 @@ function getBubbleSprite(r, hueSeed, imageIndex = null) {
     const imgRatio = img.width / img.height;
     const targetRatio = 1;
 
-    let drawW, drawH, offsetX, offsetY;
+    let drawW, drawH;
     if (imgRatio > targetRatio) {
       // 이미지가 더 넓음
       drawH = size;
       drawW = imgRatio * drawH;
-      offsetX = (size - drawW) / 2;
-      offsetY = 0;
     } else {
       // 이미지가 더 높음
       drawW = size;
       drawH = drawW / imgRatio;
-      offsetX = 0;
-      offsetY = (size - drawH) / 2;
     }
 
-    g.image(img, bucket, bucket, drawW, drawH);
+    g.image(img, center, center, drawW, drawH);
     g.drawingContext.restore();
     g.pop();
   } else {
@@ -959,24 +959,24 @@ function getBubbleSprite(r, hueSeed, imageIndex = null) {
     g.drawingContext.shadowBlur = 24;
     g.drawingContext.shadowColor = "rgba(0,0,0,0.35)";
     g.fill(outer);
-    g.circle(bucket, bucket, size);
+    g.circle(center, center, baseRadius * 2);
     g.drawingContext.restore();
 
     // 글로스 그라디언트
     if (BUBBLE_GLOSS) {
       const grd = g.drawingContext.createRadialGradient(
-        bucket - bucket * 0.35,
-        bucket - bucket * 0.35,
-        bucket * 0.1,
-        bucket,
-        bucket,
-        bucket
+        center - baseRadius * 0.35,
+        center - baseRadius * 0.35,
+        baseRadius * 0.1,
+        center,
+        center,
+        baseRadius
       );
       grd.addColorStop(0, "rgba(255,255,255,0.45)");
       grd.addColorStop(0.25, "rgba(255,255,255,0.20)");
       grd.addColorStop(1, inner);
       g.drawingContext.fillStyle = grd;
-      g.circle(bucket, bucket, size);
+      g.circle(center, center, baseRadius * 2);
     }
   }
 
@@ -984,12 +984,23 @@ function getBubbleSprite(r, hueSeed, imageIndex = null) {
   if (bubbleCap && bubbleCap.width > 0) {
     g.push();
     g.imageMode(g.CENTER);
-    g.image(bubbleCap, bucket, bucket, size, size);
+    g.image(bubbleCap, center, center, baseRadius * 2, baseRadius * 2);
     g.pop();
   }
 
   const sprite = { g, size };
   SPRITES.set(key, sprite);
+  
+  // 스프라이트 캐시 크기 제한 (메모리 누수 방지)
+  const MAX_SPRITE_CACHE = 200; // 최대 200개만 캐시
+  if (SPRITES.size > MAX_SPRITE_CACHE) {
+    // 가장 오래된 항목 제거 (FIFO 방식)
+    const firstKey = SPRITES.keys().next().value;
+    if (firstKey) {
+      SPRITES.delete(firstKey);
+    }
+  }
+  
   return sprite;
 }
 
@@ -1683,112 +1694,120 @@ function setup() {
   setupPointerBridges();
 }
 
+// 포인터 이벤트 핸들러 저장 (중복 등록 방지)
+let pointerEventHandlers = {
+  down: null,
+  move: null,
+  up: null,
+  cancel: null
+};
+let activePointers = new Map(); // 활성 포인터 추적 (pointerId -> {x, y})
+let lastMemoryCleanup = 0; // 마지막 메모리 정리 시간
+const MEMORY_CLEANUP_INTERVAL = 60000; // 60초마다 메모리 정리
+
 // 포인터 이벤트 설정 (모든 입력 통합 처리)
 function setupPointerBridges() {
-  const activePointers = new Map(); // 활성 포인터 추적 (pointerId -> {x, y})
+  // 이미 등록된 이벤트 리스너 제거 (중복 방지)
+  if (pointerEventHandlers.down) {
+    window.removeEventListener("pointerdown", pointerEventHandlers.down);
+    window.removeEventListener("pointermove", pointerEventHandlers.move);
+    window.removeEventListener("pointerup", pointerEventHandlers.up);
+    window.removeEventListener("pointercancel", pointerEventHandlers.cancel);
+  }
+  
+  // activePointers 초기화
+  activePointers.clear();
 
   // 포인터 다운 이벤트
-  window.addEventListener(
-    "pointerdown",
-    (e) => {
-      // 캔버스 영역인지 확인
-      const canvas = document.querySelector("canvas");
-      if (!canvas || !canvas.contains(e.target)) return;
+  pointerEventHandlers.down = (e) => {
+    // 캔버스 영역인지 확인
+    const canvas = document.querySelector("canvas");
+    if (!canvas || !canvas.contains(e.target)) return;
 
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
 
-      activePointers.set(e.pointerId, { x, y });
+    activePointers.set(e.pointerId, { x, y });
 
-      const handled = handlePointerDown(x, y, e.pointerId);
+    const handled = handlePointerDown(x, y, e.pointerId);
 
-      // 터치나 펜인 경우 기본 동작 방지
-      if (e.pointerType !== "mouse" && handled) {
-        e.preventDefault();
-      }
-    },
-    { passive: false }
-  );
+    // 터치나 펜인 경우 기본 동작 방지
+    if (e.pointerType !== "mouse" && handled) {
+      e.preventDefault();
+    }
+  };
+  window.addEventListener("pointerdown", pointerEventHandlers.down, { passive: false });
 
   // 포인터 이동 이벤트
-  window.addEventListener(
-    "pointermove",
-    (e) => {
-      if (!activePointers.has(e.pointerId)) return;
+  pointerEventHandlers.move = (e) => {
+    if (!activePointers.has(e.pointerId)) return;
 
-      const canvas = document.querySelector("canvas");
-      if (!canvas) return;
+    const canvas = document.querySelector("canvas");
+    if (!canvas) return;
 
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
 
-      activePointers.set(e.pointerId, { x, y });
+    activePointers.set(e.pointerId, { x, y });
 
-      handlePointerMove(x, y, e.pointerId);
+    handlePointerMove(x, y, e.pointerId);
 
-      // 드래그 중이면 기본 동작 방지
-      if (
-        panController &&
-        panController.isDragging &&
-        e.pointerType !== "mouse"
-      ) {
-        e.preventDefault();
-      }
-    },
-    { passive: false }
-  );
+    // 드래그 중이면 기본 동작 방지
+    if (
+      panController &&
+      panController.isDragging &&
+      e.pointerType !== "mouse"
+    ) {
+      e.preventDefault();
+    }
+  };
+  window.addEventListener("pointermove", pointerEventHandlers.move, { passive: false });
 
   // 포인터 업 이벤트
-  window.addEventListener(
-    "pointerup",
-    (e) => {
-      if (!activePointers.has(e.pointerId)) return;
+  pointerEventHandlers.up = (e) => {
+    if (!activePointers.has(e.pointerId)) return;
 
-      const canvas = document.querySelector("canvas");
-      if (!canvas) return;
+    const canvas = document.querySelector("canvas");
+    if (!canvas) return;
 
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
 
-      handlePointerUp(x, y, e.pointerId);
+    handlePointerUp(x, y, e.pointerId);
 
-      activePointers.delete(e.pointerId);
+    activePointers.delete(e.pointerId);
 
-      // 터치나 펜인 경우 기본 동작 방지
-      if (e.pointerType !== "mouse") {
-        e.preventDefault();
-      }
-    },
-    { passive: false }
-  );
+    // 터치나 펜인 경우 기본 동작 방지
+    if (e.pointerType !== "mouse") {
+      e.preventDefault();
+    }
+  };
+  window.addEventListener("pointerup", pointerEventHandlers.up, { passive: false });
 
   // 포인터 취소 이벤트 (예: 다중 터치로 인한 취소)
-  window.addEventListener(
-    "pointercancel",
-    (e) => {
-      if (!activePointers.has(e.pointerId)) return;
+  pointerEventHandlers.cancel = (e) => {
+    if (!activePointers.has(e.pointerId)) return;
 
-      const canvas = document.querySelector("canvas");
-      if (!canvas) return;
+    const canvas = document.querySelector("canvas");
+    if (!canvas) return;
 
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
 
-      // 포인터 업과 동일하게 처리
-      handlePointerUp(x, y, e.pointerId);
+    // 포인터 업과 동일하게 처리
+    handlePointerUp(x, y, e.pointerId);
 
-      activePointers.delete(e.pointerId);
+    activePointers.delete(e.pointerId);
 
-      if (e.pointerType !== "mouse") {
-        e.preventDefault();
-      }
-    },
-    { passive: false }
-  );
+    if (e.pointerType !== "mouse") {
+      e.preventDefault();
+    }
+  };
+  window.addEventListener("pointercancel", pointerEventHandlers.cancel, { passive: false });
 }
 
 function createSearchInput() {
@@ -1797,6 +1816,25 @@ function createSearchInput() {
 }
 
 function draw() {
+  // 주기적 메모리 정리 (60초마다)
+  const now = millis();
+  if (now - lastMemoryCleanup > MEMORY_CLEANUP_INTERVAL) {
+    // activePointers 정리 (오래된 항목 제거)
+    if (activePointers.size > 10) {
+      activePointers.clear(); // 비정상적으로 많은 경우 초기화
+    }
+    
+    // 스프라이트 캐시 크기 제한 확인
+    const MAX_SPRITE_CACHE = 200;
+    if (SPRITES.size > MAX_SPRITE_CACHE) {
+      // 가장 오래된 항목들 제거
+      const keysToDelete = Array.from(SPRITES.keys()).slice(0, SPRITES.size - MAX_SPRITE_CACHE);
+      keysToDelete.forEach(key => SPRITES.delete(key));
+    }
+    
+    lastMemoryCleanup = now;
+  }
+  
   // 배경 버퍼 사용 (성능 최적화)
   if (bgBuffer) {
     image(bgBuffer, 0, 0);
@@ -1809,6 +1847,11 @@ function draw() {
   const selectedGroup = uiStateManager ? uiStateManager.selectedGroup : null;
   const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
   const hasTagFilter = selectedTag !== null;
+
+  const orbitModeActive = !!showGroupView;
+  if (!orbitModeActive) {
+    resetOrbitBubbleState();
+  }
 
   // 버블 회전 각도 업데이트 (태그 필터링 또는 그룹 뷰가 활성화된 경우)
   if (hasTagFilter || showGroupView) {
@@ -1917,8 +1960,8 @@ function draw() {
     if (bubbleManager) {
       bubbleManager.currentFilteredBubbles = filteredBubbles;
     }
-    // 필터링되지 않은 버블들 팡 터지기
-    if (bubbleManager) {
+    // 태그 필터링 팝 애니메이션은 기본 화면(그룹 뷰가 아닐 때)에서만 수행
+    if (bubbleManager && !showGroupView) {
       bubbleManager.startPoppingBubbles(bubbles, filteredBubbles);
     }
   } else if (selectedToggles.length > 0) {
@@ -3245,8 +3288,32 @@ function drawToggles() {
     pop();
   }
 
-  drawingContext.restore();
-  pop();
+drawingContext.restore();
+pop();
+}
+
+function resetOrbitBubbleState() {
+  if (!bubbleManager || !bubbleManager.bubbles) return;
+  bubbleManager.bubbles.forEach((bubble) => {
+    if (bubble.isInOrbit) {
+      bubble.isInOrbit = false;
+      bubble.orbitContextKey = null;
+    }
+  });
+}
+
+function ensureOrbitBubbleReady(bubble, targetBaseR, orbitContextKey) {
+  if (!bubble) return false;
+  const contextChanged = bubble.orbitContextKey !== orbitContextKey;
+  if (!bubble.isInOrbit || contextChanged) {
+    bubble.baseRadius = targetBaseR;
+    bubble.r = targetBaseR;
+    bubble.interactionScale = 1.0;
+    bubble.isInOrbit = true;
+    bubble.orbitContextKey = orbitContextKey;
+    return true;
+  }
+  return false;
 }
 
 // 태그 필터링된 상태에서 중심 이미지 주변에 관련 버블 그리기
@@ -3266,8 +3333,7 @@ function drawTagFilteredBubbles(selectedTag, groupIndex) {
 
   if (filteredBubbles.length === 0) return;
   
-  // 디버깅 제거 (성능 개선)
-
+  const orbitContextKey = `tag-${groupIndex}-${selectedTag}`;
   const responsiveScale = getResponsiveScale();
   const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
   const centerX = width / 2;
@@ -3347,9 +3413,8 @@ function drawTagFilteredBubbles(selectedTag, groupIndex) {
     const MAX_R = 85;    // 앞쪽(아래쪽) 최대 크기 (기존 119에서 감소)
     const targetBaseR = lerp(MIN_R, MAX_R, frontFactor);
     
-    // baseRadius 부드럽게 업데이트
-    const baseEase = 0.15;
-    if (!bubble.baseRadius) bubble.baseRadius = targetBaseR;
+    const justSynced = ensureOrbitBubbleReady(bubble, targetBaseR, orbitContextKey);
+    const baseEase = justSynced ? 1.0 : 0.15;
     bubble.baseRadius = lerp(bubble.baseRadius, targetBaseR, baseEase);
     
     // 매 프레임 시간 기반으로 반지름 계산 (숨쉬기 + 미세 떨림)
@@ -3438,6 +3503,7 @@ function drawGroupViewBubbles(groupIndex) {
 
   // 태블릿 성능 개선: 최대 30개만 표시
   const totalBubbles = groupBubbles.length;
+  const orbitContextKey = `group-${groupIndex}`;
   const isMobile = isMobileOrTablet();
   const maxVisibleBubbles = isMobile ? 30 : totalBubbles;
   const visibleCount = Math.min(totalBubbles, maxVisibleBubbles);
@@ -3493,9 +3559,8 @@ function drawGroupViewBubbles(groupIndex) {
     const MAX_R = 85;    // 앞쪽(아래쪽) 최대 크기 (기존 119에서 감소)
     const targetBaseR = lerp(MIN_R, MAX_R, frontFactor);
     
-    // baseRadius 부드럽게 업데이트
-    const baseEase = 0.15;
-    if (!bubble.baseRadius) bubble.baseRadius = targetBaseR;
+    const justSynced = ensureOrbitBubbleReady(bubble, targetBaseR, orbitContextKey);
+    const baseEase = justSynced ? 1.0 : 0.15;
     bubble.baseRadius = lerp(bubble.baseRadius, targetBaseR, baseEase);
     
     // 매 프레임 시간 기반으로 반지름 계산 (숨쉬기 + 미세 떨림)
