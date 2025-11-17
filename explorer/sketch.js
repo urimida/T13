@@ -43,6 +43,11 @@ let longPressState = {
 
 const LONG_PRESS_DURATION = 500; // 0.5초 이상 누르면 길게 누르기로 인식
 
+// 태그 필터링된 버블 중 선택된 버블 (정보 표시용)
+let selectedOrbitBubble = null;
+// 태그 필터링된 버블의 위치 정보 저장 (클릭 감지용)
+let orbitBubblePositions = []; // [{ bubble, x, y, r }]
+
 // 버블 회전 제어 상태 (태그/그룹 뷰에서 사용)
 let bubbleRotationState = {
   rotationAngle: 0, // 현재 회전 각도 (기준 각도)
@@ -62,7 +67,6 @@ const BUBBLE_GLOSS = true;
 const TOTAL_BUBBLES = 35; // 총 버블 개수 (35개로 제한)
 const BASE_BUBBLE_RADIUS = 22; // 기본 버블 반지름
 const MAX_BUBBLE_RADIUS = 130; // 최대 버블 반지름 (중심) - 더 크게
-const SPRITE_BASE_RADIUS = Math.ceil(MAX_BUBBLE_RADIUS * 1.5); // 스프라이트 기본 반지름 (확대 여유)
 // 최소 버블 반지름 (화면 크기에 비례하게 계산되지만, 최소 30px 보장)
 const MIN_BUBBLE_RADIUS_BASE = 30; // 기본 최소값
 // 하위 호환성을 위해 MIN_BUBBLE_RADIUS도 유지 (함수 내부에서 동적으로 계산)
@@ -79,12 +83,10 @@ const SEARCH_NAV_GAP = 40; // 네비게이션 바와 검색창 사이 간격
 
 // 성능 최적화 설정
 let MAX_DRAW = 140; // 그릴 최대 버블 수 (LOD) - 태블릿에서는 동적으로 조정됨
-const SPRITE_STEP = 6; // 반지름 버킷 간격(px) - 스프라이트 캐시용
 
 // 전역 변수 (성능 최적화)
 let WORLD_W, WORLD_H; // 월드 크기 (재사용)
 let bgBuffer; // 배경 버퍼
-const SPRITES = new Map(); // 스프라이트 캐시 (key: "bucket|hue", val: {g, size})
 
 // UI sizes
 const SEARCH_W_RATIO = 0.56;
@@ -604,86 +606,32 @@ class Bubble {
       !uiStateManager.selectedTag &&
       !uiStateManager.showGroupView;
     
-    // baseRadius 업데이트 - 거리 기반 크기 기준값 (부드럽게 변화)
-    // 최소 크기를 보장하여 너무 작아지지 않도록
-    // 화면 크기에 비례한 최소 반지름 계산
-    const minRadius = Math.max(MIN_BUBBLE_RADIUS_BASE, min(width, height) * 0.04);
-    const minSizeFactor = 0.3; // 최소 30% 크기 보장 (기존 0.1에서 증가)
-    
-    if (isInitialScreen) {
-      // 초기 화면: 일정한 크기 유지 (주인공 버블이 아닌 경우)
-      // 화면 중앙에서의 거리로 주인공 버블 판단
-      const distToScreenCenter = dist(displayX, displayY, screenCenterX, screenCenterY);
-      const isCenterBubble = distToScreenCenter < 100; // 화면 중앙 100px 이내
-      
-      if (!isCenterBubble) {
-        // 주인공 버블이 아닌 경우: 고정 크기 유지
-        const fixedSizeFactor = 0.5; // 일정한 크기 팩터
-        const targetBaseR = minRadius + (MAX_BUBBLE_RADIUS - minRadius) * fixedSizeFactor;
-        
-        // baseRadius를 빠르게 목표값으로 수렴
-        const baseEase = 0.3;
-        this.baseRadius = lerp(this.baseRadius, targetBaseR, baseEase);
-        
-        // 숨 쉬는 애니메이션 제거 (고정 크기)
-        this.r = this.baseRadius;
-      } else {
-        // 주인공 버블: 기존 로직 유지
-        const targetBaseR =
-          minRadius +
-          (MAX_BUBBLE_RADIUS - minRadius) * max(sizeFactor, minSizeFactor);
-        const baseEase = 0.15;
-        this.baseRadius = lerp(this.baseRadius, targetBaseR, baseEase);
-        
-        const t = millis() * 0.001;
-        const breathSpeed = 0.5 + (this.hueSeed % 7) * 0.1;
-        const breath = sin(t * breathSpeed + this.pulseOffset);
-        const pulseAmp = map(sizeFactor, 0.1, 1.0, 0.03, 0.10);
-        const breathFactor = map(breath, -1, 1, 1.0 - pulseAmp, 1.0 + pulseAmp);
-        const noiseSpeed = 0.2;
-        const n = noise(this.noiseOffset + t * noiseSpeed);
-        const noiseFactor = map(n, 0, 1, 0.95, 1.05);
-        const targetInteractionScale = 1.0;
-        const interactionEase = 0.08;
-        this.interactionScale = lerp(this.interactionScale, targetInteractionScale, interactionEase);
-        this.r = this.baseRadius * breathFactor * noiseFactor * this.interactionScale;
-      }
-    } else {
-      // 카테고리/태그 선택된 상태: 기존 로직 유지
-      const targetBaseR =
-        minRadius +
-        (MAX_BUBBLE_RADIUS - minRadius) * max(sizeFactor, minSizeFactor);
-      
-      // baseRadius도 부드럽게 따라가도록 (너무 급격한 변화 방지)
-      const baseEase = 0.15;
-      this.baseRadius = lerp(this.baseRadius, targetBaseR, baseEase);
+    const minRadius = Math.max(
+      MIN_BUBBLE_RADIUS_BASE,
+      min(width, height) * 0.04
+    );
+    const minSizeFactor = 0.3;
 
-      // -------------------------------------------
-      //  매 프레임마다 시간 기반으로 반지름 계산 (고정된 순간 없음)
-      // -------------------------------------------
-      const t = millis() * 0.001; // 밀리초 -> 초
+    const targetBaseR =
+      minRadius +
+      (MAX_BUBBLE_RADIUS - minRadius) * max(sizeFactor, minSizeFactor);
+    const baseEase = isInitialScreen ? 0.18 : 0.15;
+    this.baseRadius = lerp(this.baseRadius, targetBaseR, baseEase);
 
-      // 1) 큰 숨결 (sin 기반 - 전체적으로 천천히 커졌다 작아짐)
-      const breathSpeed = 0.5 + (this.hueSeed % 7) * 0.1; // 버블마다 다른 속도
-      const breath = sin(t * breathSpeed + this.pulseOffset); // -1 ~ 1
-      // 화면 중심에 가까울수록 숨쉬기 폭을 약간 더 크게
-      const pulseAmp = map(sizeFactor, 0.1, 1.0, 0.03, 0.10);
-      const breathFactor = map(breath, -1, 1, 1.0 - pulseAmp, 1.0 + pulseAmp);
+    const t = millis() * 0.001;
+    const breathSpeed = 0.5 + (this.hueSeed % 7) * 0.1;
+    const breath = sin(t * breathSpeed + this.pulseOffset);
+    const pulseAmp = map(sizeFactor, 0.1, 1.0, 0.03, 0.1);
+    const breathFactor = map(breath, -1, 1, 1.0 - pulseAmp, 1.0 + pulseAmp);
 
-      // 2) 미세 떨림 (noise 기반 - 각 버블이 서로 다르게 출렁임)
-      const noiseSpeed = 0.2; // noise 변화 속도
-      const n = noise(this.noiseOffset + t * noiseSpeed); // 0 ~ 1
-      const noiseFactor = map(n, 0, 1, 0.95, 1.05); // 95% ~ 105% 미세 변화
+    const noiseSpeed = 0.2;
+    const n = noise(this.noiseOffset + t * noiseSpeed);
+    const noiseFactor = map(n, 0, 1, 0.95, 1.05);
 
-      // 3) 상호작용 스케일 (중앙 버블 등 - 부드럽게 변화)
-      // interactionScale은 외부에서 설정되거나 기본값 1.0 유지
-      const targetInteractionScale = 1.0; // 필요시 외부에서 설정
-      const interactionEase = 0.08;
-      this.interactionScale = lerp(this.interactionScale, targetInteractionScale, interactionEase);
+    const interactionEase = 0.08;
+    this.interactionScale = lerp(this.interactionScale, 1.0, interactionEase);
 
-      // 🔥 매 프레임 반지름을 "계산만" 함 (절대 고정값 할당 안 함)
-      this.r = this.baseRadius * breathFactor * noiseFactor * this.interactionScale;
-    }
+    this.r = this.baseRadius * breathFactor * noiseFactor * this.interactionScale;
 
     // 토러스 래핑: 화면 밖으로 나가면 반대편에서 나타나게 (여러 복사본 고려)
     // 배열 재사용 (GC 방지)
@@ -728,66 +676,32 @@ class Bubble {
         bubbleTop >= SEARCH_BOTTOM && // 검색창 아래
         bubbleBottom <= height - 10; // 화면 하단 위
 
-      // 초기 화면인지 확인
-      const isInitialScreen = uiStateManager && 
-        !uiStateManager.selectedGroup && 
-        !uiStateManager.selectedTag &&
-        !uiStateManager.showGroupView;
-      
-      // 버블이 보여야 할 때는 alpha를 1.0으로 복원, 사라져야 할 때는 감소
-      if (isInitialScreen) {
-        // 초기 화면: 항상 보이도록 유지
-        this.alpha = 1.0;
-      } else if (isOnScreen && isInAllowedArea) {
-        // 보이는 상태: 서서히 나타남
-        this.alpha = lerp(this.alpha, 1.0, 0.2);
-      } else {
-        // 사라지는 상태: 서서히 사라짐
-        this.alpha = lerp(this.alpha, 0.0, 0.15);
-      }
+      const targetAlpha = isOnScreen && isInAllowedArea ? 1.0 : 0.0;
+      const alphaEase = targetAlpha > this.alpha ? 0.18 : 0.08;
+      this.alpha = lerp(this.alpha, targetAlpha, alphaEase);
     } else if (this._isFiltered && !this.isPopping) {
       // 필터링된 버블은 항상 alpha를 1.0으로 유지 (페이드아웃 로직 건너뛰기)
       this.alpha = 1.0;
     }
   }
 
-  drawAt(x, y) {
-    // alpha가 너무 작으면 그리지 않음
+  drawAt(x, y, isMain = false) {
     if (this.alpha < 0.01) return;
 
-    // 스프라이트 캐시 사용 (성능 최적화)
-    const sprite = getBubbleSprite(this.r, this.hueSeed, this.imageIndex);
-    const g = sprite.g;
-    const baseSize = this.r * 2;
-    push();
-    drawingContext.save();
-
-    // 이미지 렌더링 품질 개선
-    drawingContext.imageSmoothingEnabled = true;
-    drawingContext.imageSmoothingQuality = "high";
-
-    // 팡 터지는 애니메이션
+    let renderRadius = this.r;
     if (this.isPopping && this.popProgress < 1.0) {
-      const scale = 1.0 + this.popProgress * 1.5; // 1.0에서 2.5배까지
-      const drawSize = baseSize * scale;
-      drawingContext.globalAlpha = this.alpha; // 투명도 적용
-      imageMode(CENTER);
-      image(g, x, y, drawSize, drawSize); // 크기가 커지면서 그리기
-    } else {
-      // 일반 버블 그리기
-      const drawSize = baseSize;
-      drawingContext.globalAlpha = this.alpha; // 투명도 적용
-      imageMode(CENTER);
-      image(g, x, y, drawSize, drawSize); // 매 프레임 경량 복사만
+      const scale = 1.0 + this.popProgress * 1.5;
+      renderRadius = this.r * scale;
     }
 
-    drawingContext.restore();
-    pop();
+    drawBubbleVisual(this, x, y, renderRadius, {
+      isMain,
+      alphaOverride: this.alpha,
+    });
   }
 
-  draw() {
-    // 메인 위치에 그리기
-    this.drawAt(this.pos.x, this.pos.y);
+  draw(isMain = false) {
+    this.drawAt(this.pos.x, this.pos.y, isMain);
 
     // 토러스 래핑 복사본도 그리기
     if (this.copies) {
@@ -851,6 +765,24 @@ function loadVisibleBubbleImages() {
   }
 }
 
+// 모든 버블에서 사용되는 이미지들을 한 번에 미리 로드
+// (화면 안에 들어온 버블들이 색 버블로만 남지 않도록 보장)
+function preloadAllBubbleImages() {
+  if (!bubbleManager || !bubbleManager.bubbles) return;
+
+  const bubbles = bubbleManager.bubbles;
+  const uniqueImageIndexes = new Set();
+
+  for (const b of bubbles) {
+    if (b.imageIndex === null || b.imageIndex === undefined) continue;
+    if (b.imageIndex < 0 || b.imageIndex >= imageFiles.length) continue;
+    if (uniqueImageIndexes.has(b.imageIndex)) continue;
+
+    uniqueImageIndexes.add(b.imageIndex);
+    loadBubbleImage(b.imageIndex);
+  }
+}
+
 // 개별 버블 이미지 로드 함수
 function loadBubbleImage(imageIndex) {
   if (imageIndex === null || imageIndex >= imageFiles.length) return;
@@ -866,8 +798,6 @@ function loadBubbleImage(imageIndex) {
       imageLoaded.add(imageIndex);
       imageLoading.delete(imageIndex);
 
-      // 해당 이미지를 사용하는 스프라이트 캐시 무효화
-      invalidateSpriteCacheForImage(imageIndex);
     },
     (e) => {
       // 로드 실패
@@ -880,128 +810,6 @@ function loadBubbleImage(imageIndex) {
       imageLoading.delete(imageIndex);
     }
   );
-}
-
-// 특정 이미지를 사용하는 스프라이트 캐시 무효화
-function invalidateSpriteCacheForImage(imageIndex) {
-  const keysToDelete = [];
-  for (const key of SPRITES.keys()) {
-    if (key.includes(`img${imageIndex}`)) {
-      keysToDelete.push(key);
-    }
-  }
-  keysToDelete.forEach((key) => SPRITES.delete(key));
-}
-
-// 스프라이트 캐시 시스템 (성능 최적화)
-function getBubbleSprite(r, hueSeed, imageIndex = null) {
-  const baseRadius = SPRITE_BASE_RADIUS;
-  const size = baseRadius * 2;
-  const center = size / 2;
-
-  const key =
-    imageIndex !== null
-      ? `img|${imageIndex}`
-      : `color|${Math.floor((hueSeed * 137.5) % 360)}`;
-
-  if (SPRITES.has(key)) return SPRITES.get(key);
-
-  const g = createGraphics(size, size);
-  g.noStroke();
-  
-  // 스프라이트 품질 개선 설정
-  g.drawingContext.imageSmoothingEnabled = true;
-  g.drawingContext.imageSmoothingQuality = "high";
-
-  if (
-    imageIndex !== null &&
-    bubbleImages[imageIndex] &&
-    bubbleImages[imageIndex].width > 0
-  ) {
-    // 이미지 사용
-    g.push();
-    g.imageMode(g.CENTER);
-    g.ellipseMode(g.CENTER);
-
-    // 클리핑 마스크로 원형으로 자르기
-    g.drawingContext.save();
-    g.drawingContext.beginPath();
-    g.drawingContext.arc(center, center, baseRadius, 0, Math.PI * 2);
-    g.drawingContext.clip();
-
-    // 이미지 그리기 (크롭 및 스케일)
-    const img = bubbleImages[imageIndex];
-    const imgRatio = img.width / img.height;
-    const targetRatio = 1;
-
-    let drawW, drawH;
-    if (imgRatio > targetRatio) {
-      // 이미지가 더 넓음
-      drawH = size;
-      drawW = imgRatio * drawH;
-    } else {
-      // 이미지가 더 높음
-      drawW = size;
-      drawH = drawW / imgRatio;
-    }
-
-    g.image(img, center, center, drawW, drawH);
-    g.drawingContext.restore();
-    g.pop();
-  } else {
-    // 색상 사용
-    const base = bubbleColor(hueSeed);
-    const outer = base.outer;
-    const inner = base.inner;
-
-    // 그림자(오프스크린에서 한 번만)
-    g.drawingContext.save();
-    g.drawingContext.shadowBlur = 24;
-    g.drawingContext.shadowColor = "rgba(0,0,0,0.35)";
-    g.fill(outer);
-    g.circle(center, center, baseRadius * 2);
-    g.drawingContext.restore();
-
-    // 글로스 그라디언트
-    if (BUBBLE_GLOSS) {
-      const grd = g.drawingContext.createRadialGradient(
-        center - baseRadius * 0.35,
-        center - baseRadius * 0.35,
-        baseRadius * 0.1,
-        center,
-        center,
-        baseRadius
-      );
-      grd.addColorStop(0, "rgba(255,255,255,0.45)");
-      grd.addColorStop(0.25, "rgba(255,255,255,0.20)");
-      grd.addColorStop(1, inner);
-      g.drawingContext.fillStyle = grd;
-      g.circle(center, center, baseRadius * 2);
-    }
-  }
-
-  // 캡 이미지(있다면)까지 합성해서 완성 스프라이트로 캐시
-  if (bubbleCap && bubbleCap.width > 0) {
-    g.push();
-    g.imageMode(g.CENTER);
-    g.image(bubbleCap, center, center, baseRadius * 2, baseRadius * 2);
-    g.pop();
-  }
-
-  const sprite = { g, size };
-  SPRITES.set(key, sprite);
-  
-  // 스프라이트 캐시 크기 제한 (메모리 누수 방지)
-  const MAX_SPRITE_CACHE = 200; // 최대 200개만 캐시
-  if (SPRITES.size > MAX_SPRITE_CACHE) {
-    // 가장 오래된 항목 제거 (FIFO 방식)
-    const firstKey = SPRITES.keys().next().value;
-    if (firstKey) {
-      SPRITES.delete(firstKey);
-    }
-  }
-  
-  return sprite;
 }
 
 // 월드 메트릭스 재계산 (윈도우 리사이즈 시)
@@ -1073,58 +881,87 @@ function stopAnim() {
   }
 }
 
-// 중앙 버블 이미지/색상만 그리기 (캡 없이)
-function drawCenterBubbleImage(bubble) {
-  if (bubble.alpha < 0.01) return;
+function drawBubbleVisual(
+  bubble,
+  x,
+  y,
+  r,
+  { isMain = false, alphaOverride = null } = {}
+) {
+  if (!bubble) return;
 
-  const x = bubble.pos.x;
-  const y = bubble.pos.y;
-  const r = bubble.r;
-  const size = r * 2;
+  const effectiveAlpha =
+    alphaOverride !== null && alphaOverride !== undefined
+      ? alphaOverride
+      : bubble.alpha;
+  if (effectiveAlpha < 0.01) return;
+
+  const diameter = r * 2;
+  const hasImage =
+    bubble.imageIndex !== null &&
+    bubbleImages[bubble.imageIndex] &&
+    bubbleImages[bubble.imageIndex].width > 0;
+
+  // 메인 버블 백글로우
+  if (isMain) {
+    push();
+    drawingContext.save();
+    drawingContext.globalAlpha = effectiveAlpha * 0.85;
+    const glowRadius = r * 1.7;
+    const glowGradient = drawingContext.createRadialGradient(
+      x,
+      y,
+      r * 0.4,
+      x,
+      y,
+      glowRadius
+    );
+    glowGradient.addColorStop(0, "rgba(255,255,255,0.7)");
+    glowGradient.addColorStop(0.5, "rgba(255, 243, 156, 0.18)");
+    glowGradient.addColorStop(1, "rgba(255, 255, 217, 0)");
+    drawingContext.fillStyle = glowGradient;
+    drawingContext.beginPath();
+    drawingContext.arc(x, y, glowRadius, 0, Math.PI * 2);
+    drawingContext.fill();
+    drawingContext.restore();
+    pop();
+  }
 
   push();
   drawingContext.save();
-  drawingContext.globalAlpha = bubble.alpha;
+  drawingContext.globalAlpha = effectiveAlpha;
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
 
-  // 클리핑 마스크로 원형으로 자르기
   drawingContext.beginPath();
   drawingContext.arc(x, y, r, 0, Math.PI * 2);
   drawingContext.clip();
 
-  // 이미지가 있으면 이미지 사용, 없으면 색상 사용
-  if (
-    bubble.imageIndex !== null &&
-    bubbleImages[bubble.imageIndex] &&
-    bubbleImages[bubble.imageIndex].width > 0
-  ) {
-    // 이미지 사용
+  if (hasImage) {
     imageMode(CENTER);
     const img = bubbleImages[bubble.imageIndex];
     const imgRatio = img.width / img.height;
 
     let drawW, drawH;
     if (imgRatio > 1) {
-      drawH = size;
+      drawH = diameter;
       drawW = imgRatio * drawH;
     } else {
-      drawW = size;
+      drawW = diameter;
       drawH = drawW / imgRatio;
     }
 
     image(img, x, y, drawW, drawH);
   } else {
-    // 색상 사용
     const base = bubbleColor(bubble.hueSeed);
     const outer = base.outer;
     const inner = base.inner;
 
-    // 그림자
     drawingContext.shadowBlur = 24;
     drawingContext.shadowColor = "rgba(0,0,0,0.35)";
     fill(outer);
-    circle(x, y, size);
+    circle(x, y, diameter);
 
-    // 글로스 그라디언트
     if (BUBBLE_GLOSS) {
       const grd = drawingContext.createRadialGradient(
         x - r * 0.35,
@@ -1138,12 +975,42 @@ function drawCenterBubbleImage(bubble) {
       grd.addColorStop(0.25, "rgba(255,255,255,0.20)");
       grd.addColorStop(1, inner);
       drawingContext.fillStyle = grd;
-      circle(x, y, size);
+      circle(x, y, diameter);
     }
   }
 
   drawingContext.restore();
   pop();
+
+  if (!isMain && bubbleCap && bubbleCap.width > 0) {
+    push();
+    drawingContext.save();
+    drawingContext.globalAlpha = effectiveAlpha;
+    imageMode(CENTER);
+    image(bubbleCap, x, y, diameter, diameter);
+    drawingContext.restore();
+    pop();
+  }
+
+  push();
+  drawingContext.save();
+  drawingContext.globalAlpha = effectiveAlpha;
+  if (isMain) {
+    // 메인 버블은 추가 링 없이 부드러운 발광만 유지
+  } else {
+    noStroke();
+    fill(255, 25);
+    ellipse(x, y, diameter, diameter);
+  }
+  drawingContext.restore();
+  pop();
+}
+
+// 중앙 버블 이미지/색상만 그리기 (캡 없이)
+function drawCenterBubbleImage(bubble) {
+  drawBubbleVisual(bubble, bubble.pos.x, bubble.pos.y, bubble.r, {
+    isMain: true,
+  });
 }
 
 // 중앙 버블에 빛 효과 그리기 (캡과 사진 사이)
@@ -1575,6 +1442,10 @@ async function loadBubbleDataFromJSON() {
       if (bubbleManager) {
         bubbleManager.build();
         console.log(`[Explorer] 버블 재생성 완료`);
+
+        // JSON과 버블 생성이 끝난 시점에, 화면에서 사용할 모든 버블 이미지 미리 로드
+        // (화면 안에 들어온 버블들이 사진 없이 색 버블로만 남지 않도록 하기 위함)
+        preloadAllBubbleImages();
       }
     } else {
       console.error("[Explorer] JSON에서 bubbles를 로드할 수 없습니다", bubblesJson);
@@ -1822,14 +1693,6 @@ function draw() {
     // activePointers 정리 (오래된 항목 제거)
     if (activePointers.size > 10) {
       activePointers.clear(); // 비정상적으로 많은 경우 초기화
-    }
-    
-    // 스프라이트 캐시 크기 제한 확인
-    const MAX_SPRITE_CACHE = 200;
-    if (SPRITES.size > MAX_SPRITE_CACHE) {
-      // 가장 오래된 항목들 제거
-      const keysToDelete = Array.from(SPRITES.keys()).slice(0, SPRITES.size - MAX_SPRITE_CACHE);
-      keysToDelete.forEach(key => SPRITES.delete(key));
     }
     
     lastMemoryCleanup = now;
@@ -2237,6 +2100,26 @@ function draw() {
   if (centerBubble && !showGroupView) {
     drawBubbleInfo(centerBubble, centerX, centerY);
   }
+  
+  // 태그 필터링된 버블 정보 표시
+  if (selectedOrbitBubble && hasTagFilter) {
+    // 선택된 버블의 현재 위치 찾기
+    const bubblePos = orbitBubblePositions.find(p => p.bubble === selectedOrbitBubble);
+    if (bubblePos) {
+      // 임시 버블 객체 생성 (drawBubbleInfo 호환용)
+      const tempBubble = {
+        pos: { x: bubblePos.x, y: bubblePos.y },
+        r: bubblePos.r,
+        name: selectedOrbitBubble.name,
+        visualTags: selectedOrbitBubble.visualTags,
+        emotionalTags: selectedOrbitBubble.emotionalTags
+      };
+      drawBubbleInfo(tempBubble, bubblePos.x, bubblePos.y);
+    }
+  } else if (!hasTagFilter) {
+    // 태그 필터링이 해제되면 선택된 버블 초기화
+    selectedOrbitBubble = null;
+  }
 
   // 모달 표시
   if (showModal) {
@@ -2317,6 +2200,28 @@ function getSearchMetrics() {
   const Y = NAV_BOTTOM + SEARCH_NAV_GAP * responsiveScale;
 
   return { W, H, X, Y, bottom: Y + H };
+}
+
+// 태그 필터링된 버블 클릭 감지 함수
+function checkOrbitBubbleClick(x, y) {
+  if (orbitBubblePositions.length === 0) return null;
+  
+  // 클릭 위치에서 가장 가까운 버블 찾기
+  let clickedBubble = null;
+  let minDist = Infinity;
+  
+  orbitBubblePositions.forEach(({ bubble, x: bubbleX, y: bubbleY, r }) => {
+    // 클릭 위치와 버블 중심 사이의 거리
+    const distToBubble = dist(x, y, bubbleX, bubbleY);
+    
+    // 버블 반지름 내에 클릭이 있는지 확인
+    if (distToBubble <= r && distToBubble < minDist) {
+      minDist = distToBubble;
+      clickedBubble = bubble;
+    }
+  });
+  
+  return clickedBubble;
 }
 
 // 버블 클릭 감지 함수
@@ -2665,6 +2570,22 @@ function handlePointerUp(x, y, pointerId) {
       searchInput.style("pointer-events", "auto");
     }
     return; // 회전 제어가 끝났으면 패닝은 처리하지 않음
+  }
+  
+  // 태그 필터링된 상태에서 버블 클릭 감지
+  const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
+  if (selectedTag) {
+    const clickedBubble = checkOrbitBubbleClick(x, y);
+    if (clickedBubble) {
+      // 같은 버블을 다시 클릭하면 정보 숨기기, 다른 버블 클릭하면 정보 변경
+      if (selectedOrbitBubble === clickedBubble) {
+        selectedOrbitBubble = null;
+      } else {
+        selectedOrbitBubble = clickedBubble;
+      }
+      startAnim();
+      return;
+    }
   }
   
   // 버블 클릭 감지 및 디버깅 (드래그 여부와 관계없이 항상 확인)
@@ -3370,6 +3291,9 @@ function drawTagFilteredBubbles(selectedTag, groupIndex) {
   // 버블을 Y축 위치에 따라 분류 (아래쪽/위쪽)
   const bubblesBelow = []; // 중심 이미지 아래 (앞에 그려야 함)
   const bubblesAbove = []; // 중심 이미지 위 (뒤에 그려야 함)
+  
+  // 클릭 감지를 위한 위치 정보 초기화
+  orbitBubblePositions = [];
   
   for (let i = 0; i < visibleCount; i++) {
     const bubble = filteredBubbles[i]; // 모든 버블 표시
