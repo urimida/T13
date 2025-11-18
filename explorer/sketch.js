@@ -221,7 +221,7 @@ let filterCacheResult = {
 };
 const MAX_WRAP_COPIES = 6;
 const IMAGE_CHECK_INTERVAL = 400;
-const MAX_CONCURRENT_IMAGE_LOADS = IS_MOBILE ? 2 : 6;
+let MAX_CONCURRENT_IMAGE_LOADS = 2;
 const MAX_IMAGE_QUEUE_LENGTH = 40;
 let imageLoadQueue = [];
 let imageQueueSet = new Set();
@@ -1000,17 +1000,24 @@ function queueVisibleBubbleImages() {
   lastVisibleImageCheck = now;
   const LOAD_MARGIN = 200;
   bubbleManager.bubbles.forEach((b) => {
-    if (b.alpha < 0.01 || b.imageIndex === null) return;
+    // 이미지 인덱스가 없으면 스킵
+    if (b.imageIndex === null || b.imageIndex === undefined) return;
+    // 이미 로딩 중이거나 완료된 이미지는 스킵
     if (imageLoading.has(b.imageIndex) || imageLoaded.has(b.imageIndex)) return;
+    
     const effectiveR =
       b.isPopping && b.popProgress < 1.0
         ? b.r * (1.0 + b.popProgress * 1.5)
         : b.r;
+    
+    // 화면 안(또는 살짝 밖)에 들어온 버블이라면,
+    // 알파값과 관계없이 이미지 로딩을 요청
     const isOnScreen =
       b.pos.x + effectiveR > -LOAD_MARGIN &&
       b.pos.x - effectiveR < width + LOAD_MARGIN &&
       b.pos.y + effectiveR > -LOAD_MARGIN &&
       b.pos.y - effectiveR < height + LOAD_MARGIN;
+    
     if (isOnScreen) {
       requestBubbleImage(b.imageIndex);
     }
@@ -1893,14 +1900,15 @@ function setup() {
   const isMobile = IS_MOBILE;
   
   if (isMobile) {
-    pixelDensity(2); // 태블릿/모바일에서도 화질 유지를 위해 2로 설정
+    pixelDensity(1); // 태블릿/모바일에서는 해상도를 낮춰 발열/부하 감소
     frameRate(20); // 태블릿/모바일에서는 20fps로 제한 (성능 개선)
     MAX_DRAW = 50; // 태블릿에서는 렌더링 버블 수 대폭 감소
   } else {
-    pixelDensity(2); // 데스크톱에서는 텍스트 화질 개선을 위해 2로 설정
-    frameRate(45); // 데스크톱에서는 45fps
+    pixelDensity(1.5); // 데스크톱에서는 적당한 픽셀 밀도로 조정
+    frameRate(30); // 데스크톱에서는 30fps로 제한해 안정성 확보
     MAX_DRAW = 140; // 데스크톱에서는 기본값
   }
+  MAX_CONCURRENT_IMAGE_LOADS = isMobile ? 2 : 6;
   const canvas = createCanvas(windowWidth, windowHeight);
   canvasElement = canvas?.elt ?? null;
   explorerRuntime.setP5Instance(canvas?.pInst ?? null);
@@ -2162,6 +2170,10 @@ function draw() {
     
     lastMemoryCleanup = now;
   }
+  
+  // 누적 렌더링 방지: 매 프레임 캔버스를 완전히 지움
+  clear();
+  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 2 === 0;
   
   // 배경 버퍼 사용 (성능 최적화)
   if (bgBuffer) {
@@ -2460,7 +2472,9 @@ function draw() {
       : 64;
     const NAV_BOTTOM = NAV_Y + NAV_H;
 
-    queueVisibleBubbleImages();
+    if (shouldRunHeavyPass) {
+      queueVisibleBubbleImages();
+    }
 
     // LOD: 보이는 버블만 수집하고 정렬 (간소화)
     const visible = bubbles
@@ -2522,7 +2536,9 @@ function draw() {
     startAnim();
   }
 
-  vignette();
+  if (shouldRunHeavyPass) {
+    vignette();
+  }
 
   // orbitInfoAlpha 애니메이션 업데이트
   const shouldShowInfo = selectedOrbitBubble && hasTagFilter && !isOrbitInfoFadingOut;
