@@ -211,6 +211,7 @@ let WORLD_W, WORLD_H; // 월드 크기 (재사용)
 let bgBuffer; // 배경 버퍼
 let lastFrameTime = 0; // 프레임 스킵을 위한 마지막 프레임 시간
 let frameSkipCounter = 0; // 프레임 스킵 카운터
+let lowPowerMode = false;
 
 // 사용자 상호작용 감시 (무응답 시 자동 새로고침)
 const INACTIVITY_THRESHOLD = 30000; // 30초
@@ -221,6 +222,7 @@ let inactivityIntervalId = null;
 function markUserInteraction() {
   lastUserInteraction =
     (typeof performance !== "undefined" && performance.now()) || Date.now();
+  exitLowPowerMode();
 }
 
 function startInactivityWatcher() {
@@ -238,14 +240,7 @@ function startInactivityWatcher() {
       return;
     }
     if (now - lastUserInteraction >= INACTIVITY_THRESHOLD) {
-      console.warn(
-        "[Explorer] 30초 이상 입력이 없어 자동으로 페이지를 새로 고칩니다."
-      );
-      try {
-        window.location.reload();
-      } catch (err) {
-        console.error("[Explorer] 자동 새로고침 실패:", err);
-      }
+      enterLowPowerMode();
     }
   }, INACTIVITY_THRESHOLD);
 
@@ -255,6 +250,49 @@ function startInactivityWatcher() {
       inactivityIntervalId = null;
     }
   });
+}
+
+function purgeCachedResources() {
+  console.info("[Explorer] Inactivity detected – purging cached resources.");
+  if (Array.isArray(bubbleImages) && bubbleImages.length > 0) {
+    for (let i = 0; i < bubbleImages.length; i++) {
+      bubbleImages[i] = null;
+    }
+  }
+  imageLoaded.clear();
+  imageLoading.clear();
+  if (globalImageCache?.clear) {
+    globalImageCache.clear();
+  }
+  orbitBubblePositions.length = 0;
+  activePointers.clear();
+  if (navBarBuffer?.clear) {
+    navBarBuffer.clear();
+  }
+  if (bgBuffer?.clear) {
+    bgBuffer.clear();
+  }
+}
+
+function enterLowPowerMode() {
+  if (lowPowerMode) return;
+  lowPowerMode = true;
+  purgeCachedResources();
+  if (animationController) {
+    animationController.stop();
+  } else {
+    noLoop();
+  }
+}
+
+function exitLowPowerMode() {
+  if (!lowPowerMode) return;
+  lowPowerMode = false;
+  if (animationController) {
+    animationController.start();
+  } else {
+    loop();
+  }
 }
 
 explorerRuntime.registerCleanup("graphics-buffers", () => {
@@ -1295,6 +1333,9 @@ function redrawBackgroundBuffer() {
 
 // 애니메이션 시작/정지 함수 (하위 호환성)
 function startAnim() {
+  if (lowPowerMode) {
+    return;
+  }
   if (animationController) {
     animationController.start();
   }
@@ -1919,8 +1960,8 @@ function setup() {
     MAX_DRAW = 50; // 태블릿에서는 렌더링 버블 수 대폭 감소
   } else {
     pixelDensity(2); // 데스크톱에서는 텍스트 화질 개선을 위해 2로 설정
-    frameRate(45); // 데스크톱에서는 45fps
-    MAX_DRAW = 140; // 데스크톱에서는 기본값
+    frameRate(30); // 데스크톱에서도 30fps로 제한하여 부하 감소
+    MAX_DRAW = 100; // 데스크톱에서도 렌더링 버블 수 감소
   }
   const canvas = createCanvas(windowWidth, windowHeight);
   explorerRuntime.setP5Instance(canvas?.pInst ?? null);
