@@ -221,7 +221,7 @@ let filterCacheResult = {
 };
 const MAX_WRAP_COPIES = 6;
 const IMAGE_CHECK_INTERVAL = 400;
-const MAX_CONCURRENT_IMAGE_LOADS = 2;
+const MAX_CONCURRENT_IMAGE_LOADS = IS_MOBILE ? 2 : 6;
 const MAX_IMAGE_QUEUE_LENGTH = 40;
 let imageLoadQueue = [];
 let imageQueueSet = new Set();
@@ -1202,11 +1202,24 @@ function startBubbleImageLoad(imageIndex) {
         `[Explorer] bubbleImage[${imageIndex}] (${imageFiles[imageIndex]}) 로딩 실패:`,
         e
       );
-      // 로드 실패한 이미지는 null로 유지 (색상만 표시)
+      // 로드 실패한 이미지는 null로 유지하고 실패로 표시
       bubbleImages[imageIndex] = null;
+      imageLoaded.add(imageIndex); // 실패한 이미지도 "시도 완료"로 표시
       imageLoading.delete(imageIndex);
       activeImageLoads = Math.max(0, activeImageLoads - 1);
       processImageQueue();
+
+      // 이 이미지를 쓰던 버블들은 색 버블로 전환
+      if (bubbleManager && bubbleManager.bubbles) {
+        bubbleManager.bubbles.forEach((b) => {
+          if (b.imageIndex === imageIndex) {
+            b.imageIndex = null; // 앞으로는 이미지 없는 버블로 처리
+            if (b.alpha < 0.01) {
+              b.alpha = 1.0; // 컬러 버블은 바로 보이게
+            }
+          }
+        });
+      }
     }
   );
 }
@@ -1301,16 +1314,9 @@ function drawBubbleVisual(
     bubbleImages[bubble.imageIndex] &&
     bubbleImages[bubble.imageIndex].width > 0;
   
-  // 이미지가 필요한 버블인데 이미지가 아직 로드되지 않았으면 숨김 (깜빡거림 방지)
-  if (bubble.imageIndex !== null && !hasImage && !imageLoading.has(bubble.imageIndex)) {
-    // 이미지 로드가 시작되지 않았으면 로드 시작
+  // 이미지가 필요한 버블인데 이미지가 아직 로드되지 않았으면 로드 시도
+  if (bubble.imageIndex !== null && !hasImage && !imageLoading.has(bubble.imageIndex) && !imageLoaded.has(bubble.imageIndex)) {
     requestBubbleImage(bubble.imageIndex);
-  }
-  
-  // 이미지가 로드 중이거나 아직 로드되지 않았으면 alpha를 0으로 설정하여 숨김
-  if (bubble.imageIndex !== null && !hasImage) {
-    // 이미지가 로드되면 자동으로 페이드인되도록 alpha는 유지 (0.01로 설정되어 있음)
-    if (effectiveAlpha < 0.01) return; // 완전히 숨김
   }
 
   // 메인 버블 백글로우
@@ -2349,7 +2355,6 @@ function draw() {
     // 필터링된 버블들은 이미지 로드 상태 확인 (거리 기반 투명도는 나중에 적용)
     filteredBubbles.forEach((b) => {
       if (!b.isPopping) {
-        // 이미지가 로드되지 않은 버블은 alpha를 0으로 유지 (깜빡거림 방지)
         if (b.imageIndex !== null) {
           const hasImage = bubbleImages[b.imageIndex] && bubbleImages[b.imageIndex].width > 0;
           if (hasImage) {
@@ -2357,10 +2362,17 @@ function draw() {
             if (b.alpha < 0.01) b.alpha = 0.01; // 페이드인 시작
             // 거리 기반 투명도는 중앙 버블 찾은 후 적용되므로 여기서는 최소값만 설정
           } else {
-            b.alpha = 0; // 이미지가 없으면 숨김
-            // 이미지 로드 시작
+            // 아직 로딩 시도조차 안 했으면 로딩 시도
             if (!imageLoading.has(b.imageIndex) && !imageLoaded.has(b.imageIndex)) {
               requestBubbleImage(b.imageIndex);
+              // 로딩 중인 버블도 최소한 살짝 보이게 (완전 투명 X)
+              if (b.alpha < 0.01) b.alpha = 0.01;
+            }
+            // 이미 imageLoaded에 있다 = 실패했거나, 더 이상 시도 안 할 상태
+            // (실패한 경우는 error 콜백에서 imageIndex를 null로 바꿔주므로 여기 올 일이 거의 없음)
+            else if (imageLoaded.has(b.imageIndex)) {
+              // 방어적으로 alpha를 올려줌 (실패한 버블은 이미 imageIndex=null로 바뀌었을 것)
+              if (b.alpha < 0.5) b.alpha = 0.5;
             }
           }
         } else {
