@@ -228,51 +228,6 @@ let imageQueueSet = new Set();
 let activeImageLoads = 0;
 let lastVisibleImageCheck = 0;
 
-// 사용자 상호작용 감시 (무응답 시 자동 새로고침)
-const INACTIVITY_THRESHOLD = 30000; // 30초
-let lastUserInteraction =
-  (typeof performance !== "undefined" && performance.now()) || Date.now();
-let inactivityIntervalId = null;
-
-function markUserInteraction() {
-  lastUserInteraction =
-    (typeof performance !== "undefined" && performance.now()) || Date.now();
-}
-
-function startInactivityWatcher() {
-  if (typeof window === "undefined") return;
-  if (inactivityIntervalId) return;
-
-  markUserInteraction();
-  inactivityIntervalId = window.setInterval(() => {
-    const now =
-      (typeof performance !== "undefined" && performance.now()) || Date.now();
-    const docHidden =
-      typeof document !== "undefined" ? document.hidden : false;
-    if (docHidden || activePointers.size > 0) {
-      markUserInteraction();
-      return;
-    }
-    if (now - lastUserInteraction >= INACTIVITY_THRESHOLD) {
-      console.warn(
-        "[Explorer] 30초 이상 입력이 없어 자동으로 페이지를 새로 고칩니다."
-      );
-      try {
-        window.location.reload();
-      } catch (err) {
-        console.error("[Explorer] 자동 새로고침 실패:", err);
-      }
-    }
-  }, INACTIVITY_THRESHOLD);
-
-  explorerRuntime.registerCleanup("inactivity-watcher", () => {
-    if (inactivityIntervalId) {
-      clearInterval(inactivityIntervalId);
-      inactivityIntervalId = null;
-    }
-  });
-}
-
 explorerRuntime.registerCleanup("graphics-buffers", () => {
   if (bgBuffer?.remove) {
     bgBuffer.remove();
@@ -1664,6 +1619,20 @@ function getBubbleInfo(bubble) {
   };
 }
 
+function drawCenterBubbleInfo(bubble) {
+  if (!bubble) return;
+  const { name: bubbleName, visualTags, emotionalTags } = getBubbleInfo(bubble);
+  if (!bubbleName) return;
+  const infoComponent = new BubbleInfoComponent(
+    bubbleName,
+    visualTags,
+    emotionalTags
+  );
+  const infoX = bubble.pos.x;
+  const infoY = bubble.pos.y + bubble.r + 40;
+  infoComponent.draw(infoX, infoY, 1.0, 18, 14);
+}
+
 // 회전하는 버블 정보 표시 (버블 바로 아래에 붙어서 표시)
 function drawOrbitBubbleInfo(bubble, bubbleX, bubbleY, bubbleRadius = null) {
   const { name: bubbleName, visualTags, emotionalTags } = getBubbleInfo(bubble);
@@ -2013,7 +1982,6 @@ function setup() {
 
   // 포인터 이벤트 설정 (모든 입력 통합)
   setupPointerBridges();
-  startInactivityWatcher();
   
   // 토글 버튼 초기화
   initToggleButtons();
@@ -2617,6 +2585,10 @@ function draw() {
   // 토글 표시
   if (showToggles) {
     drawToggles();
+  }
+
+  if (centerBubble && !showGroupView && !showToggles) {
+    drawCenterBubbleInfo(centerBubble);
   }
 
 }
