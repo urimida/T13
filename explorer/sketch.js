@@ -74,17 +74,6 @@ function cacheImage(path, img) {
   globalImageCache.set(path, img);
 }
 
-const sharedResizeCanvas =
-  globalScope.__T13_EXPLORER_RESIZE_CANVAS__ ??
-  (typeof document !== "undefined" ? document.createElement("canvas") : null);
-const sharedResizeCtx = sharedResizeCanvas
-  ? sharedResizeCanvas.getContext("2d")
-  : null;
-
-if (!globalScope.__T13_EXPLORER_RESIZE_CANVAS__) {
-  globalScope.__T13_EXPLORER_RESIZE_CANVAS__ = sharedResizeCanvas;
-}
-
 // 전역 변수들 (리소스)
 let mikeIcon; // 마이크 아이콘 이미지
 let captureButton; // 캡쳐 버튼 이미지
@@ -209,8 +198,6 @@ let IS_MOBILE = false;
 // 전역 변수 (성능 최적화)
 let WORLD_W, WORLD_H; // 월드 크기 (재사용)
 let bgBuffer; // 배경 버퍼
-let lastFrameTime = 0; // 프레임 스킵을 위한 마지막 프레임 시간
-let frameSkipCounter = 0; // 프레임 스킵 카운터
 let canvasElement = null;
 let filterCacheSignature = null;
 let filterCacheResult = {
@@ -1153,40 +1140,8 @@ function startBubbleImageLoad(imageIndex) {
     imagePath,
     (img) => {
       // 로드 성공
-      // 태블릿/모바일에서는 이미지 해상도 제한 (성능 최적화, 화질 유지)
-      let finalImg = img;
-      if (IS_MOBILE && img) {
-        // 태블릿에서는 최대 1200px로 제한 (화질 유지하면서 성능 개선)
-        const MAX_TABLET_DIMENSION = 1200;
-        if (img.width > MAX_TABLET_DIMENSION || img.height > MAX_TABLET_DIMENSION) {
-          const scale = Math.min(
-            MAX_TABLET_DIMENSION / img.width,
-            MAX_TABLET_DIMENSION / img.height
-          );
-          const newWidth = Math.floor(img.width * scale);
-          const newHeight = Math.floor(img.height * scale);
-
-          if (sharedResizeCanvas && sharedResizeCtx) {
-            // 고품질 리사이징을 위한 재사용 캔버스
-            sharedResizeCanvas.width = newWidth;
-            sharedResizeCanvas.height = newHeight;
-            sharedResizeCtx.imageSmoothingEnabled = true;
-            sharedResizeCtx.imageSmoothingQuality = "high";
-            sharedResizeCtx.clearRect(0, 0, newWidth, newHeight);
-            sharedResizeCtx.drawImage(img.elt, 0, 0, newWidth, newHeight);
-
-            const resizedImg = createImage(newWidth, newHeight);
-            resizedImg.loadPixels();
-            const imageData = sharedResizeCtx.getImageData(0, 0, newWidth, newHeight);
-            resizedImg.pixels = imageData.data;
-            resizedImg.updatePixels();
-            finalImg = resizedImg;
-          }
-        }
-      }
-
-      bubbleImages[imageIndex] = finalImg;
-      cacheImage(imagePath, finalImg);
+      bubbleImages[imageIndex] = img;
+      cacheImage(imagePath, img);
       imageLoaded.add(imageIndex);
       imageLoading.delete(imageIndex);
       activeImageLoads = Math.max(0, activeImageLoads - 1);
@@ -1900,15 +1855,15 @@ function setup() {
   const isMobile = IS_MOBILE;
   
   if (isMobile) {
-    pixelDensity(1); // 태블릿/모바일에서는 해상도를 낮춰 발열/부하 감소
-    frameRate(20); // 태블릿/모바일에서는 20fps로 제한 (성능 개선)
-    MAX_DRAW = 50; // 태블릿에서는 렌더링 버블 수 대폭 감소
+    pixelDensity(1.3); // 태블릿/모바일에서도 화질 유지하면서 발열 완화
+    frameRate(28); // 모바일에서도 부드러운 애니메이션 유지
+    MAX_DRAW = 100; // 한 번에 그리는 버블 수 완화
   } else {
-    pixelDensity(1.5); // 데스크톱에서는 적당한 픽셀 밀도로 조정
-    frameRate(30); // 데스크톱에서는 30fps로 제한해 안정성 확보
-    MAX_DRAW = 140; // 데스크톱에서는 기본값
+    pixelDensity(1.5); // 데스크톱은 적당한 밀도로 유지
+    frameRate(30); // 데스크톱은 30fps로 제한
+    MAX_DRAW = 140;
   }
-  MAX_CONCURRENT_IMAGE_LOADS = isMobile ? 2 : 6;
+  MAX_CONCURRENT_IMAGE_LOADS = isMobile ? 4 : 6;
   const canvas = createCanvas(windowWidth, windowHeight);
   canvasElement = canvas?.elt ?? null;
   explorerRuntime.setP5Instance(canvas?.pInst ?? null);
@@ -1927,8 +1882,7 @@ function setup() {
   drawingContext.textBaseline = "alphabetic";
   drawingContext.textAlign = "start";
   drawingContext.imageSmoothingEnabled = true;
-  // 태블릿에서는 성능을 위해 medium으로 설정 (화질은 여전히 좋음)
-  drawingContext.imageSmoothingQuality = isMobile ? "medium" : "high";
+  drawingContext.imageSmoothingQuality = "high";
   
   // 추가 화질 개선 설정
   if (drawingContext.fontKerning !== undefined) {
@@ -2141,24 +2095,7 @@ function setupPointerBridges() {
 
 
 function draw() {
-  // 태블릿에서 프레임 스킵 로직 (성능 개선)
   const isMobile = IS_MOBILE;
-  if (isMobile) {
-    const currentTime = millis();
-    const targetFrameTime = 1000 / 20; // 20fps 목표
-    if (currentTime - lastFrameTime < targetFrameTime * 0.8) {
-      // 목표 프레임 시간보다 빠르게 실행되면 스킵 (드래그 중이 아닐 때만)
-      const isDragging = panController?.isDragging ?? false;
-      if (!isDragging) {
-        frameSkipCounter++;
-        if (frameSkipCounter < 2) {
-          return; // 프레임 스킵
-        }
-        frameSkipCounter = 0;
-      }
-    }
-    lastFrameTime = currentTime;
-  }
   
   // 주기적 메모리 정리 (60초마다)
   const now = millis();
