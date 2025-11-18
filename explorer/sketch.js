@@ -6,6 +6,85 @@
    3) 스와이프로 배경 이동 탐색
    ========================================================= */
 
+// ---------- 런타임 & 캐시 헬퍼 ----------
+const globalScope = typeof window !== "undefined" ? window : globalThis;
+
+if (globalScope.__T13_EXPLORER_RUNTIME__?.destroy) {
+  // HMR 또는 SPA 재마운트 시 이전 스케치 완전히 정리
+  globalScope.__T13_EXPLORER_RUNTIME__.destroy({ keepCache: true });
+}
+
+function createExplorerRuntime() {
+  const cleanupTasks = new Map();
+  let p5Instance = null;
+  let disposed = false;
+
+  return {
+    registerCleanup(key, fn) {
+      if (!key || typeof fn !== "function") return;
+      if (cleanupTasks.has(key)) {
+        try {
+          cleanupTasks.get(key)();
+        } catch (err) {
+          console.warn(`[Explorer] 기존 정리 작업 실패(${key}):`, err);
+        }
+      }
+      cleanupTasks.set(key, fn);
+    },
+    setP5Instance(instance) {
+      p5Instance = instance;
+    },
+    destroy(options = {}) {
+      if (disposed) return;
+      cleanupTasks.forEach((fn, key) => {
+        try {
+          fn(options);
+        } catch (err) {
+          console.warn(`[Explorer] 정리 작업 실패(${key}):`, err);
+        }
+      });
+      cleanupTasks.clear();
+      if (p5Instance && typeof p5Instance.remove === "function") {
+        try {
+          p5Instance.remove();
+        } catch (err) {
+          console.warn("[Explorer] p5 인스턴스 제거 실패:", err);
+        }
+      }
+      disposed = true;
+    },
+  };
+}
+
+const explorerRuntime = createExplorerRuntime();
+globalScope.__T13_EXPLORER_RUNTIME__ = explorerRuntime;
+globalScope.__T13_EXPLORER_DISPOSE__ = (options) =>
+  explorerRuntime.destroy(options);
+
+const globalImageCache =
+  globalScope.__T13_EXPLORER_IMAGE_CACHE__ ||
+  (globalScope.__T13_EXPLORER_IMAGE_CACHE__ = new Map());
+
+function getCachedImage(path) {
+  return path ? globalImageCache.get(path) || null : null;
+}
+
+function cacheImage(path, img) {
+  if (!path || !img) return;
+  globalImageCache.set(path, img);
+}
+
+const sharedResizeCanvas =
+  globalScope.__T13_EXPLORER_RESIZE_CANVAS__ ??
+  (typeof document !== "undefined" ? document.createElement("canvas") : null);
+const sharedResizeCtx = sharedResizeCanvas
+  ? sharedResizeCanvas.getContext("2d")
+  : null;
+
+if (!globalScope.__T13_EXPLORER_RESIZE_CANVAS__) {
+  globalScope.__T13_EXPLORER_RESIZE_CANVAS__ = sharedResizeCanvas;
+}
+
 // 전역 변수들 (리소스)
 let mikeIcon; // 마이크 아이콘 이미지
 let captureButton; // 캡쳐 버튼 이미지
@@ -22,6 +101,34 @@ let bubbleData = []; // 버블 제목/태그 데이터
 let imageFiles = []; // 이미지 파일명 목록 (전역으로 이동)
 let pretendardFont; // Pretendard 폰트
 let groupImages = {}; // 집단 이미지들 (1: traveler, 2: 20s, 3: 50s, 4: housewife, 5: 10s)
+
+explorerRuntime.registerCleanup("asset-cache", ({ keepCache } = {}) => {
+  if (keepCache) return;
+  bubbleImages.length = 0;
+  imageFiles.length = 0;
+  imageLoading.clear();
+  imageLoaded.clear();
+});
+
+function loadCachedAsset(path) {
+  const cached = getCachedImage(path);
+  if (cached && cached.width > 0 && cached.height > 0) {
+    return cached;
+  }
+  return loadImage(path, (img) => cacheImage(path, img));
+}
+
+function recreateGraphicsBuffer(buffer, w, h) {
+  const needsNewBuffer = !buffer || buffer.width !== w || buffer.height !== h;
+  if (needsNewBuffer) {
+    if (buffer?.remove) {
+      buffer.remove();
+    }
+    return createGraphics(w, h);
+  }
+  buffer.clear();
+  return buffer;
+}
 
 // 중간 단계 버블 드래그 및 길게 누르기 상태
 let orbitBubbleDragState = {
@@ -104,6 +211,17 @@ let WORLD_W, WORLD_H; // 월드 크기 (재사용)
 let bgBuffer; // 배경 버퍼
 let lastFrameTime = 0; // 프레임 스킵을 위한 마지막 프레임 시간
 let frameSkipCounter = 0; // 프레임 스킵 카운터
+
+explorerRuntime.registerCleanup("graphics-buffers", () => {
+  if (bgBuffer?.remove) {
+    bgBuffer.remove();
+  }
+  bgBuffer = null;
+  if (navBarBuffer?.remove) {
+    navBarBuffer.remove();
+  }
+  navBarBuffer = null;
+});
 
 // UI sizes
 const SEARCH_W_RATIO = 0.56;
@@ -997,28 +1115,59 @@ function loadBubbleImage(imageIndex) {
   if (imageIndex === null || imageIndex >= imageFiles.length) return;
   if (imageLoading.has(imageIndex) || imageLoaded.has(imageIndex)) return;
 
+  const imagePath = `../public/assets/bubble-imgs/${imageFiles[imageIndex]}`;
+  const cached = getCachedImage(imagePath);
+  if (cached) {
+    bubbleImages[imageIndex] = cached;
+    imageLoaded.add(imageIndex);
+    imageLoading.delete(imageIndex);
+    return;
+  }
+
   imageLoading.add(imageIndex);
 
   loadImage(
-    `../public/assets/bubble-imgs/${imageFiles[imageIndex]}`,
+    imagePath,
     (img) => {
       // 로드 성공
       // 태블릿/모바일에서는 이미지 해상도 제한 (성능 최적화, 화질 유지)
       const isMobile = isMobileOrTablet();
+      let finalImg = img;
       if (isMobile && img) {
+        // 태블릿에서는 최대 1200px로 제한 (화질 유지하면서 성능 개선)
         const MAX_TABLET_DIMENSION = 1200;
         if (img.width > MAX_TABLET_DIMENSION || img.height > MAX_TABLET_DIMENSION) {
-          if (img.width >= img.height) {
-            img.resize(MAX_TABLET_DIMENSION, 0);
-          } else {
-            img.resize(0, MAX_TABLET_DIMENSION);
+          const scale = Math.min(
+            MAX_TABLET_DIMENSION / img.width,
+            MAX_TABLET_DIMENSION / img.height
+          );
+          const newWidth = Math.floor(img.width * scale);
+          const newHeight = Math.floor(img.height * scale);
+
+          if (sharedResizeCanvas && sharedResizeCtx) {
+            // 고품질 리사이징을 위한 재사용 캔버스
+            sharedResizeCanvas.width = newWidth;
+            sharedResizeCanvas.height = newHeight;
+            sharedResizeCtx.imageSmoothingEnabled = true;
+            sharedResizeCtx.imageSmoothingQuality = "high";
+            sharedResizeCtx.clearRect(0, 0, newWidth, newHeight);
+            sharedResizeCtx.drawImage(img.elt, 0, 0, newWidth, newHeight);
+
+            const resizedImg = createImage(newWidth, newHeight);
+            resizedImg.loadPixels();
+            const imageData = sharedResizeCtx.getImageData(0, 0, newWidth, newHeight);
+            resizedImg.pixels = imageData.data;
+            resizedImg.updatePixels();
+            finalImg = resizedImg;
           }
         }
       }
-      bubbleImages[imageIndex] = img;
+
+      bubbleImages[imageIndex] = finalImg;
+      cacheImage(imagePath, finalImg);
       imageLoaded.add(imageIndex);
       imageLoading.delete(imageIndex);
-      
+
       // 이미지 로드 완료 후 해당 이미지를 사용하는 버블들을 페이드인
       if (bubbleManager && bubbleManager.bubbles) {
         bubbleManager.bubbles.forEach((b) => {
@@ -1053,7 +1202,7 @@ function rebuildWorldMetrics() {
 
 // 배경 버퍼 재생성
 function redrawBackgroundBuffer() {
-  bgBuffer = createGraphics(width, height);
+  bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
   if (
     bgImage &&
     typeof bgImage.width !== "undefined" &&
@@ -1606,19 +1755,29 @@ function assignLanguagesToBubbles() {
 // ---------- p5 LIFECYCLE ----------
 function preload() {
   // preload() 내에서는 콜백 없이 직접 할당 (p5.js가 자동으로 동기 처리)
-  mikeIcon = loadImage("../public/assets/public-imgs/mike.png");
-  captureButton = loadImage("../public/assets/public-imgs/capture-button.png");
-  workroomButton = loadImage("../public/assets/public-imgs/workroom-button.png");
-  navigationBar = loadImage("../public/assets/public-imgs/navigation-bar.png");
-  bgImage = loadImage("../public/assets/public-imgs/bg.png");
-  bubbleCap = loadImage("../public/assets/public-imgs/bubble-cap.png");
+  mikeIcon = loadCachedAsset("../public/assets/public-imgs/mike.png");
+  captureButton = loadCachedAsset(
+    "../public/assets/public-imgs/capture-button.png"
+  );
+  workroomButton = loadCachedAsset(
+    "../public/assets/public-imgs/workroom-button.png"
+  );
+  navigationBar = loadCachedAsset(
+    "../public/assets/public-imgs/navigation-bar.png"
+  );
+  bgImage = loadCachedAsset("../public/assets/public-imgs/bg.png");
+  bubbleCap = loadCachedAsset("../public/assets/public-imgs/bubble-cap.png");
 
   // 집단 이미지 로드
-  groupImages[1] = loadImage("../public/assets/public-imgs/traveler.png"); // 여행자
-  groupImages[2] = loadImage("../public/assets/public-imgs/20s.png"); // 20대 여성
-  groupImages[3] = loadImage("../public/assets/public-imgs/50s.png"); // 50대 남성
-  groupImages[4] = loadImage("../public/assets/public-imgs/housewife.png"); // 주부
-  groupImages[5] = loadImage("../public/assets/public-imgs/10s.png"); // 10대 여성
+  groupImages[1] = loadCachedAsset(
+    "../public/assets/public-imgs/traveler.png"
+  ); // 여행자
+  groupImages[2] = loadCachedAsset("../public/assets/public-imgs/20s.png"); // 20대 여성
+  groupImages[3] = loadCachedAsset("../public/assets/public-imgs/50s.png"); // 50대 남성
+  groupImages[4] = loadCachedAsset(
+    "../public/assets/public-imgs/housewife.png"
+  ); // 주부
+  groupImages[5] = loadCachedAsset("../public/assets/public-imgs/10s.png"); // 10대 여성
 
   // Pretendard 폰트 로드
   pretendardFont = loadFont("../public/assets/fonts/PretendardVariable.ttf");
@@ -1718,7 +1877,18 @@ function setup() {
     frameRate(45); // 데스크톱에서는 45fps
     MAX_DRAW = 140; // 데스크톱에서는 기본값
   }
-  createCanvas(windowWidth, windowHeight);
+  const canvas = createCanvas(windowWidth, windowHeight);
+  explorerRuntime.setP5Instance(canvas?.pInst ?? null);
+
+  if (typeof window !== "undefined") {
+    const beforeUnloadHandler = () => explorerRuntime.destroy();
+    window.addEventListener("beforeunload", beforeUnloadHandler, {
+      once: true,
+    });
+    explorerRuntime.registerCleanup("before-unload", () => {
+      window.removeEventListener("beforeunload", beforeUnloadHandler);
+    });
+  }
 
   // 전역 텍스트 렌더링 품질 개선
   drawingContext.textBaseline = "alphabetic";
@@ -1777,7 +1947,11 @@ function setup() {
     const NAV_W = navigationBar.width * 0.455 * responsiveScale;
     const NAV_H = navigationBar.height * 0.455 * responsiveScale;
     const scaleFactor = 2;
-    navBarBuffer = createGraphics(NAV_W * scaleFactor, NAV_H * scaleFactor);
+    navBarBuffer = recreateGraphicsBuffer(
+      navBarBuffer,
+      NAV_W * scaleFactor,
+      NAV_H * scaleFactor
+    );
     navBarBuffer.imageMode(CORNER);
     navBarBuffer.image(
       navigationBar,
@@ -1912,12 +2086,41 @@ function setupPointerBridges() {
     }
   };
   window.addEventListener("pointercancel", pointerEventHandlers.cancel, { passive: false });
+
+  explorerRuntime.registerCleanup("pointer-events", () => {
+    if (pointerEventHandlers.down) {
+      window.removeEventListener("pointerdown", pointerEventHandlers.down);
+    }
+    if (pointerEventHandlers.move) {
+      window.removeEventListener("pointermove", pointerEventHandlers.move);
+    }
+    if (pointerEventHandlers.up) {
+      window.removeEventListener("pointerup", pointerEventHandlers.up);
+    }
+    if (pointerEventHandlers.cancel) {
+      window.removeEventListener("pointercancel", pointerEventHandlers.cancel);
+    }
+    pointerEventHandlers = {
+      down: null,
+      move: null,
+      up: null,
+      cancel: null,
+    };
+    activePointers.clear();
+  });
 }
 
 function createSearchInput() {
   // 입력 필드 제거 - 더 이상 사용하지 않음
   searchInput = null;
 }
+
+explorerRuntime.registerCleanup("search-input", () => {
+  if (searchInput && typeof searchInput.remove === "function") {
+    searchInput.remove();
+  }
+  searchInput = null;
+});
 
 function draw() {
   // 태블릿에서 프레임 스킵 로직 (성능 개선)
@@ -2483,7 +2686,11 @@ function windowResized() {
     const NAV_W = navigationBar.width * 0.455 * responsiveScale;
     const NAV_H = navigationBar.height * 0.455 * responsiveScale;
     const scaleFactor = 2;
-    navBarBuffer = createGraphics(NAV_W * scaleFactor, NAV_H * scaleFactor);
+    navBarBuffer = recreateGraphicsBuffer(
+      navBarBuffer,
+      NAV_W * scaleFactor,
+      NAV_H * scaleFactor
+    );
     navBarBuffer.imageMode(CORNER);
     navBarBuffer.image(
       navigationBar,
@@ -4074,7 +4281,7 @@ function drawGroupView(groupIndex) {
       // 텍스트 화질 개선: 서브픽셀 렌더링을 위해 정수 반올림 제거
       // 정확한 위치 계산으로 선명한 텍스트 렌더링
       const textX = tagX;
-      const textY = tagY - 9.5;
+      const textY = tagY - 8;
       text(tag, textX, textY);
       
       drawingContext.restore();
