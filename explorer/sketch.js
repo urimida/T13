@@ -47,6 +47,14 @@ const LONG_PRESS_DURATION = 500; // 0.5초 이상 누르면 길게 누르기로 
 let selectedOrbitBubble = null;
 // 버블 정보 표시 alpha (닫힐 때 페이드아웃 애니메이션용)
 let orbitInfoAlpha = 1.0;
+// 버블 정보 페이드아웃 상태 (같은 버블을 다시 클릭했을 때 토글용)
+let isOrbitInfoFadingOut = false;
+
+function resetOrbitBubbleInfo() {
+  selectedOrbitBubble = null;
+  orbitInfoAlpha = 0.0;
+  isOrbitInfoFadingOut = false;
+}
 // 태그 필터링된 버블의 위치 정보 저장 (클릭 감지용)
 let orbitBubblePositions = []; // [{ bubble, x, y, r }]
 
@@ -60,8 +68,8 @@ let bubbleRotationState = {
   isDragging: false, // 드래그 중인지 여부
   lastX: 0, // 직전에 마우스가 있던 x
   lastY: 0, // 직전에 마우스가 있던 y
-  userOverride: false, // 유저가 한 번이라도 손댄 이후엔 자동 회전 끄기
-  autoSpeed: 0.01 // 자동으로 돌아가는 기본 속도
+  autoSpeed: 0.01, // 자동으로 돌아가는 기본 속도
+  didDrag: false // 이번 입력에서 실제 회전 드래그가 있었는지
 };
 
 // ---------- CONFIG ----------
@@ -421,6 +429,7 @@ class UIStateManager {
     this.selectedGroup = groupIndex;
     this.selectedTag = null;
     this.showToggles = false;
+    resetOrbitBubbleInfo();
   }
 
   // 전체보기로 돌아가기
@@ -430,11 +439,13 @@ class UIStateManager {
     this.selectedTag = null;
     this.selectedToggles = [];
     this.previousSelectedToggles = [];
+    resetOrbitBubbleInfo();
   }
 
   // 태그 선택
   selectTag(tag) {
     this.selectedTag = tag;
+    resetOrbitBubbleInfo();
     // 중간 단계 화면은 유지 (태그 선택을 자유롭게 할 수 있도록)
     // this.showGroupView = false; // 중간 단계 화면 닫기 - 제거
   }
@@ -477,7 +488,7 @@ class LanguageManager {
         visual: [
           "고명도 대비",
           "크고 안정된 구형",
-          "차분한 시원색",
+          "차분하고 시원한 색",
           "투명도 높은 반사광",
           "균형 잡힌 색 분포",
         ],
@@ -1445,26 +1456,6 @@ function drawCenterBubbleCap(bubble) {
   pop();
 }
 
-// 페이드 alpha 계산 헬퍼 함수
-function calculateFadeAlpha(bubbleY) {
-  const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
-  const fadeZone = 150;
-  const topFadeEnd = SEARCH_BOTTOM + 50;
-  const topFadeStart = topFadeEnd + fadeZone;
-  const bottomFadeEnd = height - 100;
-  const bottomFadeStart = bottomFadeEnd - fadeZone;
-  
-  // 위쪽 페이드: 아래쪽과 동일한 로직 (topFadeStart에서 1.0, topFadeEnd에서 0.0)
-  if (bubbleY < topFadeStart) {
-    return bubbleY < topFadeEnd ? 0.0 : map(bubbleY, topFadeEnd, topFadeStart, 0.0, 1.0);
-  } 
-  // 아래쪽 페이드: bottomFadeStart에서 1.0, bottomFadeEnd에서 0.0
-  else if (bubbleY > bottomFadeStart) {
-    return bubbleY > bottomFadeEnd ? 0.0 : map(bubbleY, bottomFadeStart, bottomFadeEnd, 1.0, 0.0);
-  }
-  return 1.0;
-}
-
 // 버블 정보 가져오기 헬퍼 함수
 function getBubbleInfo(bubble) {
   if (bubble.imageIndex !== null && bubbleData?.[bubble.imageIndex]) {
@@ -1482,19 +1473,23 @@ function getBubbleInfo(bubble) {
   };
 }
 
-// 회전하는 버블 정보 표시 (바깥쪽에 표시)
-function drawOrbitBubbleInfo(bubble, bubbleX, bubbleY) {
+// 회전하는 버블 정보 표시 (버블 바로 아래에 붙어서 표시)
+function drawOrbitBubbleInfo(bubble, bubbleX, bubbleY, bubbleRadius = null) {
   const { name: bubbleName, visualTags, emotionalTags } = getBubbleInfo(bubble);
   if (!bubbleName) return;
   
-  const margin = 150;
-  const infoX = bubbleX < width / 2 ? margin : width - margin;
-  const fadeAlpha = calculateFadeAlpha(bubbleY);
-  const finalAlpha = fadeAlpha * orbitInfoAlpha; // 위치 기반 alpha와 닫힘 애니메이션 alpha 곱하기
-  if (finalAlpha < 0.01) return;
+  // 버블의 반지름 가져오기
+  const r = bubbleRadius !== null ? bubbleRadius : (bubble.r || 50);
+  
+  // 버블 바로 아래에 표시 (버블 중심에서 반지름 + 여백만큼 아래)
+  const infoX = bubbleX; // 버블과 같은 X 위치 (중앙 정렬)
+  const infoY = bubbleY + r + 30; // 버블 아래 30px
+  
+  // orbitInfoAlpha만 사용 (투명도 관련 함수 제거)
+  if (orbitInfoAlpha < 0.01) return;
   
   const infoComponent = new BubbleInfoComponent(bubbleName, visualTags, emotionalTags);
-  infoComponent.draw(infoX, bubbleY, finalAlpha);
+  infoComponent.draw(infoX, infoY, orbitInfoAlpha);
 }
 
 // 중앙 버블 설명창 그리기
@@ -1547,7 +1542,7 @@ const groupLanguages = {
     visual: [
       "고명도 대비",
       "크고 안정된 구형",
-      "차분한 시원색",
+      "차분하고 시원한 색",
       "투명도 높은 반사광",
       "균형 잡힌 색 분포",
     ],
@@ -1801,8 +1796,8 @@ function setup() {
     // 반응형 스케일 계산 (헬퍼 함수 사용)
     const responsiveScale = getResponsiveScale();
 
-    const NAV_W = navigationBar.width * 0.65 * responsiveScale;
-    const NAV_H = navigationBar.height * 0.65 * responsiveScale;
+    const NAV_W = navigationBar.width * 0.455 * responsiveScale;
+    const NAV_H = navigationBar.height * 0.455 * responsiveScale;
     const scaleFactor = 2;
     navBarBuffer = createGraphics(NAV_W * scaleFactor, NAV_H * scaleFactor);
     navBarBuffer.imageMode(CORNER);
@@ -1997,18 +1992,13 @@ function draw() {
 
   // 버블 회전 각도 업데이트 (태그 필터링 또는 그룹 뷰가 활성화된 경우)
   if (hasTagFilter || showGroupView) {
-    // 1) 자동 회전 (유저가 아직 안 건드렸으면만)
-    if (!bubbleRotationState.userOverride && !bubbleRotationState.isDragging) {
-      bubbleRotationState.rotationAngle += bubbleRotationState.autoSpeed;
-    }
-    
-    // 2) 관성 회전 (드래그로 생긴 속도) - 드래그 중이 아닐 때만
     if (!bubbleRotationState.isDragging) {
+      // 자동 회전
+      bubbleRotationState.rotationAngle += bubbleRotationState.autoSpeed;
+      
+      // 관성 회전
       bubbleRotationState.rotationAngle += bubbleRotationState.angularVelocity;
-      
-      // 마찰(감속) – 숫자 낮출수록 빨리 멈춤
       bubbleRotationState.angularVelocity *= 0.92;
-      
       if (Math.abs(bubbleRotationState.angularVelocity) < 0.0001) {
         bubbleRotationState.angularVelocity = 0;
       }
@@ -2022,7 +2012,7 @@ function draw() {
     bubbleRotationState.rotationAngle = 0;
     bubbleRotationState.angularVelocity = 0;
     bubbleRotationState.isDragging = false;
-    bubbleRotationState.userOverride = false;
+    bubbleRotationState.didDrag = false;
   }
 
   // 패닝 애니메이션 업데이트 (클래스 사용) - 중간 단계에서도 활성화
@@ -2069,7 +2059,7 @@ function draw() {
   const selectedToggles = uiStateManager?.selectedToggles ?? [];
   const previousSelectedToggles = uiStateManager?.previousSelectedToggles ?? [];
   const alignAfterPopStartTime = bubbleManager?.alignAfterPopStartTime ?? null;
-  const currentFilteredBubbles = bubbleManager?.currentFilteredBubbles ?? [];
+  let currentFilteredBubbles = bubbleManager?.currentFilteredBubbles ?? [];
 
   // 중심 위치 계산 (검색창 아래 영역의 중앙)
   const { H: SEARCH_H, bottom: SEARCH_BOTTOM } = getSearchMetrics();
@@ -2101,6 +2091,9 @@ function draw() {
     // 필터링된 버블을 전역 변수에 저장
     if (bubbleManager) {
       bubbleManager.currentFilteredBubbles = filteredBubbles;
+      currentFilteredBubbles = bubbleManager.currentFilteredBubbles;
+    } else {
+      currentFilteredBubbles = filteredBubbles;
     }
     // 태그 필터링 팝 애니메이션은 기본 화면(그룹 뷰가 아닐 때)에서만 수행
     if (bubbleManager && !showGroupView) {
@@ -2116,7 +2109,12 @@ function draw() {
     });
 
     // 필터링된 버블을 전역 변수에 저장 (snapToCenterBubble에서 사용)
-    currentFilteredBubbles = filteredBubbles;
+    if (bubbleManager) {
+      bubbleManager.currentFilteredBubbles = filteredBubbles;
+      currentFilteredBubbles = bubbleManager.currentFilteredBubbles;
+    } else {
+      currentFilteredBubbles = filteredBubbles;
+    }
 
     // 이전 카테고리와 새 카테고리 모두에 포함되는 버블 찾기 (유지되는 버블)
     let previousFilteredBubbles = [];
@@ -2146,6 +2144,9 @@ function draw() {
     // 필터링되지 않았으므로 모든 버블 사용
     if (bubbleManager) {
       bubbleManager.currentFilteredBubbles = bubbles;
+      currentFilteredBubbles = bubbleManager.currentFilteredBubbles;
+    } else {
+      currentFilteredBubbles = bubbles;
     }
   }
 
@@ -2334,7 +2335,7 @@ function draw() {
     // 반응형 스케일 계산 (헬퍼 함수 사용)
     const responsiveScale = getResponsiveScale();
     const NAV_H = navigationBar
-      ? navigationBar.height * 0.45 * responsiveScale
+      ? navigationBar.height * 0.315 * responsiveScale
       : 64;
     const NAV_BOTTOM = NAV_Y + NAV_H;
 
@@ -2403,6 +2404,41 @@ function draw() {
 
   vignette();
 
+  // orbitInfoAlpha 애니메이션 업데이트
+  const shouldShowInfo = selectedOrbitBubble && hasTagFilter && !isOrbitInfoFadingOut;
+  if (shouldShowInfo) {
+    // 표시해야 할 때는 alpha를 1로 증가
+    orbitInfoAlpha = lerp(orbitInfoAlpha, 1.0, 0.15);
+  } else if (selectedOrbitBubble) {
+    // selectedOrbitBubble이 있지만 표시하지 않아야 할 때 (태그/그룹 뷰 종료 등)
+    // alpha를 0으로 감소 (페이드아웃 애니메이션)
+    orbitInfoAlpha = lerp(orbitInfoAlpha, 0.0, 0.15);
+    // alpha가 거의 0이 되면 selectedOrbitBubble을 null로 설정하고 페이드아웃 상태 초기화
+    if (orbitInfoAlpha < 0.01) {
+      selectedOrbitBubble = null;
+      orbitInfoAlpha = 0.0;
+      isOrbitInfoFadingOut = false;
+    }
+  } else {
+    // selectedOrbitBubble이 null일 때는 alpha를 0으로 유지
+    orbitInfoAlpha = lerp(orbitInfoAlpha, 0.0, 0.15);
+    isOrbitInfoFadingOut = false;
+  }
+
+  // 카테고리/태그 선택 시 회전하는 버블 정보 표시 (가장 먼저 그려서 카테고리와 오버레이 뒤에 위치)
+  // selectedOrbitBubble이 있고 alpha가 0보다 크면 표시 (페이드아웃 중에도 표시)
+  if (selectedOrbitBubble && orbitInfoAlpha > 0.01) {
+    // 선택된 버블의 현재 위치 찾기 (orbitBubblePositions에서 찾거나, 없으면 버블의 실제 위치 사용)
+    const bubblePos = orbitBubblePositions.find(p => p.bubble === selectedOrbitBubble);
+    if (bubblePos) {
+      // 버블 바로 아래에 정보 표시 (버블과 함께 움직임)
+      drawOrbitBubbleInfo(selectedOrbitBubble, bubblePos.x, bubblePos.y, bubblePos.r);
+    } else if (selectedOrbitBubble.pos) {
+      // orbitBubblePositions에 없어도 버블의 실제 위치를 사용 (버블이 화면 밖에 있어도)
+      drawOrbitBubbleInfo(selectedOrbitBubble, selectedOrbitBubble.pos.x, selectedOrbitBubble.pos.y, selectedOrbitBubble.r);
+    }
+  }
+
   // 중간 단계 화면 표시 (버블 위에 오버레이)
   // 태그가 선택되어 있어도 중간 단계 화면은 계속 표시
   let bubblesAbove = []; // 위쪽 버블들 (중심 이미지 뒤에 그려야 함)
@@ -2425,6 +2461,15 @@ function draw() {
     });
   }
 
+  // 토글이 열려있을 때 배경 어둡게 (카테고리 외 화면) - 글자들 뒤에 그려서 글자들을 가림
+  if (showToggles) {
+    push();
+    fill(0, 0, 0, 180); // 어두운 오버레이 (더 어둡게)
+    noStroke();
+    rect(0, 0, width, height);
+    pop();
+  }
+
   // 검색창과 네비게이션 바를 가장 위에 그리기 (버블 위에 표시)
   drawNavBar();
   drawSearchBar();
@@ -2434,42 +2479,9 @@ function draw() {
     drawToggles();
   }
 
-  // 설명창은 가장 마지막에 그리기 (다른 요소 위에 표시)
-  if (centerBubble && !showGroupView) {
+  // 설명창은 가장 마지막에 그리기 (토글이 열려있지 않을 때만 표시)
+  if (centerBubble && !showGroupView && !showToggles) {
     drawBubbleInfo(centerBubble, centerX, centerY);
-  }
-  
-  // orbitInfoAlpha 애니메이션 업데이트
-  const shouldShowInfo = selectedOrbitBubble && (hasTagFilter || showGroupView);
-  if (shouldShowInfo) {
-    // 표시해야 할 때는 alpha를 1로 증가
-    orbitInfoAlpha = lerp(orbitInfoAlpha, 1.0, 0.15);
-  } else if (selectedOrbitBubble) {
-    // selectedOrbitBubble이 있지만 표시하지 않아야 할 때 (태그/그룹 뷰 종료 등)
-    // alpha를 0으로 감소 (페이드아웃 애니메이션)
-    orbitInfoAlpha = lerp(orbitInfoAlpha, 0.0, 0.15);
-    // alpha가 거의 0이 되면 selectedOrbitBubble을 null로 설정
-    if (orbitInfoAlpha < 0.01) {
-      selectedOrbitBubble = null;
-      orbitInfoAlpha = 0.0;
-    }
-  } else {
-    // selectedOrbitBubble이 null일 때는 alpha를 0으로 유지
-    orbitInfoAlpha = lerp(orbitInfoAlpha, 0.0, 0.15);
-  }
-  
-  // 카테고리/태그 선택 시 회전하는 버블 정보 표시
-  // selectedOrbitBubble이 있고 alpha가 0보다 크면 표시 (페이드아웃 중에도 표시)
-  if (selectedOrbitBubble && orbitInfoAlpha > 0.01) {
-    // 선택된 버블의 현재 위치 찾기 (orbitBubblePositions에서 찾거나, 없으면 버블의 실제 위치 사용)
-    const bubblePos = orbitBubblePositions.find(p => p.bubble === selectedOrbitBubble);
-    if (bubblePos) {
-      // 바깥쪽에 정보 표시 (화면 가장자리)
-      drawOrbitBubbleInfo(selectedOrbitBubble, bubblePos.x, bubblePos.y);
-    } else if (selectedOrbitBubble.pos) {
-      // orbitBubblePositions에 없어도 버블의 실제 위치를 사용 (버블이 화면 밖에 있어도)
-      drawOrbitBubbleInfo(selectedOrbitBubble, selectedOrbitBubble.pos.x, selectedOrbitBubble.pos.y);
-    }
   }
 
   // 모달 표시
@@ -2490,8 +2502,8 @@ function windowResized() {
     // 반응형 스케일 계산 (헬퍼 함수 사용)
     const responsiveScale = getResponsiveScale();
 
-    const NAV_W = navigationBar.width * 0.65 * responsiveScale;
-    const NAV_H = navigationBar.height * 0.65 * responsiveScale;
+    const NAV_W = navigationBar.width * 0.455 * responsiveScale;
+    const NAV_H = navigationBar.height * 0.455 * responsiveScale;
     const scaleFactor = 2;
     navBarBuffer = createGraphics(NAV_W * scaleFactor, NAV_H * scaleFactor);
     navBarBuffer.imageMode(CORNER);
@@ -2540,7 +2552,7 @@ function getSearchMetrics() {
   // 네비게이션 바 높이 계산
   const NAV_Y = 20;
   const NAV_H = navigationBar
-    ? navigationBar.height * 0.45 * responsiveScale
+    ? navigationBar.height * 0.315 * responsiveScale
     : 64;
   const NAV_BOTTOM = NAV_Y + NAV_H;
 
@@ -2808,16 +2820,24 @@ function handlePointerDown(x, y, pointerId) {
     // 태그 클릭 확인
     const clickedTag = checkTagClick(x, y, uiStateManager.selectedGroup);
     if (clickedTag) {
-      // 태그 선택 시 중간 단계 화면 닫기
-      uiStateManager.selectTag(clickedTag);
-      // 태그 선택 시 해당 집단의 버블만 필터링하도록 설정
-      uiStateManager.selectedToggles = [uiStateManager.selectedGroup];
+      const isSameTag = uiStateManager.selectedTag === clickedTag;
+      if (isSameTag) {
+        // 같은 태그를 다시 클릭하면 선택 해제 후 메인 이미지만 표시
+        uiStateManager.selectedTag = null;
+        resetOrbitBubbleInfo();
+      } else {
+        // 새로운 태그 선택
+        uiStateManager.selectTag(clickedTag);
+        uiStateManager.selectedToggles = [uiStateManager.selectedGroup];
+      }
       startAnim();
       return true;
     }
 
-    // 중간 단계 화면의 다른 영역 클릭은 무시
-    return true;
+    // 태그가 아직 선택되지 않았다면 다른 영역 클릭은 무시
+    if (!uiStateManager.selectedTag) {
+      return true;
+    }
   }
 
   // 검색창이 아닌 곳을 클릭하면 input 비활성화하여 드래그 확보
@@ -2916,12 +2936,16 @@ function handlePointerMove(x, y, pointerId) {
 function handlePointerUp(x, y, pointerId) {
   // 버블 회전 제어 종료
   if (bubbleRotationState.isDragging) {
+    const didRotationDrag = bubbleRotationState.didDrag;
     handleRotationEnd();
     // input 다시 활성화
     if (searchInput) {
       searchInput.style("pointer-events", "auto");
     }
-    return; // 회전 제어가 끝났으면 패닝은 처리하지 않음
+    if (didRotationDrag) {
+      return; // 실제 드래그가 있었다면 클릭 처리 중단
+    }
+    // 드래그가 없었다면 클릭으로 간주하고 아래 로직 계속 진행
   }
   
   // 카테고리/태그 선택 시 회전하는 버블 클릭 감지
@@ -2933,15 +2957,13 @@ function handlePointerUp(x, y, pointerId) {
   if (showGroupView || selectedTag) {
     const clickedBubble = checkOrbitBubbleClick(x, y);
     if (clickedBubble) {
-      // 같은 버블을 다시 클릭하면 정보 숨기기, 다른 버블 클릭하면 정보 변경
+      // 같은 버블을 다시 클릭하면 설명 숨기기, 다른 버블 클릭하면 설명 표시
       if (selectedOrbitBubble === clickedBubble) {
-        // 같은 버블을 다시 클릭: 페이드아웃 시작 (selectedOrbitBubble은 유지하여 애니메이션 보이게)
-        orbitInfoAlpha = 1.0; // 현재 alpha에서 시작하여 0으로 lerp
-        // selectedOrbitBubble은 null로 설정하지 않고 유지 (draw()에서 orbitInfoAlpha가 0이 되면 null로 설정)
+        isOrbitInfoFadingOut = true;
       } else {
-        // 다른 버블 클릭: 새 버블 선택, alpha를 1로 설정
         selectedOrbitBubble = clickedBubble;
-        orbitInfoAlpha = 1.0;
+        orbitInfoAlpha = 0.0; // 0에서 시작하여 서서히 나타남
+        isOrbitInfoFadingOut = false;
       }
       startAnim();
       return;
@@ -2976,12 +2998,12 @@ function drawNavBar() {
   const responsiveScale = getResponsiveScale();
 
   // 버튼 크기 (반응형 스케일 적용) - 20% 증가
-  const BUTTON_W = captureButton.width * 0.8 * responsiveScale;
-  const BUTTON_H = captureButton.height * 0.8 * responsiveScale;
+  const BUTTON_W = captureButton.width * 0.56 * responsiveScale;
+  const BUTTON_H = captureButton.height * 0.56 * responsiveScale;
 
   // 네비게이션 바 크기 (반응형 스케일 적용) - 20% 증가
-  const NAV_W = navigationBar.width * 0.65 * responsiveScale;
-  const NAV_H = navigationBar.height * 0.65 * responsiveScale;
+  const NAV_W = navigationBar.width * 0.455 * responsiveScale;
+  const NAV_H = navigationBar.height * 0.455 * responsiveScale;
 
   // 상단 위치
   const Y = 20;
@@ -3018,12 +3040,12 @@ function checkNavBarClick(x, y) {
   const responsiveScale = getResponsiveScale();
 
   // 버튼 크기 (drawNavBar와 동일)
-  const BUTTON_W = captureButton.width * 0.8 * responsiveScale;
-  const BUTTON_H = captureButton.height * 0.8 * responsiveScale;
+  const BUTTON_W = captureButton.width * 0.56 * responsiveScale;
+  const BUTTON_H = captureButton.height * 0.56 * responsiveScale;
 
   // 네비게이션 바 크기 (drawNavBar와 정확히 동일)
-  const NAV_W = navigationBar.width * 0.65 * responsiveScale;
-  const NAV_H = navigationBar.height * 0.65 * responsiveScale;
+  const NAV_W = navigationBar.width * 0.455 * responsiveScale;
+  const NAV_H = navigationBar.height * 0.455 * responsiveScale;
   const Y = 20;
   const navBarX = (width - NAV_W) / 2;
 
@@ -3190,7 +3212,8 @@ function drawSearchBar() {
 
   // 마이크 아이콘 - 중앙에 배치 (크기 3배 * 2배 = 6배, 화질 개선)
   if (mikeIcon) {
-    const iconSize = 40 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3 * 4; // 3배 * 2배 = 6배 크게
+    const iconSize =
+      40 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3 * 4 * 0.7; // 기존 대비 0.7배 축소
     const iconX = X + (W - iconSize) / 2; // 중앙 정렬
     const iconY = Y + (H - iconSize) / 2 + 20; // 20픽셀 아래로 이동
     const iconCenterX = iconX + iconSize / 2;
@@ -3278,7 +3301,8 @@ function checkSearchBarClick(x, y) {
   const { W, H, X, Y } = getSearchMetrics();
 
   // 마이크 이미지의 실제 크기와 위치 계산 (drawSearchBar와 동일하게 맞춤)
-  const iconSize = 40 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3 * 4; // drawSearchBar와 동일
+  const iconSize =
+    40 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3 * 4 * 0.7; // drawSearchBar와 동일 (0.7배 축소)
   const iconX = X + (W - iconSize) / 2; // 중앙 정렬
   const iconY = Y + (H - iconSize) / 2 + 20; // drawSearchBar와 동일 (20픽셀 아래로 이동)
 
@@ -3485,10 +3509,7 @@ function drawToggles() {
   push();
   drawingContext.save();
   
-  // 배경 오버레이
-  fill(0, 0, 0, 100);
-  noStroke();
-  rect(0, 0, width, height);
+  // 배경 오버레이는 draw()에서 이미 그려지므로 여기서는 제거
   
   // 버튼 그리기
   toggleButtons.forEach(button => button.draw(selectedToggles));
@@ -4021,16 +4042,19 @@ function drawGroupView(groupIndex) {
     // 선택된 태그 확인
     const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
 
+    const TAG_FONT_SCALE = 1.4;
+    const tagFontSize = 16 * TAG_FONT_SCALE * responsiveScale;
+
     allTags.forEach((tag, index) => {
       const angle = angleStep * index - Math.PI / 2; // 위쪽부터 시작
       const tagX = imageX + Math.cos(angle) * tagRadius;
       const tagY = imageY + Math.sin(angle) * tagRadius;
 
       // 태그 크기 계산 (텍스트가 박스 밖으로 나오지 않도록 여유있게)
-      textSize(16 * responsiveScale);
-      const tagPadding = 28 * responsiveScale; // 패딩 증가 (20 → 28)
+      textSize(tagFontSize);
+      const tagPadding = 25 * responsiveScale; // 패딩 증가 (20 → 28)
       const tagWidth = textWidth(tag) + tagPadding * 2;
-      const tagHeight = 56 * responsiveScale; // 높이 증가 (50 → 56, 텍스트 크기 16 + 여유 공간)
+      const tagHeight = 53 * responsiveScale; // 높이 증가 (50 → 56, 텍스트 크기 16 + 여유 공간)
       const tagRadiusRect = tagHeight / 2; // 완전히 둥근 형태
 
       // 선택된 태그인지 확인
@@ -4060,7 +4084,7 @@ function drawGroupView(groupIndex) {
       }
       
       fill(255, 255, 255, 255);
-      textSize(16 * responsiveScale);
+      textSize(tagFontSize);
       textStyle(NORMAL);
       
       // 텍스트 그림자 효과
@@ -4072,7 +4096,7 @@ function drawGroupView(groupIndex) {
       // 텍스트 화질 개선: 서브픽셀 렌더링을 위해 정수 반올림 제거
       // 정확한 위치 계산으로 선명한 텍스트 렌더링
       const textX = tagX;
-      const textY = tagY - 5;
+      const textY = tagY - 9.5;
       text(tag, textX, textY);
       
       drawingContext.restore();
@@ -4110,7 +4134,8 @@ function checkTagClick(x, y, groupIndex) {
   if (pretendardFont) {
     textFont(pretendardFont);
   }
-  textSize(16 * responsiveScale);
+  const TAG_FONT_SCALE = 1.4;
+  textSize(16 * TAG_FONT_SCALE * responsiveScale);
 
   for (let i = 0; i < allTags.length; i++) {
     const angle = angleStep * i - Math.PI / 2;
@@ -4291,6 +4316,7 @@ function handleRotationStart(x, y) {
     bubbleRotationState.isDragging = true;
     bubbleRotationState.lastX = x;
     bubbleRotationState.lastY = y;
+    bubbleRotationState.didDrag = false;
     return true; // 회전 제어 시작됨
   }
   
@@ -4341,9 +4367,9 @@ function handleRotationDrag(x, y) {
   if (timeDelta > 0 && Math.abs(angleDelta) > 0.001) {
     bubbleRotationState.angularVelocity = (angleDelta * dragSensitivity) / timeDelta * 0.5;
   }
-  
-  // 유저가 손댄 순간부터는 자동 회전 종료
-  bubbleRotationState.userOverride = true;
+  if (Math.abs(angleDelta) > 0.0005) {
+    bubbleRotationState.didDrag = true;
+  }
   
   // 마지막 위치 업데이트
   bubbleRotationState.lastX = x;
@@ -4358,7 +4384,9 @@ function handleRotationEnd() {
     if (Math.abs(bubbleRotationState.angularVelocity) < 0.0001) {
       bubbleRotationState.angularVelocity = 0;
     }
-    
-    // 관성은 draw() 함수에서 처리됨
+  }
+
+  if (bubbleRotationState.didDrag) {
+    bubbleRotationState.didDrag = false;
   }
 }
