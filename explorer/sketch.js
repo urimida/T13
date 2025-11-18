@@ -212,6 +212,51 @@ let bgBuffer; // 배경 버퍼
 let lastFrameTime = 0; // 프레임 스킵을 위한 마지막 프레임 시간
 let frameSkipCounter = 0; // 프레임 스킵 카운터
 
+// 사용자 상호작용 감시 (무응답 시 자동 새로고침)
+const INACTIVITY_THRESHOLD = 30000; // 30초
+let lastUserInteraction =
+  (typeof performance !== "undefined" && performance.now()) || Date.now();
+let inactivityIntervalId = null;
+
+function markUserInteraction() {
+  lastUserInteraction =
+    (typeof performance !== "undefined" && performance.now()) || Date.now();
+}
+
+function startInactivityWatcher() {
+  if (typeof window === "undefined") return;
+  if (inactivityIntervalId) return;
+
+  markUserInteraction();
+  inactivityIntervalId = window.setInterval(() => {
+    const now =
+      (typeof performance !== "undefined" && performance.now()) || Date.now();
+    const docHidden =
+      typeof document !== "undefined" ? document.hidden : false;
+    if (docHidden || activePointers.size > 0) {
+      markUserInteraction();
+      return;
+    }
+    if (now - lastUserInteraction >= INACTIVITY_THRESHOLD) {
+      console.warn(
+        "[Explorer] 30초 이상 입력이 없어 자동으로 페이지를 새로 고칩니다."
+      );
+      try {
+        window.location.reload();
+      } catch (err) {
+        console.error("[Explorer] 자동 새로고침 실패:", err);
+      }
+    }
+  }, INACTIVITY_THRESHOLD);
+
+  explorerRuntime.registerCleanup("inactivity-watcher", () => {
+    if (inactivityIntervalId) {
+      clearInterval(inactivityIntervalId);
+      inactivityIntervalId = null;
+    }
+  });
+}
+
 explorerRuntime.registerCleanup("graphics-buffers", () => {
   if (bgBuffer?.remove) {
     bgBuffer.remove();
@@ -1967,6 +2012,7 @@ function setup() {
 
   // 포인터 이벤트 설정 (모든 입력 통합)
   setupPointerBridges();
+  startInactivityWatcher();
   
   // 토글 버튼 초기화
   initToggleButtons();
@@ -1998,6 +2044,7 @@ function setupPointerBridges() {
 
   // 포인터 다운 이벤트
   pointerEventHandlers.down = (e) => {
+    markUserInteraction();
     // 캔버스 영역인지 확인
     const canvas = document.querySelector("canvas");
     if (!canvas || !canvas.contains(e.target)) return;
@@ -2019,6 +2066,7 @@ function setupPointerBridges() {
 
   // 포인터 이동 이벤트
   pointerEventHandlers.move = (e) => {
+    markUserInteraction();
     if (!activePointers.has(e.pointerId)) return;
 
     const canvas = document.querySelector("canvas");
@@ -2045,6 +2093,7 @@ function setupPointerBridges() {
 
   // 포인터 업 이벤트
   pointerEventHandlers.up = (e) => {
+    markUserInteraction();
     if (!activePointers.has(e.pointerId)) return;
 
     const canvas = document.querySelector("canvas");
@@ -2067,6 +2116,7 @@ function setupPointerBridges() {
 
   // 포인터 취소 이벤트 (예: 다중 터치로 인한 취소)
   pointerEventHandlers.cancel = (e) => {
+    markUserInteraction();
     if (!activePointers.has(e.pointerId)) return;
 
     const canvas = document.querySelector("canvas");
