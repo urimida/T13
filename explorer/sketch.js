@@ -87,6 +87,8 @@ let MAX_DRAW = 140; // 그릴 최대 버블 수 (LOD) - 태블릿에서는 동�
 // 전역 변수 (성능 최적화)
 let WORLD_W, WORLD_H; // 월드 크기 (재사용)
 let bgBuffer; // 배경 버퍼
+let lastFrameTime = 0; // 프레임 스킵을 위한 마지막 프레임 시간
+let frameSkipCounter = 0; // 프레임 스킵 카운터
 
 // UI sizes
 const SEARCH_W_RATIO = 0.56;
@@ -794,7 +796,41 @@ function loadBubbleImage(imageIndex) {
     `../public/assets/bubble-imgs/${imageFiles[imageIndex]}`,
     (img) => {
       // 로드 성공
-      bubbleImages[imageIndex] = img;
+      // 태블릿/모바일에서는 이미지 해상도 제한 (성능 최적화, 화질 유지)
+      const isMobile = isMobileOrTablet();
+      if (isMobile && img) {
+        // 태블릿에서는 최대 1200px로 제한 (화질 유지하면서 성능 개선)
+        const MAX_TABLET_DIMENSION = 1200;
+        if (img.width > MAX_TABLET_DIMENSION || img.height > MAX_TABLET_DIMENSION) {
+          const scale = Math.min(
+            MAX_TABLET_DIMENSION / img.width,
+            MAX_TABLET_DIMENSION / img.height
+          );
+          const newWidth = Math.floor(img.width * scale);
+          const newHeight = Math.floor(img.height * scale);
+          
+          // 고품질 리사이징을 위한 임시 캔버스
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = newWidth;
+          tempCanvas.height = newHeight;
+          const ctx = tempCanvas.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img.elt, 0, 0, newWidth, newHeight);
+          
+          // 리사이즈된 이미지로 교체
+          const resizedImg = createImage(newWidth, newHeight);
+          resizedImg.loadPixels();
+          const imageData = ctx.getImageData(0, 0, newWidth, newHeight);
+          resizedImg.pixels = imageData.data;
+          resizedImg.updatePixels();
+          bubbleImages[imageIndex] = resizedImg;
+        } else {
+          bubbleImages[imageIndex] = img;
+        }
+      } else {
+        bubbleImages[imageIndex] = img;
+      }
       imageLoaded.add(imageIndex);
       imageLoading.delete(imageIndex);
 
@@ -1495,7 +1531,8 @@ function setup() {
   drawingContext.textBaseline = "alphabetic";
   drawingContext.textAlign = "start";
   drawingContext.imageSmoothingEnabled = true;
-  drawingContext.imageSmoothingQuality = "high";
+  // 태블릿에서는 성능을 위해 medium으로 설정 (화질은 여전히 좋음)
+  drawingContext.imageSmoothingQuality = isMobile ? "medium" : "high";
   
   // 추가 화질 개선 설정
   if (drawingContext.fontKerning !== undefined) {
@@ -1687,6 +1724,25 @@ function createSearchInput() {
 }
 
 function draw() {
+  // 태블릿에서 프레임 스킵 로직 (성능 개선)
+  const isMobile = isMobileOrTablet();
+  if (isMobile) {
+    const currentTime = millis();
+    const targetFrameTime = 1000 / 20; // 20fps 목표
+    if (currentTime - lastFrameTime < targetFrameTime * 0.8) {
+      // 목표 프레임 시간보다 빠르게 실행되면 스킵 (드래그 중이 아닐 때만)
+      const isDragging = panController?.isDragging ?? false;
+      if (!isDragging) {
+        frameSkipCounter++;
+        if (frameSkipCounter < 2) {
+          return; // 프레임 스킵
+        }
+        frameSkipCounter = 0;
+      }
+    }
+    lastFrameTime = currentTime;
+  }
+  
   // 주기적 메모리 정리 (60초마다)
   const now = millis();
   if (now - lastMemoryCleanup > MEMORY_CLEANUP_INTERVAL) {

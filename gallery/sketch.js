@@ -94,6 +94,8 @@ let WORLD_H = 0; // 월드 크기 (재사용) - 초기값 설정
 let bgBuffer; // 배경 버퍼
 let animating = true; // 애니메이션 상태
 const SPRITES = new Map(); // 스프라이트 캐시 (key: "bucket|hue", val: {g, size})
+let lastFrameTime = 0; // 프레임 스킵을 위한 마지막 프레임 시간
+let frameSkipCounter = 0; // 프레임 스킵 카운터
 
 // UI sizes
 const NAV_H = 64;
@@ -1047,7 +1049,7 @@ function preload() {
         "전통건축",
       ],
       count: 0, // 버블 개수는 나중에 계산
-      imageFile: "kyeongbokgung.png", // 전통 궁궐 이미지
+      imageFile: "kyeongbokgung.webp", // 전통 궁궐 이미지
     },
     {
       id: "strong-contrast",
@@ -1067,7 +1069,7 @@ function preload() {
         "사선 구도",
       ],
       count: 0,
-      imageFile: "building.jpg", // 강한 대비 이미지
+      imageFile: "building.webp", // 강한 대비 이미지
     },
     {
       id: "vivid-color",
@@ -1086,7 +1088,7 @@ function preload() {
         "형광 물질",
       ],
       count: 0,
-      imageFile: "super-market.png", // 슈퍼마켓 이미지
+      imageFile: "super-market.webp", // 슈퍼마켓 이미지
     },
     {
       id: "casual-style",
@@ -1105,7 +1107,7 @@ function preload() {
         "도심",
       ],
       count: 0,
-      imageFile: "crosswalk.png", // 횡단보도 이미지
+      imageFile: "crosswalk.webp", // 횡단보도 이미지
     },
     {
       id: "unique-pattern",
@@ -1127,17 +1129,61 @@ function preload() {
         "하이라키",
       ],
       count: 0,
-      imageFile: "sweater.jpg", // 패턴 이미지
+      imageFile: "sweater.webp", // 패턴 이미지
     },
   ];
 
-  // 카드 이미지 로드
+  // 카드 이미지 로드 (태블릿 최적화 포함)
   cardImages = [];
+  const isMobile = isMobileOrTablet();
   visualLanguageCards.forEach((card) => {
     if (card.imageFile) {
-      const img = loadImage(`../public/assets/bubble-imgs/${card.imageFile}`);
-      cardImages.push(img);
-      card.image = img; // 카드 객체에 이미지 참조 저장
+      loadImage(
+        `../public/assets/bubble-imgs/${card.imageFile}`,
+        (img) => {
+          // 태블릿에서는 이미지 해상도 제한 (성능 최적화, 화질 유지)
+          if (isMobile && img) {
+            const MAX_TABLET_DIMENSION = 1200;
+            if (img.width > MAX_TABLET_DIMENSION || img.height > MAX_TABLET_DIMENSION) {
+              const scale = Math.min(
+                MAX_TABLET_DIMENSION / img.width,
+                MAX_TABLET_DIMENSION / img.height
+              );
+              const newWidth = Math.floor(img.width * scale);
+              const newHeight = Math.floor(img.height * scale);
+              
+              // 고품질 리사이징을 위한 임시 캔버스
+              const tempCanvas = document.createElement('canvas');
+              tempCanvas.width = newWidth;
+              tempCanvas.height = newHeight;
+              const ctx = tempCanvas.getContext('2d');
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = 'high';
+              ctx.drawImage(img.elt, 0, 0, newWidth, newHeight);
+              
+              // 리사이즈된 이미지로 교체
+              const resizedImg = createImage(newWidth, newHeight);
+              resizedImg.loadPixels();
+              const imageData = ctx.getImageData(0, 0, newWidth, newHeight);
+              resizedImg.pixels = imageData.data;
+              resizedImg.updatePixels();
+              cardImages.push(resizedImg);
+              card.image = resizedImg;
+            } else {
+              cardImages.push(img);
+              card.image = img;
+            }
+          } else {
+            cardImages.push(img);
+            card.image = img;
+          }
+        },
+        (e) => {
+          console.error(`카드 이미지 로딩 실패: ${card.imageFile}`, e);
+          cardImages.push(null);
+          card.image = null;
+        }
+      );
     } else {
       cardImages.push(null);
       card.image = null;
@@ -1713,6 +1759,24 @@ function createSearchInput() {
 }
 
 function draw() {
+  // 태블릿에서 프레임 스킵 로직 (성능 개선)
+  const isMobile = isMobileOrTablet();
+  if (isMobile) {
+    const currentTime = millis();
+    const targetFrameTime = 1000 / 30; // 30fps 목표
+    if (currentTime - lastFrameTime < targetFrameTime * 0.8) {
+      // 목표 프레임 시간보다 빠르게 실행되면 스킵 (드래그 중이 아닐 때만)
+      if (!isDragging && !arcDragging) {
+        frameSkipCounter++;
+        if (frameSkipCounter < 2) {
+          return; // 프레임 스킵
+        }
+        frameSkipCounter = 0;
+      }
+    }
+    lastFrameTime = currentTime;
+  }
+  
   // 배경 버퍼 사용 (성능 최적화)
   if (bgBuffer) {
     image(bgBuffer, 0, 0);
@@ -2773,7 +2837,9 @@ function drawNavBar() {
   const navBarX = (width - NAV_W) / 2;
   push();
   drawingContext.imageSmoothingEnabled = true;
-  drawingContext.imageSmoothingQuality = "high";
+  // 태블릿에서는 성능을 위해 medium으로 설정 (화질은 여전히 좋음)
+  const isMobile = isMobileOrTablet();
+  drawingContext.imageSmoothingQuality = isMobile ? "medium" : "high";
   imageMode(CORNER);
   if (navBarBuffer) {
     // 고해상도 버퍼를 원래 크기로 축소하여 그리기
