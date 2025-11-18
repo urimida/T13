@@ -91,7 +91,6 @@ let captureButton; // 캡쳐 버튼 이미지
 let workroomButton; // 워크룸 버튼 이미지
 let navigationBar; // 네비게이션 바 이미지
 let bgImage; // 배경 이미지
-let searchInput; // 검색 입력 필드
 let bubbleCap; // 버블 캡 이미지
 let navBarBuffer; // 네비게이션 바 고해상도 버퍼
 let bubbleImages = []; // 버블 이미지들 (지연 로딩)
@@ -205,13 +204,29 @@ const SEARCH_NAV_GAP = 40; // 네비게이션 바와 검색창 사이 간격
 
 // 성능 최적화 설정
 let MAX_DRAW = 140; // 그릴 최대 버블 수 (LOD) - 태블릿에서는 동적으로 조정됨
+let IS_MOBILE = false;
 
 // 전역 변수 (성능 최적화)
 let WORLD_W, WORLD_H; // 월드 크기 (재사용)
 let bgBuffer; // 배경 버퍼
 let lastFrameTime = 0; // 프레임 스킵을 위한 마지막 프레임 시간
 let frameSkipCounter = 0; // 프레임 스킵 카운터
-let lowPowerMode = false;
+let canvasElement = null;
+let filterCacheSignature = null;
+let filterCacheResult = {
+  filteredBubbles: [],
+  hasTagFilter: false,
+  selectedTag: null,
+  selectedGroup: null,
+};
+const MAX_WRAP_COPIES = 6;
+const IMAGE_CHECK_INTERVAL = 400;
+const MAX_CONCURRENT_IMAGE_LOADS = 2;
+const MAX_IMAGE_QUEUE_LENGTH = 40;
+let imageLoadQueue = [];
+let imageQueueSet = new Set();
+let activeImageLoads = 0;
+let lastVisibleImageCheck = 0;
 
 // 사용자 상호작용 감시 (무응답 시 자동 새로고침)
 const INACTIVITY_THRESHOLD = 30000; // 30초
@@ -222,7 +237,6 @@ let inactivityIntervalId = null;
 function markUserInteraction() {
   lastUserInteraction =
     (typeof performance !== "undefined" && performance.now()) || Date.now();
-  exitLowPowerMode();
 }
 
 function startInactivityWatcher() {
@@ -240,7 +254,14 @@ function startInactivityWatcher() {
       return;
     }
     if (now - lastUserInteraction >= INACTIVITY_THRESHOLD) {
-      enterLowPowerMode();
+      console.warn(
+        "[Explorer] 30초 이상 입력이 없어 자동으로 페이지를 새로 고칩니다."
+      );
+      try {
+        window.location.reload();
+      } catch (err) {
+        console.error("[Explorer] 자동 새로고침 실패:", err);
+      }
     }
   }, INACTIVITY_THRESHOLD);
 
@@ -250,49 +271,6 @@ function startInactivityWatcher() {
       inactivityIntervalId = null;
     }
   });
-}
-
-function purgeCachedResources() {
-  console.info("[Explorer] Inactivity detected – purging cached resources.");
-  if (Array.isArray(bubbleImages) && bubbleImages.length > 0) {
-    for (let i = 0; i < bubbleImages.length; i++) {
-      bubbleImages[i] = null;
-    }
-  }
-  imageLoaded.clear();
-  imageLoading.clear();
-  if (globalImageCache?.clear) {
-    globalImageCache.clear();
-  }
-  orbitBubblePositions.length = 0;
-  activePointers.clear();
-  if (navBarBuffer?.clear) {
-    navBarBuffer.clear();
-  }
-  if (bgBuffer?.clear) {
-    bgBuffer.clear();
-  }
-}
-
-function enterLowPowerMode() {
-  if (lowPowerMode) return;
-  lowPowerMode = true;
-  purgeCachedResources();
-  if (animationController) {
-    animationController.stop();
-  } else {
-    noLoop();
-  }
-}
-
-function exitLowPowerMode() {
-  if (!lowPowerMode) return;
-  lowPowerMode = false;
-  if (animationController) {
-    animationController.start();
-  } else {
-    loop();
-  }
 }
 
 explorerRuntime.registerCleanup("graphics-buffers", () => {
@@ -593,20 +571,12 @@ class PanController {
 // UI 상태 관리자
 class UIStateManager {
   constructor() {
-    this.showModal = false;
     this.showToggles = false;
     this.selectedToggles = [];
     this.previousSelectedToggles = [];
     this.showGroupView = false; // 중간 단계 화면 표시 여부
     this.selectedGroup = null; // 선택된 집단 (1~5)
     this.selectedTag = null; // 선택된 태그 (태그 문자열)
-  }
-
-  toggleModal() {
-    this.showModal = !this.showModal;
-    if (this.showModal) {
-      this.showToggles = false;
-    }
   }
 
   toggleToggles() {
@@ -652,129 +622,13 @@ class UIStateManager {
   }
 }
 
-// 언어 관리자
-class LanguageManager {
-  constructor() {
-    this.groupLanguages = {
-      1: {
-        // 여행자
-        visual: [
-          "깊이감",
-          "메탈릭 쉐이드",
-          "자연광 리플렉션",
-          "미드나잇 톤",
-          "풍경 반사감",
-        ],
-        emotional: [
-          "탐험",
-          "긴장과 기대",
-          "미지로 향함",
-          "고독한 낭만",
-          "체험의 몰입",
-        ],
-      },
-      2: {
-        // 20대 여성
-        visual: [
-          "핑크-옐로우 그라데이션",
-          "젤리 같은 텍스처",
-          "따뜻한 난색 반짝임",
-          "부드러운 곡면",
-          "글로시한 윤기",
-        ],
-        emotional: ["활력", "사랑스러움", "자기표현", "로맨틱", "설렘"],
-      },
-      3: {
-        // 50대 남성
-        visual: [
-          "고명도 대비",
-          "크고 안정된 구형",
-          "차분하고 시원한 색",
-          "투명도 높은 반사광",
-          "균형 잡힌 색 분포",
-        ],
-        emotional: ["보호", "책임감", "신뢰", "안정", "성취"],
-      },
-      4: {
-        // 주부
-        visual: [
-          "소프트 톤",
-          "은은한 파스텔 옐로",
-          "투명한 안정감",
-          "부드러운 난반사",
-          "깨끗한 정결 이미지",
-        ],
-        emotional: ["온기", "안정", "배려", "평온", "따뜻한 일상"],
-      },
-      5: {
-        // 10대 여성
-        visual: [
-          "네온 핑크",
-          "사이버 파스텔",
-          "디지털 글로시",
-          "높은 채도",
-          "K-pop 컬러 팔레트",
-        ],
-        emotional: [
-          "흥미",
-          "자기취향 강도",
-          "아이코닉함",
-          "통통 튀는 귀여움",
-          "즉각적 몰입",
-        ],
-      },
-    };
-  }
-
-  assignLanguagesToBubbles(bubbleData) {
-    for (let i = 0; i < bubbleData.length; i++) {
-      const bubble = bubbleData[i];
-      if (!bubble.attributes || bubble.attributes.length === 0) {
-        bubble.visualTags = [];
-        bubble.emotionalTags = [];
-        continue;
-      }
-
-      const visualTags = [];
-      const emotionalTags = [];
-
-      bubble.attributes.forEach((attr) => {
-        const lang = this.groupLanguages[attr];
-        if (lang) {
-          const visualCount = Math.floor(Math.random() * 2) + 2;
-          const selectedVisual = [];
-          const visualCopy = [...lang.visual];
-          for (let j = 0; j < visualCount && visualCopy.length > 0; j++) {
-            const idx = Math.floor(Math.random() * visualCopy.length);
-            selectedVisual.push(visualCopy[idx]);
-            visualCopy.splice(idx, 1);
-          }
-          visualTags.push(...selectedVisual);
-
-          const emotionalCount = Math.floor(Math.random() * 2) + 2;
-          const selectedEmotional = [];
-          const emotionalCopy = [...lang.emotional];
-          for (let j = 0; j < emotionalCount && emotionalCopy.length > 0; j++) {
-            const idx = Math.floor(Math.random() * emotionalCopy.length);
-            selectedEmotional.push(emotionalCopy[idx]);
-            emotionalCopy.splice(idx, 1);
-          }
-          emotionalTags.push(...selectedEmotional);
-        }
-      });
-
-      bubble.visualTags = [...new Set(visualTags)];
-      bubble.emotionalTags = [...new Set(emotionalTags)];
-    }
-  }
-}
-
 // 버블 매니저
 class BubbleManager {
   constructor() {
     this.bubbles = [];
     this.currentFilteredBubbles = [];
     this.alignAfterPopStartTime = null;
+    this.version = 0;
   }
 
   build() {
@@ -808,6 +662,7 @@ class BubbleManager {
       }
     }
     
+    this.version += 1;
     console.log(`[Explorer] 버블 생성 완료: ${this.bubbles.length}개, imageIndex가 null인 버블: ${this.bubbles.filter(b => b.imageIndex === null).length}개`);
   }
 
@@ -852,11 +707,13 @@ class BubbleManager {
 let animationController;
 let panController;
 let uiStateManager;
-let languageManager;
 let bubbleManager;
+
+let bubbleIdCounter = 0;
 
 class Bubble {
   constructor(gridX, gridY, hueSeed, imageIndex = null) {
+    this.id = bubbleIdCounter++;
     this.gridX = gridX; // 그리드 X 좌표
     this.gridY = gridY; // 그리드 Y 좌표
     this.hueSeed = hueSeed; // 색상 시드
@@ -864,7 +721,11 @@ class Bubble {
     this.baseY = 0; // 기본 Y 위치 (계산됨)
     this.pos = createVector(0, 0); // 화면상 위치 (계산됨)
     this.r = BASE_BUBBLE_RADIUS; // 반지름
-    this.copies = []; // 토러스 래핑 복사본 위치
+    this.copies = Array.from({ length: MAX_WRAP_COPIES }, () => ({
+      x: 0,
+      y: 0,
+      active: false,
+    }));
     // 이미지가 필요한 버블은 이미지가 로드될 때까지 alpha를 0으로 설정 (깜빡거림 방지)
     this.alpha = (imageIndex !== null) ? 0 : 1.0; // 투명도 (페이드아웃 효과용)
     this.imageIndex = imageIndex; // 사용할 이미지 인덱스 (null이면 색상 사용)
@@ -1043,27 +904,39 @@ class Bubble {
 
     this.r = this.baseRadius * breathFactor * noiseFactor * this.interactionScale;
 
-    // 토러스 래핑: 화면 밖으로 나가면 반대편에서 나타나게 (여러 복사본 고려)
-    // 배열 재사용 (GC 방지)
-    this.copies.length = 0;
-    const baseX = displayX;
-    const baseY = displayY;
-
-    // 토러스 래핑 복사본 생성 (간소화)
+    // 토러스 래핑 복사본 생성 (배열 재사용)
     const wrapOffsets = [
       { x: -worldWidth * fisheyeFactor, y: 0, cond: displayX < -this.r },
       { x: worldWidth * fisheyeFactor, y: 0, cond: displayX > width + this.r },
       { x: 0, y: -worldHeight * fisheyeFactor, cond: displayY < -this.r },
       { x: 0, y: worldHeight * fisheyeFactor, cond: displayY > height + this.r },
-      { x: -worldWidth * fisheyeFactor, y: -worldHeight * fisheyeFactor, cond: displayX < -this.r && displayY < -this.r },
-      { x: worldWidth * fisheyeFactor, y: worldHeight * fisheyeFactor, cond: displayX > width + this.r && displayY > height + this.r }
+      {
+        x: -worldWidth * fisheyeFactor,
+        y: -worldHeight * fisheyeFactor,
+        cond: displayX < -this.r && displayY < -this.r,
+      },
+      {
+        x: worldWidth * fisheyeFactor,
+        y: worldHeight * fisheyeFactor,
+        cond: displayX > width + this.r && displayY > height + this.r,
+      },
     ];
-
-    wrapOffsets.forEach(offset => {
+    let copyIndex = 0;
+    wrapOffsets.forEach((offset) => {
+      const slot = this.copies[copyIndex];
+      if (!slot) return;
       if (offset.cond) {
-        this.copies.push(createVector(displayX + offset.x, displayY + offset.y));
+        slot.x = displayX + offset.x;
+        slot.y = displayY + offset.y;
+        slot.active = true;
+        copyIndex++;
+      } else {
+        slot.active = false;
       }
     });
+    for (; copyIndex < this.copies.length; copyIndex++) {
+      this.copies[copyIndex].active = false;
+    }
 
     // 메인 위치 저장
     this.pos.set(displayX, displayY);
@@ -1116,7 +989,7 @@ class Bubble {
     // 토러스 래핑 복사본도 그리기
     if (this.copies) {
       this.copies.forEach((copyPos) => {
-        // 화면에 보이는 복사본만 그리기
+        if (!copyPos.active) return;
         if (
           copyPos.x + this.r > 0 &&
           copyPos.x - this.r < width &&
@@ -1138,65 +1011,168 @@ function bubbleColor(seed) {
   };
 }
 
-// 화면에 보이는 버블의 이미지 지연 로딩
-function loadVisibleBubbleImages() {
-  const LOAD_MARGIN = 200; // 화면 밖 200px까지 미리 로드
+function requestBubbleImage(imageIndex) {
+  if (imageIndex === null || imageIndex >= imageFiles.length) return;
+  if (imageLoading.has(imageIndex) || imageLoaded.has(imageIndex)) return;
+  if (imageQueueSet.has(imageIndex)) return;
+  if (imageLoadQueue.length >= MAX_IMAGE_QUEUE_LENGTH) {
+    const dropped = imageLoadQueue.shift();
+    if (dropped !== undefined) {
+      imageQueueSet.delete(dropped);
+    }
+  }
+  imageLoadQueue.push(imageIndex);
+  imageQueueSet.add(imageIndex);
+  processImageQueue();
+}
 
-  const bubbles = bubbleManager ? bubbleManager.bubbles : [];
-  if (bubbles.length === 0) return;
+function processImageQueue() {
+  while (
+    activeImageLoads < MAX_CONCURRENT_IMAGE_LOADS &&
+    imageLoadQueue.length > 0
+  ) {
+    const nextIndex = imageLoadQueue.shift();
+    if (nextIndex === undefined) continue;
+    imageQueueSet.delete(nextIndex);
+    startBubbleImageLoad(nextIndex);
+  }
+}
 
-  for (const b of bubbles) {
-    // alpha가 너무 작으면 스킵
-    if (b.alpha < 0.01) continue;
-
-    // 이미지 인덱스가 없으면 스킵
-    if (b.imageIndex === null) continue;
-
-    // 이미 로드 중이거나 로드 완료된 이미지는 스킵
-    if (imageLoading.has(b.imageIndex) || imageLoaded.has(b.imageIndex))
-      continue;
-
-    // 버블이 화면에 보이는지 확인 (여유 공간 포함)
+function queueVisibleBubbleImages() {
+  if (!bubbleManager || !bubbleManager.bubbles) return;
+  const now = millis();
+  if (now - lastVisibleImageCheck < IMAGE_CHECK_INTERVAL) return;
+  lastVisibleImageCheck = now;
+  const LOAD_MARGIN = 200;
+  bubbleManager.bubbles.forEach((b) => {
+    if (b.alpha < 0.01 || b.imageIndex === null) return;
+    if (imageLoading.has(b.imageIndex) || imageLoaded.has(b.imageIndex)) return;
     const effectiveR =
       b.isPopping && b.popProgress < 1.0
         ? b.r * (1.0 + b.popProgress * 1.5)
         : b.r;
-
     const isOnScreen =
       b.pos.x + effectiveR > -LOAD_MARGIN &&
       b.pos.x - effectiveR < width + LOAD_MARGIN &&
       b.pos.y + effectiveR > -LOAD_MARGIN &&
       b.pos.y - effectiveR < height + LOAD_MARGIN;
-
     if (isOnScreen) {
-      // 이미지 로드 시작
-      loadBubbleImage(b.imageIndex);
+      requestBubbleImage(b.imageIndex);
+    }
+  });
+}
+
+function ensureFilteredBubblesState() {
+  const bubbles = bubbleManager?.bubbles ?? [];
+  const selectedTag = uiStateManager?.selectedTag ?? null;
+  const selectedGroup = uiStateManager?.selectedGroup ?? null;
+  const selectedToggles = uiStateManager?.selectedToggles ?? [];
+  const previousSelectedToggles = uiStateManager?.previousSelectedToggles ?? [];
+  const showGroupView = uiStateManager?.showGroupView ?? false;
+
+  const signature = [
+    bubbleManager?.version ?? 0,
+    selectedTag ?? "__NONE__",
+    selectedGroup ?? "__NONE__",
+    selectedToggles.length > 0 ? selectedToggles.join(",") : "__ALL__",
+  ].join("|");
+
+  if (signature === filterCacheSignature) {
+    return filterCacheResult;
+  }
+
+  let filteredBubbles = bubbles;
+  let hasTagFilter = false;
+
+  if (selectedTag) {
+    filteredBubbles = bubbles.filter((b) => {
+      if (!b.visualTags && !b.emotionalTags) return false;
+      const allTags = [...(b.visualTags || []), ...(b.emotionalTags || [])];
+      const hasRequestedTag = allTags.includes(selectedTag);
+      if (!hasRequestedTag) return false;
+      if (selectedGroup) {
+        return b.attributes && b.attributes.includes(selectedGroup);
+      }
+      return true;
+    });
+    if (bubbleManager) {
+      bubbleManager.currentFilteredBubbles = filteredBubbles;
+      if (!showGroupView) {
+        bubbleManager.startPoppingBubbles(bubbles, filteredBubbles);
+      }
+    }
+    hasTagFilter = true;
+  } else if (selectedToggles.length > 0) {
+    filteredBubbles = bubbles.filter((b) => {
+      return (
+        b.attributes &&
+        b.attributes.some((attr) => selectedToggles.includes(attr))
+      );
+    });
+
+    let previousFilteredBubbles = [];
+    if (previousSelectedToggles.length > 0) {
+      previousFilteredBubbles = bubbles.filter((b) => {
+        return (
+          b.attributes &&
+          b.attributes.some((attr) => previousSelectedToggles.includes(attr))
+        );
+      });
+    }
+    const commonBubbles = filteredBubbles.filter((b) =>
+      previousFilteredBubbles.includes(b)
+    );
+
+    if (bubbleManager) {
+      bubbleManager.currentFilteredBubbles = filteredBubbles;
+      bubbleManager.startPoppingBubbles(
+        bubbles,
+        filteredBubbles,
+        commonBubbles
+      );
+    }
+  } else {
+    if (bubbleManager) {
+      bubbleManager.currentFilteredBubbles = bubbles;
+      bubbleManager.stopAllPopping(bubbles);
     }
   }
+
+  filterCacheSignature = signature;
+  filterCacheResult = {
+    filteredBubbles,
+    hasTagFilter,
+    selectedTag,
+    selectedGroup,
+  };
+
+  return filterCacheResult;
 }
 
 // 모든 버블에서 사용되는 이미지들을 한 번에 미리 로드
 // (화면 안에 들어온 버블들이 색 버블로만 남지 않도록 보장)
-function preloadAllBubbleImages() {
+function preloadInitialImages(count = 12) {
   if (!bubbleManager || !bubbleManager.bubbles) return;
-
   const bubbles = bubbleManager.bubbles;
-  const uniqueImageIndexes = new Set();
-
+  const uniqueIndexes = [];
+  const seen = new Set();
   for (const b of bubbles) {
-    if (b.imageIndex === null || b.imageIndex === undefined) continue;
-    if (b.imageIndex < 0 || b.imageIndex >= imageFiles.length) continue;
-    if (uniqueImageIndexes.has(b.imageIndex)) continue;
-
-    uniqueImageIndexes.add(b.imageIndex);
-    loadBubbleImage(b.imageIndex);
+    const idx = b.imageIndex;
+    if (idx === null || idx === undefined) continue;
+    if (idx < 0 || idx >= imageFiles.length) continue;
+    if (seen.has(idx)) continue;
+    seen.add(idx);
+    uniqueIndexes.push(idx);
+    if (uniqueIndexes.length >= count) break;
   }
+  uniqueIndexes.forEach((idx) => requestBubbleImage(idx));
 }
 
 // 개별 버블 이미지 로드 함수
-function loadBubbleImage(imageIndex) {
+function startBubbleImageLoad(imageIndex) {
   if (imageIndex === null || imageIndex >= imageFiles.length) return;
   if (imageLoading.has(imageIndex) || imageLoaded.has(imageIndex)) return;
+  activeImageLoads++;
 
   const imagePath = `../public/assets/bubble-imgs/${imageFiles[imageIndex]}`;
   const cached = getCachedImage(imagePath);
@@ -1204,6 +1180,8 @@ function loadBubbleImage(imageIndex) {
     bubbleImages[imageIndex] = cached;
     imageLoaded.add(imageIndex);
     imageLoading.delete(imageIndex);
+    activeImageLoads = Math.max(0, activeImageLoads - 1);
+    processImageQueue();
     return;
   }
 
@@ -1214,9 +1192,8 @@ function loadBubbleImage(imageIndex) {
     (img) => {
       // 로드 성공
       // 태블릿/모바일에서는 이미지 해상도 제한 (성능 최적화, 화질 유지)
-      const isMobile = isMobileOrTablet();
       let finalImg = img;
-      if (isMobile && img) {
+      if (IS_MOBILE && img) {
         // 태블릿에서는 최대 1200px로 제한 (화질 유지하면서 성능 개선)
         const MAX_TABLET_DIMENSION = 1200;
         if (img.width > MAX_TABLET_DIMENSION || img.height > MAX_TABLET_DIMENSION) {
@@ -1250,6 +1227,8 @@ function loadBubbleImage(imageIndex) {
       cacheImage(imagePath, finalImg);
       imageLoaded.add(imageIndex);
       imageLoading.delete(imageIndex);
+      activeImageLoads = Math.max(0, activeImageLoads - 1);
+      processImageQueue();
 
       // 이미지 로드 완료 후 해당 이미지를 사용하는 버블들을 페이드인
       if (bubbleManager && bubbleManager.bubbles) {
@@ -1271,6 +1250,8 @@ function loadBubbleImage(imageIndex) {
       // 로드 실패한 이미지는 null로 유지 (색상만 표시)
       bubbleImages[imageIndex] = null;
       imageLoading.delete(imageIndex);
+      activeImageLoads = Math.max(0, activeImageLoads - 1);
+      processImageQueue();
     }
   );
 }
@@ -1333,9 +1314,6 @@ function redrawBackgroundBuffer() {
 
 // 애니메이션 시작/정지 함수 (하위 호환성)
 function startAnim() {
-  if (lowPowerMode) {
-    return;
-  }
   if (animationController) {
     animationController.start();
   }
@@ -1371,7 +1349,7 @@ function drawBubbleVisual(
   // 이미지가 필요한 버블인데 이미지가 아직 로드되지 않았으면 숨김 (깜빡거림 방지)
   if (bubble.imageIndex !== null && !hasImage && !imageLoading.has(bubble.imageIndex)) {
     // 이미지 로드가 시작되지 않았으면 로드 시작
-    loadBubbleImage(bubble.imageIndex);
+    requestBubbleImage(bubble.imageIndex);
   }
   
   // 이미지가 로드 중이거나 아직 로드되지 않았으면 alpha를 0으로 설정하여 숨김
@@ -1705,20 +1683,6 @@ function drawOrbitBubbleInfo(bubble, bubbleX, bubbleY, bubbleRadius = null) {
   infoComponent.draw(infoX, infoY, orbitInfoAlpha);
 }
 
-// 중앙 버블 설명창 그리기
-function drawBubbleInfo(bubble, centerX, centerY) {
-  const infoY = bubble.pos.y + bubble.r + 20;
-  const titleX = bubble.pos.x;
-  const titleY = infoY + 25;
-  
-  const infoComponent = new BubbleInfoComponent(
-    bubble.name,
-    bubble.visualTags || [],
-    bubble.emotionalTags || []
-  );
-  infoComponent.draw(titleX, titleY, 1.0, 18, 14);
-}
-
 // ---------- 집단별 언어 데이터 ----------
 // 각 집단의 시각적 언어와 감정적 언어 정의
 const groupLanguages = {
@@ -1917,9 +1881,8 @@ async function loadBubbleDataFromJSON() {
         bubbleManager.build();
         console.log(`[Explorer] 버블 재생성 완료`);
 
-        // JSON과 버블 생성이 끝난 시점에, 화면에서 사용할 모든 버블 이미지 미리 로드
-        // (화면 안에 들어온 버블들이 사진 없이 색 버블로만 남지 않도록 하기 위함)
-        preloadAllBubbleImages();
+        // 초기 버블 일부만 미리 로드
+        preloadInitialImages();
       }
     } else {
       console.error("[Explorer] JSON에서 bubbles를 로드할 수 없습니다", bubblesJson);
@@ -1948,11 +1911,11 @@ function setup() {
   animationController = new AnimationController();
   panController = new PanController();
   uiStateManager = new UIStateManager();
-  languageManager = new LanguageManager();
   bubbleManager = new BubbleManager();
 
   // 태블릿/모바일 최적화
-  const isMobile = isMobileOrTablet();
+  IS_MOBILE = isMobileOrTablet();
+  const isMobile = IS_MOBILE;
   
   if (isMobile) {
     pixelDensity(2); // 태블릿/모바일에서도 화질 유지를 위해 2로 설정
@@ -1960,10 +1923,11 @@ function setup() {
     MAX_DRAW = 50; // 태블릿에서는 렌더링 버블 수 대폭 감소
   } else {
     pixelDensity(2); // 데스크톱에서는 텍스트 화질 개선을 위해 2로 설정
-    frameRate(30); // 데스크톱에서도 30fps로 제한하여 부하 감소
-    MAX_DRAW = 100; // 데스크톱에서도 렌더링 버블 수 감소
+    frameRate(45); // 데스크톱에서는 45fps
+    MAX_DRAW = 140; // 데스크톱에서는 기본값
   }
   const canvas = createCanvas(windowWidth, windowHeight);
+  canvasElement = canvas?.elt ?? null;
   explorerRuntime.setP5Instance(canvas?.pInst ?? null);
 
   if (typeof window !== "undefined") {
@@ -1992,9 +1956,6 @@ function setup() {
   
   // 공용 버블 데이터 JSON 비동기 로드 (로드 완료 후 버블 생성)
   loadBubbleDataFromJSON();
-
-  // 검색 입력 필드 생성
-  createSearchInput();
 
   // 자산 로딩 확인 및 에러 체크 (헬퍼 함수로 간소화)
   const checkAsset = (asset, name, onSuccess = null) => {
@@ -2048,8 +2009,7 @@ function setup() {
     );
   }
 
-  // 초기 화면에 보이는 버블 이미지 로드
-  loadVisibleBubbleImages();
+  queueVisibleBubbleImages();
 
   // 포인터 이벤트 설정 (모든 입력 통합)
   setupPointerBridges();
@@ -2085,11 +2045,10 @@ function setupPointerBridges() {
 
   // 포인터 다운 이벤트
   pointerEventHandlers.down = (e) => {
-    markUserInteraction();
-    // 캔버스 영역인지 확인
-    const canvas = document.querySelector("canvas");
+    const canvas = canvasElement;
     if (!canvas || !canvas.contains(e.target)) return;
 
+    // 캔버스 영역인지 확인
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -2107,10 +2066,9 @@ function setupPointerBridges() {
 
   // 포인터 이동 이벤트
   pointerEventHandlers.move = (e) => {
-    markUserInteraction();
     if (!activePointers.has(e.pointerId)) return;
 
-    const canvas = document.querySelector("canvas");
+    const canvas = canvasElement;
     if (!canvas) return;
 
     const rect = canvas.getBoundingClientRect();
@@ -2134,10 +2092,9 @@ function setupPointerBridges() {
 
   // 포인터 업 이벤트
   pointerEventHandlers.up = (e) => {
-    markUserInteraction();
     if (!activePointers.has(e.pointerId)) return;
 
-    const canvas = document.querySelector("canvas");
+    const canvas = canvasElement;
     if (!canvas) return;
 
     const rect = canvas.getBoundingClientRect();
@@ -2157,10 +2114,9 @@ function setupPointerBridges() {
 
   // 포인터 취소 이벤트 (예: 다중 터치로 인한 취소)
   pointerEventHandlers.cancel = (e) => {
-    markUserInteraction();
     if (!activePointers.has(e.pointerId)) return;
 
-    const canvas = document.querySelector("canvas");
+    const canvas = canvasElement;
     if (!canvas) return;
 
     const rect = canvas.getBoundingClientRect();
@@ -2201,21 +2157,10 @@ function setupPointerBridges() {
   });
 }
 
-function createSearchInput() {
-  // 입력 필드 제거 - 더 이상 사용하지 않음
-  searchInput = null;
-}
-
-explorerRuntime.registerCleanup("search-input", () => {
-  if (searchInput && typeof searchInput.remove === "function") {
-    searchInput.remove();
-  }
-  searchInput = null;
-});
 
 function draw() {
   // 태블릿에서 프레임 스킵 로직 (성능 개선)
-  const isMobile = isMobileOrTablet();
+  const isMobile = IS_MOBILE;
   if (isMobile) {
     const currentTime = millis();
     const targetFrameTime = 1000 / 20; // 20fps 목표
@@ -2255,7 +2200,10 @@ function draw() {
   const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
   const selectedGroup = uiStateManager ? uiStateManager.selectedGroup : null;
   const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
-  const hasTagFilter = selectedTag !== null;
+  const bubbles = bubbleManager?.bubbles ?? [];
+  const filterState = ensureFilteredBubblesState();
+  const hasTagFilter = filterState.hasTagFilter;
+  let currentFilteredBubbles = filterState.filteredBubbles;
 
   const orbitModeActive = !!showGroupView;
   if (!orbitModeActive) {
@@ -2325,13 +2273,9 @@ function draw() {
   const snapCompleted = panController?.snapCompleted ?? false;
   const panVelocityX = panController?.panVelocityX ?? 0;
   const panVelocityY = panController?.panVelocityY ?? 0;
-  const bubbles = bubbleManager?.bubbles ?? [];
-  const showModal = uiStateManager?.showModal ?? false;
   let showToggles = uiStateManager?.showToggles ?? false;
-  const selectedToggles = uiStateManager?.selectedToggles ?? [];
-  const previousSelectedToggles = uiStateManager?.previousSelectedToggles ?? [];
   const alignAfterPopStartTime = bubbleManager?.alignAfterPopStartTime ?? null;
-  let currentFilteredBubbles = bubbleManager?.currentFilteredBubbles ?? [];
+  const filteredBubbles = filterState.filteredBubbles;
 
   // 중심 위치 계산 (검색창 아래 영역의 중앙)
   const { H: SEARCH_H, bottom: SEARCH_BOTTOM } = getSearchMetrics();
@@ -2345,82 +2289,7 @@ function draw() {
 
   // 중간 단계 화면 상태 확인 (위에서 이미 선언됨)
 
-  // 버블 필터링 (태그 기반 필터링 우선, 그 다음 토글 기반 필터링)
-  let filteredBubbles = bubbles;
-  if (selectedTag) {
-    // 태그 기반 필터링: 선택된 태그를 포함하는 버블만 표시
-    filteredBubbles = bubbles.filter((b) => {
-      if (!b.visualTags && !b.emotionalTags) return false;
-      const allTags = [...(b.visualTags || []), ...(b.emotionalTags || [])];
-      return allTags.includes(selectedTag);
-    });
-    // 태그 필터링 시 해당 집단의 버블만 표시
-    if (selectedGroup) {
-      filteredBubbles = filteredBubbles.filter((b) => {
-        return b.attributes && b.attributes.includes(selectedGroup);
-      });
-    }
-    // 필터링된 버블을 전역 변수에 저장
-    if (bubbleManager) {
-      bubbleManager.currentFilteredBubbles = filteredBubbles;
-      currentFilteredBubbles = bubbleManager.currentFilteredBubbles;
-    } else {
-      currentFilteredBubbles = filteredBubbles;
-    }
-    // 태그 필터링 팝 애니메이션은 기본 화면(그룹 뷰가 아닐 때)에서만 수행
-    if (bubbleManager && !showGroupView) {
-      bubbleManager.startPoppingBubbles(bubbles, filteredBubbles);
-    }
-  } else if (selectedToggles.length > 0) {
-    filteredBubbles = bubbles.filter((b) => {
-      // 버블의 속성 중 하나라도 선택된 토글에 포함되면 표시
-      return (
-        b.attributes &&
-        b.attributes.some((attr) => selectedToggles.includes(attr))
-      );
-    });
-
-    // 필터링된 버블을 전역 변수에 저장 (snapToCenterBubble에서 사용)
-    if (bubbleManager) {
-      bubbleManager.currentFilteredBubbles = filteredBubbles;
-      currentFilteredBubbles = bubbleManager.currentFilteredBubbles;
-    } else {
-      currentFilteredBubbles = filteredBubbles;
-    }
-
-    // 이전 카테고리와 새 카테고리 모두에 포함되는 버블 찾기 (유지되는 버블)
-    let previousFilteredBubbles = [];
-    if (previousSelectedToggles.length > 0) {
-      previousFilteredBubbles = bubbles.filter((b) => {
-        return (
-          b.attributes &&
-          b.attributes.some((attr) => previousSelectedToggles.includes(attr))
-        );
-      });
-    }
-
-    // 공통 버블 (이전과 새 카테고리 모두에 포함되는 버블)
-    const commonBubbles = filteredBubbles.filter((b) =>
-      previousFilteredBubbles.includes(b)
-    );
-
-    // 필터링되지 않은 버블들 팡 터지기 시작 (단, 공통 버블은 제외)
-    if (bubbleManager) {
-      bubbleManager.startPoppingBubbles(bubbles, filteredBubbles, commonBubbles);
-    }
-  } else {
-    // 토글이 선택되지 않았으면 모든 팡 터지는 애니메이션 중지
-    if (bubbleManager) {
-      bubbleManager.stopAllPopping(bubbles);
-    }
-    // 필터링되지 않았으므로 모든 버블 사용
-    if (bubbleManager) {
-      bubbleManager.currentFilteredBubbles = bubbles;
-      currentFilteredBubbles = bubbleManager.currentFilteredBubbles;
-    } else {
-      currentFilteredBubbles = bubbles;
-    }
-  }
+  const selectedToggles = uiStateManager?.selectedToggles ?? [];
 
   // 팡 터지는 애니메이션 업데이트 (간소화)
   const POP_DURATION = 500;
@@ -2523,7 +2392,7 @@ function draw() {
             b.alpha = 0; // 이미지가 없으면 숨김
             // 이미지 로드 시작
             if (!imageLoading.has(b.imageIndex) && !imageLoaded.has(b.imageIndex)) {
-              loadBubbleImage(b.imageIndex);
+              requestBubbleImage(b.imageIndex);
             }
           }
         } else {
@@ -2611,8 +2480,7 @@ function draw() {
       : 64;
     const NAV_BOTTOM = NAV_Y + NAV_H;
 
-    // 화면에 보이는 버블의 이미지 지연 로딩
-    loadVisibleBubbleImages();
+    queueVisibleBubbleImages();
 
     // LOD: 보이는 버블만 수집하고 정렬 (간소화)
     const visible = bubbles
@@ -2751,15 +2619,6 @@ function draw() {
     drawToggles();
   }
 
-  // 설명창은 가장 마지막에 그리기 (토글이 열려있지 않을 때만 표시)
-  if (centerBubble && !showGroupView && !showToggles) {
-    drawBubbleInfo(centerBubble, centerX, centerY);
-  }
-
-  // 모달 표시
-  if (showModal) {
-    drawModal();
-  }
 }
 
 function windowResized() {
@@ -2792,20 +2651,6 @@ function windowResized() {
     );
   }
 
-  // 검색 입력 필드 위치 업데이트
-  if (searchInput) {
-    const responsiveScale = getResponsiveScale();
-    const { W, H, X, Y } = getSearchMetrics();
-
-    searchInput.position(X, Y);
-    searchInput.size(W, H);
-    searchInput.style(
-      "font-size",
-      `${16 * SEARCH_SCALE * responsiveScale * 1.2 * 1.5 * 1.3}px`
-    );
-    searchInput.style("text-align", "center"); // 텍스트 중앙 정렬
-    searchInput.style("line-height", `${H}px`); // 세로 중앙 정렬을 위한 line-height
-  }
 }
 
 // ---------- UTILS ----------
@@ -3117,26 +2962,6 @@ function handlePointerDown(x, y, pointerId) {
   }
 
   // 검색창이 아닌 곳을 클릭하면 input 비활성화하여 드래그 확보
-  if (!isSearchBarClick && searchInput) {
-    searchInput.style("pointer-events", "none"); // 캔버스 드래그 확보
-  }
-
-  // 네비게이션 바 클릭 확인
-  if (navigationBar && checkNavBarClick(x, y)) {
-    if (uiStateManager) {
-      uiStateManager.showModal = true;
-      uiStateManager.showToggles = false;
-    }
-    startAnim(); // 모달 애니메이션을 위해 애니메이션 시작
-    return true; // 이벤트 처리됨
-  }
-
-  // 모달이 열려있으면 닫기
-  if (uiStateManager && uiStateManager.showModal) {
-    uiStateManager.showModal = false;
-    return true; // 이벤트 처리됨
-  }
-
   // 토글이 열려있으면 토글 클릭 확인
   if (uiStateManager && uiStateManager.showToggles) {
     const clickedToggle = checkToggleClick(x, y);
@@ -3214,10 +3039,6 @@ function handlePointerUp(x, y, pointerId) {
   if (bubbleRotationState.isDragging) {
     const didRotationDrag = bubbleRotationState.didDrag;
     handleRotationEnd();
-    // input 다시 활성화
-    if (searchInput) {
-      searchInput.style("pointer-events", "auto");
-    }
     if (didRotationDrag) {
       return; // 실제 드래그가 있었다면 클릭 처리 중단
     }
@@ -3253,11 +3074,6 @@ function handlePointerUp(x, y, pointerId) {
 
   // 패닝 컨트롤러 사용
   panController.endDrag();
-
-  // input 다시 활성화
-  if (searchInput) {
-    searchInput.style("pointer-events", "auto");
-  }
 
   // 드래그가 끝난 직후 바로 중앙 버블로 스냅
   // 관성이 시작되기 전에 스냅하여 버블이 흐르지 않도록 함
@@ -3346,138 +3162,6 @@ function checkNavBarClick(x, y) {
 }
 
 // 글래스모피즘 스타일 모달 그리기
-function drawModal() {
-  push();
-  drawingContext.save();
-
-  // 배경 오버레이 (어둡게)
-  fill(0, 0, 0, 180);
-  noStroke();
-  rect(0, 0, width, height);
-
-  // 모달 크기
-  const modalWidth = 420;
-  const modalHeight = 180;
-  const modalX = (width - modalWidth) / 2;
-  const modalY = (height - modalHeight) / 2;
-  const radius = 32;
-
-  // 모달 배경 (글래스모피즘)
-  // 배경 그라데이션
-  const gradient = drawingContext.createLinearGradient(
-    modalX,
-    modalY,
-    modalX,
-    modalY + modalHeight
-  );
-  gradient.addColorStop(0, "rgba(255, 255, 255, 0.2)");
-  gradient.addColorStop(0.5, "rgba(255, 255, 255, 0.15)");
-  gradient.addColorStop(1, "rgba(255, 255, 255, 0.1)");
-  drawingContext.fillStyle = gradient;
-
-  // 그림자 효과
-  drawingContext.shadowBlur = 30;
-  drawingContext.shadowColor = "rgba(0, 0, 0, 0.5)";
-  drawingContext.shadowOffsetX = 0;
-  drawingContext.shadowOffsetY = 8;
-
-  // 둥근 사각형
-  drawingContext.beginPath();
-  drawingContext.moveTo(modalX + radius, modalY);
-  drawingContext.lineTo(modalX + modalWidth - radius, modalY);
-  drawingContext.quadraticCurveTo(
-    modalX + modalWidth,
-    modalY,
-    modalX + modalWidth,
-    modalY + radius
-  );
-  drawingContext.lineTo(modalX + modalWidth, modalY + modalHeight - radius);
-  drawingContext.quadraticCurveTo(
-    modalX + modalWidth,
-    modalY + modalHeight,
-    modalX + modalWidth - radius,
-    modalY + modalHeight
-  );
-  drawingContext.lineTo(modalX + radius, modalY + modalHeight);
-  drawingContext.quadraticCurveTo(
-    modalX,
-    modalY + modalHeight,
-    modalX,
-    modalY + modalHeight - radius
-  );
-  drawingContext.lineTo(modalX, modalY + radius);
-  drawingContext.quadraticCurveTo(modalX, modalY, modalX + radius, modalY);
-  drawingContext.closePath();
-  drawingContext.fill();
-
-  // 테두리 효과 (글래스모피즘)
-  drawingContext.shadowBlur = 0;
-  drawingContext.shadowOffsetX = 0;
-  drawingContext.shadowOffsetY = 0;
-  drawingContext.strokeStyle = "rgba(255, 255, 255, 0.4)";
-  drawingContext.lineWidth = 1.5;
-  drawingContext.stroke();
-
-  // 내부 하이라이트 (글래스모피즘 효과 - 상단)
-  const highlightGradient = drawingContext.createLinearGradient(
-    modalX,
-    modalY,
-    modalX,
-    modalY + radius * 1.5
-  );
-  highlightGradient.addColorStop(0, "rgba(255, 255, 255, 0.3)");
-  highlightGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-  drawingContext.fillStyle = highlightGradient;
-  drawingContext.beginPath();
-  drawingContext.moveTo(modalX + radius, modalY);
-  drawingContext.lineTo(modalX + modalWidth - radius, modalY);
-  drawingContext.quadraticCurveTo(
-    modalX + modalWidth,
-    modalY,
-    modalX + modalWidth,
-    modalY + radius
-  );
-  drawingContext.lineTo(modalX + modalWidth, modalY + radius * 1.5);
-  drawingContext.lineTo(modalX, modalY + radius * 1.5);
-  drawingContext.lineTo(modalX, modalY + radius);
-  drawingContext.quadraticCurveTo(modalX, modalY, modalX + radius, modalY);
-  drawingContext.closePath();
-  drawingContext.fill();
-
-  drawingContext.restore();
-
-  // 텍스트 그리기
-  push();
-  drawingContext.save();
-  
-  // 텍스트 렌더링 품질 개선
-  drawingContext.textBaseline = "middle";
-  drawingContext.textAlign = "center";
-  drawingContext.imageSmoothingEnabled = true;
-  drawingContext.imageSmoothingQuality = "high";
-  
-  noStroke();
-  textAlign(CENTER, CENTER);
-
-  // Pretendard 폰트 적용
-  if (pretendardFont) {
-    textFont(pretendardFont);
-  }
-
-  // 메시지 텍스트
-  fill(255, 255, 255, 255);
-  textSize(18);
-  textStyle(NORMAL);
-  // 텍스트 화질 개선: 정수 반올림 제거
-  const textX = width / 2;
-  const textY = height / 2;
-  text("현재 탐색 탭만 체험 가능합니다.", textX, textY);
-
-  drawingContext.restore();
-  pop();
-  pop();
-}
-
 function drawSearchBar() {
   const responsiveScale = getResponsiveScale();
   const { W, H, X, Y } = getSearchMetrics();
@@ -3862,7 +3546,7 @@ function drawTagFilteredBubbles(selectedTag, groupIndex) {
   // 모든 필터링된 버블 표시 (제한 제거)
   const totalBubbles = filteredBubbles.length;
   // 태블릿 성능 개선: 최대 30개만 표시
-  const isMobile = isMobileOrTablet();
+  const isMobile = IS_MOBILE;
   const maxVisibleBubbles = isMobile ? 30 : totalBubbles;
   const visibleCount = Math.min(totalBubbles, maxVisibleBubbles);
   
@@ -4017,7 +3701,7 @@ function drawGroupViewBubbles(groupIndex) {
   // 태블릿 성능 개선: 최대 30개만 표시
   const totalBubbles = groupBubbles.length;
   const orbitContextKey = `group-${groupIndex}`;
-  const isMobile = isMobileOrTablet();
+  const isMobile = IS_MOBILE;
   const maxVisibleBubbles = isMobile ? 30 : totalBubbles;
   const visibleCount = Math.min(totalBubbles, maxVisibleBubbles);
   
