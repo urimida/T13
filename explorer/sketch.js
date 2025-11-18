@@ -1006,38 +1006,16 @@ function loadBubbleImage(imageIndex) {
       // 태블릿/모바일에서는 이미지 해상도 제한 (성능 최적화, 화질 유지)
       const isMobile = isMobileOrTablet();
       if (isMobile && img) {
-        // 태블릿에서는 최대 1200px로 제한 (화질 유지하면서 성능 개선)
         const MAX_TABLET_DIMENSION = 1200;
         if (img.width > MAX_TABLET_DIMENSION || img.height > MAX_TABLET_DIMENSION) {
-          const scale = Math.min(
-            MAX_TABLET_DIMENSION / img.width,
-            MAX_TABLET_DIMENSION / img.height
-          );
-          const newWidth = Math.floor(img.width * scale);
-          const newHeight = Math.floor(img.height * scale);
-          
-          // 고품질 리사이징을 위한 임시 캔버스
-          const tempCanvas = document.createElement('canvas');
-          tempCanvas.width = newWidth;
-          tempCanvas.height = newHeight;
-          const ctx = tempCanvas.getContext('2d');
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = 'high';
-          ctx.drawImage(img.elt, 0, 0, newWidth, newHeight);
-          
-          // 리사이즈된 이미지로 교체
-          const resizedImg = createImage(newWidth, newHeight);
-          resizedImg.loadPixels();
-          const imageData = ctx.getImageData(0, 0, newWidth, newHeight);
-          resizedImg.pixels = imageData.data;
-          resizedImg.updatePixels();
-          bubbleImages[imageIndex] = resizedImg;
-        } else {
-          bubbleImages[imageIndex] = img;
+          if (img.width >= img.height) {
+            img.resize(MAX_TABLET_DIMENSION, 0);
+          } else {
+            img.resize(0, MAX_TABLET_DIMENSION);
+          }
         }
-      } else {
-        bubbleImages[imageIndex] = img;
       }
+      bubbleImages[imageIndex] = img;
       imageLoaded.add(imageIndex);
       imageLoading.delete(imageIndex);
       
