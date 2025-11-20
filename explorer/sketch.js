@@ -124,6 +124,41 @@ function loadCachedAsset(path) {
   return loadImage(path, (img) => cacheImage(path, img));
 }
 
+function loadDeferredAssets() {
+  const deferredList = [
+    { key: "bubbleCap", path: "../public/assets/public-imgs/bubble-cap.png" },
+    { key: "group-1", path: "../public/assets/public-imgs/traveler.png", index: 1 },
+    { key: "group-2", path: "../public/assets/public-imgs/20s.png", index: 2 },
+    { key: "group-3", path: "../public/assets/public-imgs/50s.png", index: 3 },
+    { key: "group-4", path: "../public/assets/public-imgs/housewife.png", index: 4 },
+    { key: "group-5", path: "../public/assets/public-imgs/10s.png", index: 5 },
+  ];
+
+  deferredList.forEach(({ key, path, index }) => {
+    const cached = getCachedImage(path);
+    if (cached) {
+      if (key === "bubbleCap") {
+        bubbleCap = cached;
+      } else if (index) {
+        groupImages[index] = cached;
+      }
+      return;
+    }
+    loadImage(
+      path,
+      (img) => {
+        cacheImage(path, img);
+        if (key === "bubbleCap") {
+          bubbleCap = img;
+        } else if (index) {
+          groupImages[index] = img;
+        }
+      },
+      (err) => logWarn(`Deferred asset load failed (${key}):`, err)
+    );
+  });
+}
+
 function recreateGraphicsBuffer(buffer, w, h) {
   const needsNewBuffer = !buffer || buffer.width !== w || buffer.height !== h;
   if (needsNewBuffer) {
@@ -323,27 +358,27 @@ class BubbleInfoComponent {
     if (!this.name) return;
     
     withTextRendering(() => {
-      // 제목
-      fill(255, 255, 255, 230 * alpha);
-      textSize(titleSize);
-      textStyle(BOLD);
-      text(this.name, x, y);
-      
-      // 태그 표시
-      let currentY = y + 35;
-      if (this.visualTags.length > 0) {
-        fill(255, 255, 255, 180 * alpha);
-        textSize(tagSize);
-        textStyle(NORMAL);
-        text(this.visualTags.slice(0, 3).map(tag => `#${tag}`).join("  "), x, currentY);
-        currentY += 25;
-      }
-      if (this.emotionalTags.length > 0) {
-        fill(255, 255, 0, 220 * alpha);
-        textSize(tagSize);
-        textStyle(NORMAL);
-        text(this.emotionalTags.slice(0, 3).map(tag => `#${tag}`).join("  "), x, currentY);
-      }
+    // 제목
+    fill(255, 255, 255, 230 * alpha);
+    textSize(titleSize);
+    textStyle(BOLD);
+    text(this.name, x, y);
+    
+    // 태그 표시
+    let currentY = y + 35;
+    if (this.visualTags.length > 0) {
+      fill(255, 255, 255, 180 * alpha);
+      textSize(tagSize);
+      textStyle(NORMAL);
+      text(this.visualTags.slice(0, 3).map(tag => `#${tag}`).join("  "), x, currentY);
+      currentY += 25;
+    }
+    if (this.emotionalTags.length > 0) {
+      fill(255, 255, 0, 220 * alpha);
+      textSize(tagSize);
+      textStyle(NORMAL);
+      text(this.emotionalTags.slice(0, 3).map(tag => `#${tag}`).join("  "), x, currentY);
+    }
     });
   }
 }
@@ -365,7 +400,7 @@ class UIButton {
     if (this.style.type === 'toggle') {
       const index = this.style.index || 0;
       return index === 0 
-        ? selectedToggles.length === 0 
+      ? selectedToggles.length === 0 
         : selectedToggles.includes(index);
     }
     return false;
@@ -379,25 +414,25 @@ class UIButton {
     // 배경 그리기
     if (this.style.type === 'toggle') {
       // 그라디언트 배경
-      const gradient = drawingContext.createLinearGradient(
-        this.x, this.y, this.x, this.y + this.height
-      );
-      gradient.addColorStop(0, isSelected 
-        ? "rgba(255, 255, 255, 0.3)" 
-        : "rgba(255, 255, 255, 0.15)");
-      gradient.addColorStop(1, isSelected 
-        ? "rgba(255, 255, 255, 0.2)" 
-        : "rgba(255, 255, 255, 0.1)");
-      
-      drawingContext.fillStyle = gradient;
-      drawingContext.strokeStyle = isSelected
-        ? "rgba(255, 255, 255, 0.5)"
-        : "rgba(255, 255, 255, 0.3)";
-      drawingContext.lineWidth = isSelected ? 2 : 1;
-      
-      roundRectPath(drawingContext, this.x, this.y, this.width, this.height, this.radius);
-      drawingContext.fill();
-      drawingContext.stroke();
+    const gradient = drawingContext.createLinearGradient(
+      this.x, this.y, this.x, this.y + this.height
+    );
+    gradient.addColorStop(0, isSelected 
+      ? "rgba(255, 255, 255, 0.3)" 
+      : "rgba(255, 255, 255, 0.15)");
+    gradient.addColorStop(1, isSelected 
+      ? "rgba(255, 255, 255, 0.2)" 
+      : "rgba(255, 255, 255, 0.1)");
+    
+    drawingContext.fillStyle = gradient;
+    drawingContext.strokeStyle = isSelected
+      ? "rgba(255, 255, 255, 0.5)"
+      : "rgba(255, 255, 255, 0.3)";
+    drawingContext.lineWidth = isSelected ? 2 : 1;
+    
+    roundRectPath(drawingContext, this.x, this.y, this.width, this.height, this.radius);
+    drawingContext.fill();
+    drawingContext.stroke();
     } else if (this.style.type === 'tag') {
       // Glass 태그 스타일
       drawGlassTag(this.x, this.y, this.width, this.height, this.radius, isSelected, this.isHovered);
@@ -410,28 +445,28 @@ class UIButton {
     
     withTextRendering(() => {
       if (this.style.type === 'toggle' && isSelected) {
-        // LED 빛번짐 효과
-        drawingContext.shadowBlur = 20;
-        drawingContext.shadowColor = "rgba(255, 255, 255, 0.8)";
+    // LED 빛번짐 효과
+      drawingContext.shadowBlur = 20;
+      drawingContext.shadowColor = "rgba(255, 255, 255, 0.8)";
         drawingContext.shadowOffsetX = 0;
         drawingContext.shadowOffsetY = 0;
       } else if (this.style.type === 'toggle') {
-        drawingContext.shadowBlur = 12;
-        drawingContext.shadowColor = "rgba(255, 255, 255, 0.5)";
-        drawingContext.shadowOffsetX = 0;
-        drawingContext.shadowOffsetY = 0;
+      drawingContext.shadowBlur = 12;
+      drawingContext.shadowColor = "rgba(255, 255, 255, 0.5)";
+    drawingContext.shadowOffsetX = 0;
+    drawingContext.shadowOffsetY = 0;
       }
-      
-      fill(255, 255, 255, isSelected ? 255 : 200);
+    
+    fill(255, 255, 255, isSelected ? 255 : 200);
       textSize(labelFontSize);
-      textStyle(NORMAL);
-      text(this.label, textX, textY);
-      
+    textStyle(NORMAL);
+    text(this.label, textX, textY);
+    
       if (this.style.type === 'toggle' && isSelected) {
-        drawingContext.shadowBlur = 30;
-        drawingContext.shadowColor = "rgba(255, 255, 255, 0.6)";
-        text(this.label, textX, textY);
-      }
+      drawingContext.shadowBlur = 30;
+      drawingContext.shadowColor = "rgba(255, 255, 255, 0.6)";
+      text(this.label, textX, textY);
+    }
     });
   }
   
@@ -887,14 +922,14 @@ class Bubble {
     let breathFactor = 1.0;
     let noiseFactor = 1.0;
     if (ANIMATION_CONFIG.enableBreathAnim) {
-      const t = millis() * 0.001;
-      const breathSpeed = 0.5 + (this.hueSeed % 7) * 0.1;
-      const breath = sin(t * breathSpeed + this.pulseOffset);
-      const pulseAmp = map(sizeFactor, 0.1, 1.0, 0.03, 0.1);
+    const t = millis() * 0.001;
+    const breathSpeed = 0.5 + (this.hueSeed % 7) * 0.1;
+    const breath = sin(t * breathSpeed + this.pulseOffset);
+    const pulseAmp = map(sizeFactor, 0.1, 1.0, 0.03, 0.1);
       breathFactor = map(breath, -1, 1, 1.0 - pulseAmp, 1.0 + pulseAmp);
 
-      const noiseSpeed = 0.2;
-      const n = noise(this.noiseOffset + t * noiseSpeed);
+    const noiseSpeed = 0.2;
+    const n = noise(this.noiseOffset + t * noiseSpeed);
       noiseFactor = map(n, 0, 1, 0.95, 1.05);
     }
 
@@ -1058,7 +1093,7 @@ class ImageLoader {
     
     if (this.queue.length >= this.maxQueue) {
       const dropped = this.queue.shift();
-      if (dropped !== undefined) {
+    if (dropped !== undefined) {
         this.queueSet.delete(dropped);
       }
     }
@@ -1069,12 +1104,12 @@ class ImageLoader {
   }
 
   processQueue(imageFiles, onLoaded = null) {
-    while (
+  while (
       this.activeLoads < this.maxConcurrent &&
       this.queue.length > 0
-    ) {
+  ) {
       const nextIndex = this.queue.shift();
-      if (nextIndex === undefined) continue;
+    if (nextIndex === undefined) continue;
       this.queueSet.delete(nextIndex);
       this.startLoad(nextIndex, imageFiles, onLoaded);
     }
@@ -1919,18 +1954,6 @@ function preload() {
     "../public/assets/public-imgs/navigation-bar.png"
   );
   bgImage = loadCachedAsset("../public/assets/public-imgs/bg.png");
-  bubbleCap = loadCachedAsset("../public/assets/public-imgs/bubble-cap.png");
-
-  // 집단 이미지 로드
-  groupImages[1] = loadCachedAsset(
-    "../public/assets/public-imgs/traveler.png"
-  ); // 여행자
-  groupImages[2] = loadCachedAsset("../public/assets/public-imgs/20s.png"); // 20대 여성
-  groupImages[3] = loadCachedAsset("../public/assets/public-imgs/50s.png"); // 50대 남성
-  groupImages[4] = loadCachedAsset(
-    "../public/assets/public-imgs/housewife.png"
-  ); // 주부
-  groupImages[5] = loadCachedAsset("../public/assets/public-imgs/10s.png"); // 10대 여성
 
   // Pretendard 폰트 로드
   pretendardFont = loadFont("../public/assets/fonts/PretendardVariable.ttf");
@@ -1972,7 +1995,7 @@ async function loadBubbleDataFromJSON() {
       
       // 버블 이미지 배열 초기화 (지연 로딩을 위해 null로 초기화)
       if (bubbleImageLoader) {
-        for (let i = 0; i < imageFiles.length; i++) {
+      for (let i = 0; i < imageFiles.length; i++) {
           bubbleImageLoader.images.push(null);
         }
         bubbleImages = bubbleImageLoader.images; // 참조 업데이트
@@ -2076,6 +2099,9 @@ function setup() {
   );
   // bubbleImages를 ImageLoader의 images로 참조 (하위 호환성)
   bubbleImages = bubbleImageLoader.images;
+
+  // 지연 로딩 자산 로드 시작
+  loadDeferredAssets();
   
   const canvas = createCanvas(windowWidth, windowHeight);
   canvasElement = canvas?.elt ?? null;
@@ -2407,7 +2433,7 @@ function draw() {
   if (IS_MOBILE) {
     background(BG_COLOR);
   } else {
-    clear();
+  clear();
   }
   const shouldRunHeavyPass = !IS_MOBILE || frameCount % 2 === 0;
   
@@ -2635,7 +2661,7 @@ function draw() {
       // interactionScale을 부드럽게 변화시킴 (실제 r은 update에서 계산됨)
       const interactionEase = 0.08;
       centerBubble.interactionScale = lerp(centerBubble.interactionScale, targetInteractionScale, interactionEase);
-
+      
       // 중앙 버블로부터의 거리에 따라 투명도 조정 (바깥으로 갈수록 투명해짐)
       const centerBubbleX = centerBubble.pos.x;
       const centerBubbleY = centerBubble.pos.y;
@@ -2732,7 +2758,7 @@ function draw() {
         centerBubble.r > 60 &&
         frameCount % ANIMATION_CONFIG.lightEffectInterval === 0
       ) {
-        drawBubbleLightEffect(centerBubble);
+      drawBubbleLightEffect(centerBubble);
       }
       // 3. 캡 그리기
       drawCenterBubbleCap(centerBubble);
@@ -3406,43 +3432,43 @@ function drawSearchBar() {
     imageMode(CORNER);
 
     if (ANIMATION_CONFIG.enableMicGlow) {
-      // 마이크 아이콘 뒤에 깜빡이는 빛 효과 (펄스 효과)
-      push();
-      drawingContext.save();
-      
-      // 시간에 따른 펄스 효과 (1.5초 주기)
-      const pulseTime = (millis() / 1500) % 1; // 0~1 사이 값
-      // 부드러운 펄스: sin 함수 사용 (0~1 사이 값)
-      const pulseValue = (Math.sin(pulseTime * Math.PI * 2) + 1) / 2; // 0~1 사이 값
-      
-      // 최소 밝기와 최대 밝기 설정 (0.3 ~ 0.9)
-      const minBrightness = 0.3;
-      const maxBrightness = 0.9;
-      const pulseBrightness = lerp(minBrightness, maxBrightness, pulseValue);
-      
-      // 빛 효과 그리기 (아이콘 뒤에) - 더 좁고 하얀 빛
-      drawingContext.globalAlpha = pulseBrightness;
-      const glowRadius = iconRadius * 1.2; // 더 좁게 (1.8 -> 1.2)
-      const glowGradient = drawingContext.createRadialGradient(
-        iconCenterX,
-        iconCenterY,
-        iconRadius * 0.2,
-        iconCenterX,
-        iconCenterY,
-        glowRadius
-      );
-      // 하얀 빛으로 변경
-      glowGradient.addColorStop(0, "rgba(255, 255, 255, 1.0)");
-      glowGradient.addColorStop(0.3, "rgba(255, 255, 255, 0.6)");
-      glowGradient.addColorStop(0.6, "rgba(255, 255, 255, 0.3)");
-      glowGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-      drawingContext.fillStyle = glowGradient;
-      drawingContext.beginPath();
-      drawingContext.arc(iconCenterX, iconCenterY, glowRadius, 0, Math.PI * 2);
-      drawingContext.fill();
-      
-      drawingContext.restore();
-      pop();
+    // 마이크 아이콘 뒤에 깜빡이는 빛 효과 (펄스 효과)
+    push();
+    drawingContext.save();
+    
+    // 시간에 따른 펄스 효과 (1.5초 주기)
+    const pulseTime = (millis() / 1500) % 1; // 0~1 사이 값
+    // 부드러운 펄스: sin 함수 사용 (0~1 사이 값)
+    const pulseValue = (Math.sin(pulseTime * Math.PI * 2) + 1) / 2; // 0~1 사이 값
+    
+    // 최소 밝기와 최대 밝기 설정 (0.3 ~ 0.9)
+    const minBrightness = 0.3;
+    const maxBrightness = 0.9;
+    const pulseBrightness = lerp(minBrightness, maxBrightness, pulseValue);
+    
+    // 빛 효과 그리기 (아이콘 뒤에) - 더 좁고 하얀 빛
+    drawingContext.globalAlpha = pulseBrightness;
+    const glowRadius = iconRadius * 1.2; // 더 좁게 (1.8 -> 1.2)
+    const glowGradient = drawingContext.createRadialGradient(
+      iconCenterX,
+      iconCenterY,
+      iconRadius * 0.2,
+      iconCenterX,
+      iconCenterY,
+      glowRadius
+    );
+    // 하얀 빛으로 변경
+    glowGradient.addColorStop(0, "rgba(255, 255, 255, 1.0)");
+    glowGradient.addColorStop(0.3, "rgba(255, 255, 255, 0.6)");
+    glowGradient.addColorStop(0.6, "rgba(255, 255, 255, 0.3)");
+    glowGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+    drawingContext.fillStyle = glowGradient;
+    drawingContext.beginPath();
+    drawingContext.arc(iconCenterX, iconCenterY, glowRadius, 0, Math.PI * 2);
+    drawingContext.fill();
+    
+    drawingContext.restore();
+    pop();
     }
 
     // 화질 개선 설정
@@ -3647,14 +3673,14 @@ function toggleSelect(toggleIndex) {
 // 토글 버튼 초기화
 // 토글 버튼 상수
 const TOGGLE_LABELS = [
-  "전체 보기",
-  "여행자의 취향만 모아보고 싶어",
-  "20대 여성의 취향만 모아보고 싶어",
-  "50대 남성의 취향만 모아보고 싶어",
-  "주부들의 취향만 모아보고 싶어",
-  "10대 여성의 취향만 모아보고 싶어",
-];
-
+    "전체 보기",
+    "여행자의 취향만 모아보고 싶어",
+    "20대 여성의 취향만 모아보고 싶어",
+    "50대 남성의 취향만 모아보고 싶어",
+    "주부들의 취향만 모아보고 싶어",
+    "10대 여성의 취향만 모아보고 싶어",
+  ];
+  
 // 토글 레이아웃 계산 헬퍼 (중복 제거)
 function getToggleLayout() {
   const toggleWidth = 300;
@@ -3665,7 +3691,7 @@ function getToggleLayout() {
   const radius = 16;
   return { toggleWidth, toggleHeight, toggleX, startY, spacing, radius };
 }
-
+  
 function initToggleButtons() {
   const { toggleWidth, toggleHeight, toggleX, startY, spacing, radius } = getToggleLayout();
   
@@ -3816,11 +3842,11 @@ function drawOrbitBubbles({ bubbles, filterFn, orbitContextKey }) {
   const maxVisibleBubbles = isMobile ? 30 : totalBubbles;
   const visibleCount = Math.min(totalBubbles, maxVisibleBubbles);
   const angleStep = totalBubbles > 0 ? (Math.PI * 2) / totalBubbles : 0;
-
+  
   const bubblesBelow = [];
   const bubblesAbove = [];
   orbitBubblePositions = [];
-
+  
   for (let i = 0; i < visibleCount; i++) {
     const bubble = targetBubbles[i];
     const currentAngle = baseTime + i * angleStep;
@@ -3841,7 +3867,7 @@ function drawOrbitBubbles({ bubbles, filterFn, orbitContextKey }) {
     const justSynced = ensureOrbitBubbleReady(bubble, targetBaseR, orbitContextKey);
     const baseEase = justSynced ? 1.0 : 0.15;
     bubble.baseRadius = lerp(bubble.baseRadius, targetBaseR, baseEase);
-
+    
     const t = millis() * 0.001;
     const breathSpeed = 0.5 + (bubble.hueSeed % 7) * 0.1;
     const breath = sin(t * breathSpeed + (bubble.pulseOffset || 0));
@@ -3849,7 +3875,7 @@ function drawOrbitBubbles({ bubbles, filterFn, orbitContextKey }) {
     const noiseOffset = bubble.noiseOffset || bubble.hueSeed * 100;
     const n = noise(noiseOffset + t * 0.2);
     const noiseFactor = map(n, 0, 1, 0.97, 1.03);
-
+    
     if (!bubble.interactionScale) bubble.interactionScale = 1.0;
     bubble.r = bubble.baseRadius * breathFactor * noiseFactor * bubble.interactionScale;
     bubble.pos.set(bubbleX, finalY);
@@ -3863,7 +3889,7 @@ function drawOrbitBubbles({ bubbles, filterFn, orbitContextKey }) {
       bubblesAbove.push({ bubble, x: bubbleX, y: finalY });
     }
   }
-
+  
   bubblesBelow.forEach(({ bubble, x, y }) => bubble.drawAt(x, y));
   return bubblesAbove;
 }
@@ -4053,7 +4079,7 @@ function drawGroupView(groupIndex) {
     ANIMATION_CONFIG.enableLightEffect &&
     frameCount % ANIMATION_CONFIG.lightEffectInterval === 0
   ) {
-    drawBubbleLightEffect(tempBubble);
+  drawBubbleLightEffect(tempBubble);
   }
 
   // 버블캡 그리기
@@ -4117,65 +4143,65 @@ function drawGroupView(groupIndex) {
 
   // 태그 표시 (집단 이미지 주변에 원형으로 배치)
   const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
-  
-  push();
-  drawingContext.save();
-  drawingContext.textBaseline = "middle";
-  drawingContext.textAlign = "center";
-  drawingContext.imageSmoothingEnabled = true;
-  drawingContext.imageSmoothingQuality = "high";
-  
-  if (pretendardFont) {
-    textFont(pretendardFont);
-  }
-  
-  forEachGroupTag(groupIndex, ({ tag, x: tagX, y: tagY, w: tagWidth, h: tagHeight, fontSize: tagFontSize }) => {
-    const tagRadiusRect = tagHeight / 2;
-    const isSelected = selectedTag === tag;
-    
-    // hover 상태 확인
-    const isHovered = (
-      mouseX >= tagX - tagWidth / 2 &&
-      mouseX <= tagX + tagWidth / 2 &&
-      mouseY >= tagY - tagHeight / 2 &&
-      mouseY <= tagY + tagHeight / 2
-    );
 
-    // 글래스 라벨 그리기
-    drawGlassTag(tagX - tagWidth / 2, tagY - tagHeight / 2, tagWidth, tagHeight, tagRadiusRect, isSelected, isHovered);
-
-    // 태그 텍스트 (그림자 효과 포함)
     push();
     drawingContext.save();
     drawingContext.textBaseline = "middle";
     drawingContext.textAlign = "center";
     drawingContext.imageSmoothingEnabled = true;
     drawingContext.imageSmoothingQuality = "high";
-    
+
     if (pretendardFont) {
       textFont(pretendardFont);
     }
-    
-    fill(255, 255, 255, 255);
-    textSize(tagFontSize);
-    textStyle(NORMAL);
-    
-    // 텍스트 그림자 효과
-    drawingContext.shadowBlur = 4;
-    drawingContext.shadowColor = "rgba(0,0,0,0.3)";
-    drawingContext.shadowOffsetX = 0;
-    drawingContext.shadowOffsetY = 2;
-    
-    const textX = tagX;
-    const textY = tagY - 8;
-    text(tag, textX, textY);
-    
+
+  forEachGroupTag(groupIndex, ({ tag, x: tagX, y: tagY, w: tagWidth, h: tagHeight, fontSize: tagFontSize }) => {
+    const tagRadiusRect = tagHeight / 2;
+      const isSelected = selectedTag === tag;
+      
+    // hover 상태 확인
+      const isHovered = (
+        mouseX >= tagX - tagWidth / 2 &&
+        mouseX <= tagX + tagWidth / 2 &&
+        mouseY >= tagY - tagHeight / 2 &&
+        mouseY <= tagY + tagHeight / 2
+      );
+
+    // 글래스 라벨 그리기
+      drawGlassTag(tagX - tagWidth / 2, tagY - tagHeight / 2, tagWidth, tagHeight, tagRadiusRect, isSelected, isHovered);
+
+      // 태그 텍스트 (그림자 효과 포함)
+      push();
+      drawingContext.save();
+      drawingContext.textBaseline = "middle";
+      drawingContext.textAlign = "center";
+      drawingContext.imageSmoothingEnabled = true;
+      drawingContext.imageSmoothingQuality = "high";
+      
+      if (pretendardFont) {
+        textFont(pretendardFont);
+      }
+      
+      fill(255, 255, 255, 255);
+      textSize(tagFontSize);
+      textStyle(NORMAL);
+      
+      // 텍스트 그림자 효과
+      drawingContext.shadowBlur = 4;
+      drawingContext.shadowColor = "rgba(0,0,0,0.3)";
+      drawingContext.shadowOffsetX = 0;
+      drawingContext.shadowOffsetY = 2;
+      
+      const textX = tagX;
+      const textY = tagY - 8;
+      text(tag, textX, textY);
+      
+      drawingContext.restore();
+      pop();
+    });
+
     drawingContext.restore();
     pop();
-  });
-
-  drawingContext.restore();
-  pop();
 
   drawingContext.restore();
   pop();
@@ -4199,7 +4225,7 @@ function checkTagClick(x, y, groupIndex) {
       clicked = tag;
     }
   });
-  
+
   return clicked;
 }
 
