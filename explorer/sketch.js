@@ -2623,6 +2623,8 @@ function draw() {
       queueVisibleBubbleImages();
     }
 
+    const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
+
     // LOD: 보이는 버블만 수집하고 정렬 (간소화)
     const visible = bubbles
       .filter(b => {
