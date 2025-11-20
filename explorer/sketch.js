@@ -2026,8 +2026,9 @@ async function loadBubbleDataFromJSON() {
         }
         log(`[Explorer] 초기 버블 위치 설정 완료`);
 
-        // 초기 버블 일부만 미리 로드
-        preloadInitialImages();
+        // 🔧 기기별로 첫 로딩 이미지 개수 다르게 (태블릿 부담 감소)
+        const firstLoadCount = IS_MOBILE ? 6 : 12;
+        preloadInitialImages(firstLoadCount);
       }
     } else {
       logError("[Explorer] JSON에서 bubbles를 로드할 수 없습니다", bubblesJson);
@@ -2065,10 +2066,11 @@ function setup() {
   const isMobile = IS_MOBILE;
   
   if (isMobile) {
-    pixelDensity(1.3); // 태블릿/모바일에서도 화질 유지하면서 발열 완화
-    frameRate(28); // 모바일에서도 부드러운 애니메이션 유지
-    MAX_DRAW = 50; // 한 번에 그리는 버블 수 완화
-    MAX_BUBBLE_RADIUS = 90;
+    // 🔧 태블릿 최적화: 캔버스 해상도/프레임/버블 수 공격적으로 낮추기
+    pixelDensity(1);        // 1.3 → 1 (해상도 부담 대폭 감소)
+    frameRate(24);          // 28 → 24 (프레임 부담 감소)
+    MAX_DRAW = 35;          // 50 → 35 (한 프레임에 그릴 버블 수 감소)
+    MAX_BUBBLE_RADIUS = 80; // 90 → 80 (버블 최대 크기 감소로 fill 작업량 감소)
     ANIMATION_CONFIG.enableBreathAnim = false;
     ANIMATION_CONFIG.lightEffectInterval = 4;
     ANIMATION_CONFIG.enableLightEffect = false;
@@ -2087,13 +2089,17 @@ function setup() {
     ANIMATION_CONFIG.enableCenterPulse = true;
     ANIMATION_CONFIG.allowIdlePause = true;
   }
-  MAX_CONCURRENT_IMAGE_LOADS = isMobile ? 4 : 6;
+  // 🔧 태블릿에서 이미지 동시 로드 수 확 줄이기 (새로고침 부담 감소)
+  MAX_CONCURRENT_IMAGE_LOADS = isMobile ? 2 : 6;
+  
+  // 🔧 태블릿에서는 큐 길이도 줄여서 한 번에 폭주 방지
+  const queueSize = isMobile ? 10 : MAX_IMAGE_QUEUE_LENGTH;
   
   // ImageLoader 초기화
   bubbleImageLoader = new ImageLoader(
     "../public/assets/bubble-imgs/",
     MAX_CONCURRENT_IMAGE_LOADS,
-    MAX_IMAGE_QUEUE_LENGTH
+    queueSize
   );
   // bubbleImages를 ImageLoader의 images로 참조 (하위 호환성)
   bubbleImages = bubbleImageLoader.images;
@@ -2128,8 +2134,16 @@ function setup() {
 
   rebuildWorldMetrics(); // 월드 메트릭스 초기화
   
-  // 공용 버블 데이터 JSON 비동기 로드 (로드 완료 후 버블 생성)
+  // 🔧 태블릿은 무거운 작업을 살짝 뒤로 미뤄서 첫 화면이 먼저 뜨도록
+  if (isMobile) {
+    // 태블릿은 0.4초 뒤에 무거운 작업 시작 (캔버스 먼저 그려짐)
+    setTimeout(() => {
   loadBubbleDataFromJSON();
+    }, 400);
+  } else {
+    // 데스크탑은 바로
+    loadBubbleDataFromJSON();
+  }
 
   // 자산 로딩 확인 및 에러 체크 (헬퍼 함수로 간소화)
   const checkAsset = (asset, name, onSuccess = null) => {
@@ -2423,20 +2437,11 @@ function draw() {
     lastMemoryCleanup = now;
   }
   
-  // 누적 렌더링 방지 + 배경 그리기
-  if (IS_MOBILE) {
-    if (bgBuffer) {
-      image(bgBuffer, 0, 0);
-    } else {
-      background(BG_COLOR);
-    }
-  } else {
-  clear();
+  // 배경 그리기 (clear() 제거로 깜빡임 감소)
   if (bgBuffer) {
     image(bgBuffer, 0, 0);
   } else {
     background(BG_COLOR);
-    }
   }
 
   const shouldRunHeavyPass = !IS_MOBILE || frameCount % 2 === 0;
