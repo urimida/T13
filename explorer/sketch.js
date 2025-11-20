@@ -1953,6 +1953,37 @@ function setup() {
   
   // 토글 버튼 초기화
   initToggleButtons();
+
+  // Page Visibility API 설정 (화면 밖에 나갔을 때 렌더링 중단)
+  if (typeof document !== "undefined") {
+    const handleVisibilityChange = () => {
+      isPageVisible = !document.hidden;
+      if (!isPageVisible) {
+        // 화면 밖에 나갔을 때 캔버스 완전히 지우기
+        clear();
+        background(BG_COLOR);
+        // 모든 애니메이션 상태 초기화
+        if (panController) {
+          panController.panVelocityX = 0;
+          panController.panVelocityY = 0;
+        }
+        if (bubbleRotationState) {
+          bubbleRotationState.angularVelocity = 0;
+        }
+      }
+    };
+    
+    // 초기 상태 설정
+    isPageVisible = !document.hidden;
+    
+    // 이벤트 리스너 등록
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    
+    // 정리 함수 등록
+    explorerRuntime.registerCleanup("visibility-change", () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    });
+  }
 }
 
 // 포인터 이벤트 핸들러 저장 (중복 등록 방지)
@@ -1965,6 +1996,7 @@ let pointerEventHandlers = {
 let activePointers = new Map(); // 활성 포인터 추적 (pointerId -> {x, y})
 let lastMemoryCleanup = 0; // 마지막 메모리 정리 시간
 const MEMORY_CLEANUP_INTERVAL = 60000; // 60초마다 메모리 정리
+let isPageVisible = true; // 페이지 가시성 상태
 
 // 포인터 이벤트 설정 (모든 입력 통합 처리)
 function setupPointerBridges() {
@@ -2095,6 +2127,14 @@ function setupPointerBridges() {
 
 
 function draw() {
+  // 페이지가 보이지 않으면 렌더링 중단 (CPU/GPU 부하 방지 및 잔상 제거)
+  if (!isPageVisible) {
+    // 화면 밖에 있을 때는 최소한의 정리만 수행
+    clear();
+    background(BG_COLOR);
+    return;
+  }
+
   const isMobile = IS_MOBILE;
   
   // 주기적 메모리 정리 (60초마다)
