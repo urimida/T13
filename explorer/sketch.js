@@ -264,9 +264,7 @@ const ANIMATION_CONFIG = {
   allowIdlePause: true,
 };
 
-const FRAME_INTERVAL_MS = 50; // 약 20fps
 const RESET_INTERVAL_MS = 3 * 60 * 1000; // 3분
-let lastFrameTime = 0;
 let lastResetTime = 0;
 
 // 하위 호환성을 위한 별칭 (기존 코드 호환)
@@ -2407,10 +2405,6 @@ function draw() {
   }
 
   const now = millis();
-  if (now - lastFrameTime < FRAME_INTERVAL_MS) {
-    return;
-  }
-  lastFrameTime = now;
 
   if (!resetInProgress && now - lastResetTime > RESET_INTERVAL_MS) {
     softReset();
