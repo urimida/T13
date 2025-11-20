@@ -223,6 +223,9 @@ const PERFORMANCE_CONFIG = {
 const ANIMATION_CONFIG = {
   enableBreathAnim: true,
   lightEffectInterval: 1,
+  enableLightEffect: true,
+  enableMicGlow: true,
+  enableCenterPulse: true,
 };
 
 // 하위 호환성을 위한 별칭 (기존 코드 호환)
@@ -2037,7 +2040,10 @@ function setup() {
     MAX_DRAW = 100; // 한 번에 그리는 버블 수 완화
     MAX_BUBBLE_RADIUS = 90;
     ANIMATION_CONFIG.enableBreathAnim = false;
-    ANIMATION_CONFIG.lightEffectInterval = 3;
+    ANIMATION_CONFIG.lightEffectInterval = 4;
+    ANIMATION_CONFIG.enableLightEffect = false;
+    ANIMATION_CONFIG.enableMicGlow = false;
+    ANIMATION_CONFIG.enableCenterPulse = true;
   } else {
     pixelDensity(1.5); // 데스크톱은 적당한 밀도로 유지
     frameRate(30); // 데스크톱은 30fps로 제한
@@ -2045,6 +2051,9 @@ function setup() {
     MAX_BUBBLE_RADIUS = 120;
     ANIMATION_CONFIG.enableBreathAnim = true;
     ANIMATION_CONFIG.lightEffectInterval = 1;
+    ANIMATION_CONFIG.enableLightEffect = true;
+    ANIMATION_CONFIG.enableMicGlow = true;
+    ANIMATION_CONFIG.enableCenterPulse = true;
   }
   MAX_CONCURRENT_IMAGE_LOADS = isMobile ? 4 : 6;
   
@@ -2651,10 +2660,18 @@ function draw() {
 
     // 중앙 버블은 별도로 그리기 (이미지 -> 빛 -> 캡 순서)
     if (centerBubble) {
+      const originalRadius = centerBubble.r;
+      let centerPulseScale = 1.0;
+      if (!ANIMATION_CONFIG.enableBreathAnim && ANIMATION_CONFIG.enableCenterPulse) {
+        const t = millis() * 0.001;
+        centerPulseScale = 1 + 0.03 * Math.sin(t * 1.5);
+        centerBubble.r = originalRadius * centerPulseScale;
+      }
       // 1. 버블 이미지/색상만 그리기 (캡 없이)
       drawCenterBubbleImage(centerBubble);
       // 2. 빛 효과 그리기 (캡과 사진 사이) - 큰 버블에 한해 프레임 분할
       if (
+        ANIMATION_CONFIG.enableLightEffect &&
         centerBubble.r > 60 &&
         frameCount % ANIMATION_CONFIG.lightEffectInterval === 0
       ) {
@@ -2662,6 +2679,7 @@ function draw() {
       }
       // 3. 캡 그리기
       drawCenterBubbleCap(centerBubble);
+      centerBubble.r = originalRadius;
 
       // 중앙 버블이 있으면 빛 효과를 위해 애니메이션 계속 실행
       startAnim();
@@ -3328,43 +3346,45 @@ function drawSearchBar() {
     const { iconX, iconY, iconSize, iconCenterX, iconCenterY, iconRadius } = getMicIconRect();
     imageMode(CORNER);
 
-    // 마이크 아이콘 뒤에 깜빡이는 빛 효과 (펄스 효과)
-    push();
-    drawingContext.save();
-    
-    // 시간에 따른 펄스 효과 (1.5초 주기)
-    const pulseTime = (millis() / 1500) % 1; // 0~1 사이 값
-    // 부드러운 펄스: sin 함수 사용 (0~1 사이 값)
-    const pulseValue = (Math.sin(pulseTime * Math.PI * 2) + 1) / 2; // 0~1 사이 값
-    
-    // 최소 밝기와 최대 밝기 설정 (0.3 ~ 0.9)
-    const minBrightness = 0.3;
-    const maxBrightness = 0.9;
-    const pulseBrightness = lerp(minBrightness, maxBrightness, pulseValue);
-    
-    // 빛 효과 그리기 (아이콘 뒤에) - 더 좁고 하얀 빛
-    drawingContext.globalAlpha = pulseBrightness;
-    const glowRadius = iconRadius * 1.2; // 더 좁게 (1.8 -> 1.2)
-    const glowGradient = drawingContext.createRadialGradient(
-      iconCenterX,
-      iconCenterY,
-      iconRadius * 0.2,
-      iconCenterX,
-      iconCenterY,
-      glowRadius
-    );
-    // 하얀 빛으로 변경
-    glowGradient.addColorStop(0, "rgba(255, 255, 255, 1.0)");
-    glowGradient.addColorStop(0.3, "rgba(255, 255, 255, 0.6)");
-    glowGradient.addColorStop(0.6, "rgba(255, 255, 255, 0.3)");
-    glowGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-    drawingContext.fillStyle = glowGradient;
-    drawingContext.beginPath();
-    drawingContext.arc(iconCenterX, iconCenterY, glowRadius, 0, Math.PI * 2);
-    drawingContext.fill();
-    
-    drawingContext.restore();
-    pop();
+    if (ANIMATION_CONFIG.enableMicGlow) {
+      // 마이크 아이콘 뒤에 깜빡이는 빛 효과 (펄스 효과)
+      push();
+      drawingContext.save();
+      
+      // 시간에 따른 펄스 효과 (1.5초 주기)
+      const pulseTime = (millis() / 1500) % 1; // 0~1 사이 값
+      // 부드러운 펄스: sin 함수 사용 (0~1 사이 값)
+      const pulseValue = (Math.sin(pulseTime * Math.PI * 2) + 1) / 2; // 0~1 사이 값
+      
+      // 최소 밝기와 최대 밝기 설정 (0.3 ~ 0.9)
+      const minBrightness = 0.3;
+      const maxBrightness = 0.9;
+      const pulseBrightness = lerp(minBrightness, maxBrightness, pulseValue);
+      
+      // 빛 효과 그리기 (아이콘 뒤에) - 더 좁고 하얀 빛
+      drawingContext.globalAlpha = pulseBrightness;
+      const glowRadius = iconRadius * 1.2; // 더 좁게 (1.8 -> 1.2)
+      const glowGradient = drawingContext.createRadialGradient(
+        iconCenterX,
+        iconCenterY,
+        iconRadius * 0.2,
+        iconCenterX,
+        iconCenterY,
+        glowRadius
+      );
+      // 하얀 빛으로 변경
+      glowGradient.addColorStop(0, "rgba(255, 255, 255, 1.0)");
+      glowGradient.addColorStop(0.3, "rgba(255, 255, 255, 0.6)");
+      glowGradient.addColorStop(0.6, "rgba(255, 255, 255, 0.3)");
+      glowGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+      drawingContext.fillStyle = glowGradient;
+      drawingContext.beginPath();
+      drawingContext.arc(iconCenterX, iconCenterY, glowRadius, 0, Math.PI * 2);
+      drawingContext.fill();
+      
+      drawingContext.restore();
+      pop();
+    }
 
     // 화질 개선 설정
     push();
@@ -3970,7 +3990,10 @@ function drawGroupView(groupIndex) {
     r: imageRadius,
     alpha: 1.0
   };
-  if (frameCount % ANIMATION_CONFIG.lightEffectInterval === 0) {
+  if (
+    ANIMATION_CONFIG.enableLightEffect &&
+    frameCount % ANIMATION_CONFIG.lightEffectInterval === 0
+  ) {
     drawBubbleLightEffect(tempBubble);
   }
 
