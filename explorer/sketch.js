@@ -396,7 +396,7 @@ class UIButton {
     // 텍스트 렌더링
     const textX = this.x + this.width / 2;
     const textY = this.y + this.height / 2 + (this.style.type === 'toggle' ? -3 : 0);
-    const textSize = this.style.type === 'toggle' ? 16 : 14;
+    const labelFontSize = this.style.type === 'toggle' ? 16 : 14;
     
     withTextRendering(() => {
       if (this.style.type === 'toggle' && isSelected) {
@@ -413,7 +413,7 @@ class UIButton {
       }
       
       fill(255, 255, 255, isSelected ? 255 : 200);
-      textSize(textSize);
+      textSize(labelFontSize);
       textStyle(NORMAL);
       text(this.label, textX, textY);
       
@@ -438,11 +438,11 @@ class ToggleButton extends UIButton {
     this.index = index;
   }
   
-  isSelected(selectedToggles) {
-    return super.isSelected({ selectedToggles });
+  isSelected(selectedToggles = []) {
+    return super.isSelected(selectedToggles);
   }
   
-  draw(selectedToggles) {
+  draw(selectedToggles = []) {
     super.draw({ selectedToggles });
   }
 }
