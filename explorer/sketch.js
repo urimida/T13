@@ -2429,20 +2429,23 @@ function draw() {
     lastMemoryCleanup = now;
   }
   
-  // 누적 렌더링 방지: 매 프레임 캔버스를 완전히 지움
+  // 누적 렌더링 방지 + 배경 그리기
   if (IS_MOBILE) {
-    background(BG_COLOR);
+    if (bgBuffer) {
+      image(bgBuffer, 0, 0);
+    } else {
+      background(BG_COLOR);
+    }
   } else {
   clear();
-  }
-  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 2 === 0;
-  
-  // 배경 버퍼 사용 (성능 최적화)
   if (bgBuffer) {
     image(bgBuffer, 0, 0);
-  } else if (!IS_MOBILE) {
+  } else {
     background(BG_COLOR);
+    }
   }
+
+  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 2 === 0;
 
   // 중간 단계 화면 상태 확인 (먼저 선언)
   const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
