@@ -2052,7 +2052,7 @@ function setup() {
     ANIMATION_CONFIG.lightEffectInterval = 4;
     ANIMATION_CONFIG.enableLightEffect = false;
     ANIMATION_CONFIG.enableMicGlow = false;
-    ANIMATION_CONFIG.enableCenterPulse = true;
+    ANIMATION_CONFIG.enableCenterPulse = false;
     ANIMATION_CONFIG.allowIdlePause = false;
   } else {
     pixelDensity(1.5); // 데스크톱은 적당한 밀도로 유지
@@ -2404,13 +2404,17 @@ function draw() {
   }
   
   // 누적 렌더링 방지: 매 프레임 캔버스를 완전히 지움
-  clear();
+  if (IS_MOBILE) {
+    background(BG_COLOR);
+  } else {
+    clear();
+  }
   const shouldRunHeavyPass = !IS_MOBILE || frameCount % 2 === 0;
   
   // 배경 버퍼 사용 (성능 최적화)
   if (bgBuffer) {
     image(bgBuffer, 0, 0);
-  } else {
+  } else if (!IS_MOBILE) {
     background(BG_COLOR);
   }
 
