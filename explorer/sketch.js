@@ -1,3 +1,7 @@
+  if (now - lastSoftResetTime > SOFT_RESET_INTERVAL) {
+    softReset();
+    lastSoftResetTime = now;
+  }
 /* =========================================================
    Interactive Bubbles — Apple Watch Style Honeycomb
    요구사항:
@@ -223,10 +227,16 @@ const PERFORMANCE_CONFIG = {
 const ANIMATION_CONFIG = {
   enableBreathAnim: true,
   lightEffectInterval: 1,
-  enableLightEffect: true,
-  enableMicGlow: true,
+  enableLightEffect: false,
+  enableMicGlow: false,
   enableCenterPulse: true,
+  allowIdlePause: true,
 };
+
+const FRAME_INTERVAL_MS = 50; // 약 20fps
+const RESET_INTERVAL_MS = 3 * 60 * 1000; // 3분
+let lastFrameTime = 0;
+let lastResetTime = 0;
 
 // 하위 호환성을 위한 별칭 (기존 코드 호환)
 const BG_COLOR = RENDER_CONFIG.bgColor;
@@ -272,6 +282,7 @@ let imageLoadQueue = [];
 let imageQueueSet = new Set();
 let activeImageLoads = 0;
 let lastVisibleImageCheck = 0;
+let resetInProgress = false;
 
 explorerRuntime.registerCleanup("graphics-buffers", () => {
   if (bgBuffer?.remove) {
@@ -2016,11 +2027,13 @@ function isMobileOrTablet() {
   const ua = navigator.userAgent.toLowerCase();
   const isMobile =
     /android|webos|iphone|ipod|blackberry|iemobile|opera mini/i.test(ua);
-  const isTablet = /ipad|android(?!.*mobile)|tablet/i.test(ua);
-  const isTouchDevice =
-    "ontouchstart" in window || navigator.maxTouchPoints > 0;
-  const isSmallScreen = window.innerWidth < 1024 || window.innerHeight < 768;
-  return isMobile || isTablet || (isTouchDevice && isSmallScreen);
+  const isTabletUA =
+    /ipad|tablet/.test(ua) ||
+    (/macintosh/.test(ua) && navigator.maxTouchPoints > 0);
+  const isTouchDevice = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+  const isWindowsDesktop = /windows nt/i.test(ua);
+
+  return isMobile || isTabletUA || (isTouchDevice && !isWindowsDesktop);
 }
 
 function setup() {
@@ -2037,23 +2050,25 @@ function setup() {
   if (isMobile) {
     pixelDensity(1.3); // 태블릿/모바일에서도 화질 유지하면서 발열 완화
     frameRate(28); // 모바일에서도 부드러운 애니메이션 유지
-    MAX_DRAW = 100; // 한 번에 그리는 버블 수 완화
+    MAX_DRAW = 50; // 한 번에 그리는 버블 수 완화
     MAX_BUBBLE_RADIUS = 90;
     ANIMATION_CONFIG.enableBreathAnim = false;
     ANIMATION_CONFIG.lightEffectInterval = 4;
     ANIMATION_CONFIG.enableLightEffect = false;
     ANIMATION_CONFIG.enableMicGlow = false;
     ANIMATION_CONFIG.enableCenterPulse = true;
+    ANIMATION_CONFIG.allowIdlePause = false;
   } else {
     pixelDensity(1.5); // 데스크톱은 적당한 밀도로 유지
     frameRate(30); // 데스크톱은 30fps로 제한
-    MAX_DRAW = 140;
+    MAX_DRAW = 80;
     MAX_BUBBLE_RADIUS = 120;
     ANIMATION_CONFIG.enableBreathAnim = true;
     ANIMATION_CONFIG.lightEffectInterval = 1;
-    ANIMATION_CONFIG.enableLightEffect = true;
-    ANIMATION_CONFIG.enableMicGlow = true;
+    ANIMATION_CONFIG.enableLightEffect = false;
+    ANIMATION_CONFIG.enableMicGlow = false;
     ANIMATION_CONFIG.enableCenterPulse = true;
+    ANIMATION_CONFIG.allowIdlePause = true;
   }
   MAX_CONCURRENT_IMAGE_LOADS = isMobile ? 4 : 6;
   
@@ -2172,6 +2187,8 @@ function setup() {
         if (bubbleRotationState) {
           bubbleRotationState.angularVelocity = 0;
         }
+      } else {
+        softReset();
       }
     };
     
@@ -2328,19 +2345,59 @@ function setupPointerBridges() {
 }
 
 
+function softReset() {
+  if (resetInProgress) return;
+  resetInProgress = true;
+  clear();
+  background(BG_COLOR);
+  if (panController) {
+    panController.panVelocityX = 0;
+    panController.panVelocityY = 0;
+    panController.snapTargetX = null;
+    panController.snapTargetY = null;
+    panController.snapCompleted = true;
+  }
+  if (bubbleRotationState) {
+    bubbleRotationState.angularVelocity = 0;
+  }
+  if (bubbleManager) {
+    bubbleManager.build();
+  }
+  if (uiStateManager) {
+    uiStateManager.backToMainView?.();
+    uiStateManager.showToggles = false;
+    uiStateManager.selectedTag = null;
+    uiStateManager.selectedGroup = null;
+  }
+  startAnim();
+  if (typeof loop === "function") {
+    loop();
+  }
+  resetInProgress = false;
+}
+
 function draw() {
-  // 페이지가 보이지 않으면 렌더링 중단 (CPU/GPU 부하 방지 및 잔상 제거)
+  // 페이지가 보이지 않으면 렌더링 중단
   if (!isPageVisible) {
-    // 화면 밖에 있을 때는 최소한의 정리만 수행
     clear();
     background(BG_COLOR);
     return;
   }
 
+  const now = millis();
+  if (now - lastFrameTime < FRAME_INTERVAL_MS) {
+    return;
+  }
+  lastFrameTime = now;
+
+  if (!resetInProgress && now - lastResetTime > RESET_INTERVAL_MS) {
+    softReset();
+    lastResetTime = now;
+  }
+
   const isMobile = IS_MOBILE;
   
   // 주기적 메모리 정리 (60초마다)
-  const now = millis();
   if (now - lastMemoryCleanup > MEMORY_CLEANUP_INTERVAL) {
     // activePointers 정리 (오래된 항목 제거)
     if (activePointers.size > 10) {
@@ -2688,6 +2745,8 @@ function draw() {
       // 단, 모달이 열려있으면 애니메이션 계속 실행
       const showModal = uiStateManager ? uiStateManager.showModal : false;
       if (
+      !IS_MOBILE &&
+        ANIMATION_CONFIG.allowIdlePause &&
         snapTargetX === null &&
         snapTargetY === null &&
         abs(panVelocityX) < 0.1 &&
@@ -2696,7 +2755,7 @@ function draw() {
         !showModal
       ) {
         stopAnim();
-      } else if (showModal) {
+      } else if (showModal || !ANIMATION_CONFIG.allowIdlePause) {
         // 모달이 열려있으면 애니메이션 계속 실행
         startAnim();
       }
