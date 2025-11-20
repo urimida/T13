@@ -1,7 +1,3 @@
-  if (now - lastSoftResetTime > SOFT_RESET_INTERVAL) {
-    softReset();
-    lastSoftResetTime = now;
-  }
 /* =========================================================
    Interactive Bubbles — Apple Watch Style Honeycomb
    요구사항:
