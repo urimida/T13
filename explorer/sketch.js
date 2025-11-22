@@ -1405,9 +1405,14 @@ function rebuildWorldMetrics() {
   WORLD_H = gridSize * HEX_SPACING * sqrt(3);
 }
 
-// 배경 버퍼 재생성
+// 배경 버퍼 재생성 (깜빡임 방지)
 function redrawBackgroundBuffer() {
-  bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
+  // 배경 버퍼가 없거나 크기가 변경되었을 때만 재생성
+  if (!bgBuffer || bgBuffer.width !== width || bgBuffer.height !== height) {
+    bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
+  }
+  
+  // 배경 이미지가 로드되었는지 확인
   if (
     bgImage &&
     typeof bgImage.width !== "undefined" &&
@@ -2070,17 +2075,17 @@ function setup() {
   const isMobile = IS_MOBILE;
   
   if (isMobile) {
-    // 🔧 태블릿 최적화: 캔버스 해상도/프레임/버블 수 공격적으로 낮추기
-    pixelDensity(1);        // 1.3 → 1 (해상도 부담 대폭 감소)
-    frameRate(24);          // 28 → 24 (프레임 부담 감소)
-    MAX_DRAW = 35;          // 50 → 35 (한 프레임에 그릴 버블 수 감소)
-    MAX_BUBBLE_RADIUS = 80; // 90 → 80 (버블 최대 크기 감소로 fill 작업량 감소)
+    // 🔧 태블릿 최적화: CPU/GPU 부담 대폭 감소
+    pixelDensity(1);        // 해상도 부담 감소
+    frameRate(15);          // 24 → 15 (프레임 부담 대폭 감소)
+    MAX_DRAW = 25;          // 35 → 25 (한 프레임에 그릴 버블 수 감소)
+    MAX_BUBBLE_RADIUS = 70; // 80 → 70 (버블 최대 크기 감소)
     ANIMATION_CONFIG.enableBreathAnim = false;
     ANIMATION_CONFIG.lightEffectInterval = 4;
     ANIMATION_CONFIG.enableLightEffect = false;
     ANIMATION_CONFIG.enableMicGlow = false;
     ANIMATION_CONFIG.enableCenterPulse = false;
-    ANIMATION_CONFIG.allowIdlePause = false;
+    ANIMATION_CONFIG.allowIdlePause = true; // 유휴 시 애니메이션 정지로 CPU/GPU 절약
   } else {
     pixelDensity(1.5); // 데스크톱은 적당한 밀도로 유지
     frameRate(30); // 데스크톱은 30fps로 제한
@@ -2256,7 +2261,7 @@ let pointerEventHandlers = {
 };
 let activePointers = new Map(); // 활성 포인터 추적 (pointerId -> {x, y})
 let lastMemoryCleanup = 0; // 마지막 메모리 정리 시간
-const MEMORY_CLEANUP_INTERVAL = 60000; // 60초마다 메모리 정리
+const MEMORY_CLEANUP_INTERVAL = 30000; // 30초마다 메모리 정리 (태블릿 성능 개선)
 let isPageVisible = true; // 페이지 가시성 상태
 
 // 포인터 이벤트 설정 (모든 입력 통합 처리)
@@ -2448,14 +2453,17 @@ function draw() {
     lastMemoryCleanup = now;
   }
   
-  // 배경 그리기 (clear() 제거로 깜빡임 감소)
-  if (bgBuffer) {
-    image(bgBuffer, 0, 0);
-  } else {
-    background(BG_COLOR);
+  // 배경 그리기 (배경 버퍼가 항상 존재하도록 보장하여 깜빡임 방지)
+  if (!bgBuffer) {
+    // 배경 버퍼가 없으면 즉시 생성 (한 번만)
+    bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
+    bgBuffer.background(BG_COLOR);
   }
+  // 배경 버퍼를 사용하여 깜빡임 없이 렌더링
+  image(bgBuffer, 0, 0);
 
-  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 2 === 0;
+  // 태블릿에서는 더 많은 프레임 스킵으로 CPU/GPU 부담 감소
+  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 3 === 0;
 
   // 중간 단계 화면 상태 확인 (먼저 선언)
   const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
@@ -2620,52 +2628,63 @@ function draw() {
   } else {
     // 일반 버블 그리기 (전체보기)
     // 버블 업데이트 및 그리기 (화면에 보이는 것만)
-    // 먼저 모든 버블 업데이트하여 중앙 버블 찾기 (1차 업데이트)
-    // 필터링된 버블들은 이미지 로드 상태 확인 (거리 기반 투명도는 나중에 적용)
-    filteredBubbles.forEach((b) => {
-      if (!b.isPopping) {
-        if (b.imageIndex !== null) {
-          const hasImage = bubbleImages[b.imageIndex] && bubbleImages[b.imageIndex].width > 0;
-          if (hasImage) {
-            // 이미지가 로드되면 페이드인 시작 (거리 기반 투명도는 나중에 적용)
-            if (b.alpha < 0.01) b.alpha = 0.01; // 페이드인 시작
-            // 거리 기반 투명도는 중앙 버블 찾은 후 적용되므로 여기서는 최소값만 설정
+    // 태블릿에서는 업데이트 빈도를 줄여서 CPU/GPU 부담 감소
+    const shouldUpdateBubbles = !IS_MOBILE || frameCount % 2 === 0;
+    
+    if (shouldUpdateBubbles) {
+      // 먼저 모든 버블 업데이트하여 중앙 버블 찾기 (1차 업데이트)
+      // 필터링된 버블들은 이미지 로드 상태 확인 (거리 기반 투명도는 나중에 적용)
+      filteredBubbles.forEach((b) => {
+        if (!b.isPopping) {
+          if (b.imageIndex !== null) {
+            const hasImage = bubbleImages[b.imageIndex] && bubbleImages[b.imageIndex].width > 0;
+            if (hasImage) {
+              // 이미지가 로드되면 페이드인 시작 (거리 기반 투명도는 나중에 적용)
+              if (b.alpha < 0.01) b.alpha = 0.01; // 페이드인 시작
+              // 거리 기반 투명도는 중앙 버블 찾은 후 적용되므로 여기서는 최소값만 설정
+            } else {
+              // 아직 로딩 시도조차 안 했으면 로딩 시도
+              if (!imageLoading.has(b.imageIndex) && !imageLoaded.has(b.imageIndex)) {
+                requestBubbleImage(b.imageIndex);
+                // 로딩 중인 버블도 최소한 살짝 보이게 (완전 투명 X)
+                if (b.alpha < 0.01) b.alpha = 0.01;
+              }
+              // 이미 imageLoaded에 있다 = 실패했거나, 더 이상 시도 안 할 상태
+              // (실패한 경우는 error 콜백에서 imageIndex를 null로 바꿔주므로 여기 올 일이 거의 없음)
+              else if (imageLoaded.has(b.imageIndex)) {
+                // 방어적으로 alpha를 올려줌 (실패한 버블은 이미 imageIndex=null로 바뀌었을 것)
+                if (b.alpha < 0.5) b.alpha = 0.5;
+              }
+            }
           } else {
-            // 아직 로딩 시도조차 안 했으면 로딩 시도
-            if (!imageLoading.has(b.imageIndex) && !imageLoaded.has(b.imageIndex)) {
-              requestBubbleImage(b.imageIndex);
-              // 로딩 중인 버블도 최소한 살짝 보이게 (완전 투명 X)
-              if (b.alpha < 0.01) b.alpha = 0.01;
-            }
-            // 이미 imageLoaded에 있다 = 실패했거나, 더 이상 시도 안 할 상태
-            // (실패한 경우는 error 콜백에서 imageIndex를 null로 바꿔주므로 여기 올 일이 거의 없음)
-            else if (imageLoaded.has(b.imageIndex)) {
-              // 방어적으로 alpha를 올려줌 (실패한 버블은 이미 imageIndex=null로 바뀌었을 것)
-              if (b.alpha < 0.5) b.alpha = 0.5;
-            }
+            // 이미지가 없는 버블도 거리 기반 투명도 적용 대상
+            // 초기값은 나중에 거리 기반으로 조정됨 (일단 1.0으로 설정)
+            if (b.alpha < 0.01) b.alpha = 1.0;
           }
-        } else {
-          // 이미지가 없는 버블도 거리 기반 투명도 적용 대상
-          // 초기값은 나중에 거리 기반으로 조정됨 (일단 1.0으로 설정)
-          if (b.alpha < 0.01) b.alpha = 1.0;
         }
-      }
-      b._isFiltered = true;
-      b.update(centerX, centerY, offsetX, offsetY, null);
-      b._isFiltered = false;
-    });
+        b._isFiltered = true;
+        b.update(centerX, centerY, offsetX, offsetY, null);
+        b._isFiltered = false;
+      });
+    }
 
     // 팡 터지는 버블도 위치 업데이트 (애니메이션을 위해)
-    bubbles.filter(b => b.isPopping && b.alpha > 0.01).forEach((b) => {
-      b.update(centerX, centerY, offsetX, offsetY, null);
-    });
+    // 태블릿에서는 업데이트 빈도 줄이기
+    if (shouldUpdateBubbles) {
+      bubbles.filter(b => b.isPopping && b.alpha > 0.01).forEach((b) => {
+        b.update(centerX, centerY, offsetX, offsetY, null);
+      });
+    }
 
     // 중앙에 가장 가까운 버블 찾기 (간소화)
-    centerBubble = filteredBubbles.reduce((closest, b) => {
-      const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
-      const closestDist = closest ? dist(closest.pos.x, closest.pos.y, centerX, centerY) : Infinity;
-      return distToCenter < closestDist ? b : closest;
-    }, null);
+    // 태블릿에서는 찾기 빈도 줄이기
+    if (shouldUpdateBubbles || !centerBubble) {
+      centerBubble = filteredBubbles.reduce((closest, b) => {
+        const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
+        const closestDist = closest ? dist(closest.pos.x, closest.pos.y, centerX, centerY) : Infinity;
+        return distToCenter < closestDist ? b : closest;
+      }, null);
+    }
 
     // 중앙 버블을 최대 크기로 부드럽게 설정 (interactionScale 사용)
     if (centerBubble) {
@@ -2676,10 +2695,12 @@ function draw() {
       centerBubble.interactionScale = lerp(centerBubble.interactionScale, targetInteractionScale, interactionEase);
       
       // 중앙 버블로부터의 거리에 따라 투명도 조정 (바깥으로 갈수록 투명해짐)
-      const centerBubbleX = centerBubble.pos.x;
-      const centerBubbleY = centerBubble.pos.y;
-      
-      filteredBubbles.forEach((b) => {
+      // 태블릿에서는 투명도 계산 빈도 줄이기
+      if (shouldUpdateBubbles) {
+        const centerBubbleX = centerBubble.pos.x;
+        const centerBubbleY = centerBubble.pos.y;
+        
+        filteredBubbles.forEach((b) => {
         if (b === centerBubble || b.isPopping) return; // 중앙 버블과 팡 터지는 버블은 제외
         
         // 이미지가 로드되지 않은 버블은 투명도 조정하지 않음 (이미지가 없는 버블은 제외)
@@ -2709,7 +2730,8 @@ function draw() {
         // 부드럽게 alpha 조정
         // 이미지가 로드된 버블 또는 이미지가 없는 버블 모두 거리 기반 투명도 적용
         b.alpha = lerp(b.alpha, targetAlpha, 0.12);
-      });
+        });
+      }
       
       // 중앙 버블은 항상 완전히 불투명
       centerBubble.alpha = 1.0;
@@ -2783,8 +2805,8 @@ function draw() {
       // 중앙 버블이 없고 모든 움직임이 멈췄으면 애니메이션 정지
       // 단, 모달이 열려있으면 애니메이션 계속 실행
       const showModal = uiStateManager ? uiStateManager.showModal : false;
+      // 태블릿과 데스크탑 모두 유휴 시 애니메이션 정지
       if (
-      !IS_MOBILE &&
         ANIMATION_CONFIG.allowIdlePause &&
         snapTargetX === null &&
         snapTargetY === null &&
