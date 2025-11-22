@@ -2030,8 +2030,8 @@ async function loadBubbleDataFromJSON() {
         }
         log(`[Explorer] 초기 버블 위치 설정 완료`);
 
-        // 🔧 기기별로 첫 로딩 이미지 개수 다르게 (태블릿 부담 감소)
-        const firstLoadCount = IS_MOBILE ? 6 : 12;
+        // 🔧 기기별로 첫 로딩 이미지 개수 다르게 (태블릿도 빠른 로딩)
+        const firstLoadCount = IS_MOBILE ? 10 : 12;
         preloadInitialImages(firstLoadCount);
       }
     } else {
@@ -2093,8 +2093,8 @@ function setup() {
     ANIMATION_CONFIG.enableCenterPulse = true;
     ANIMATION_CONFIG.allowIdlePause = true;
   }
-  // 🔧 태블릿에서 이미지 동시 로드 수 확 줄이기 (새로고침 부담 감소)
-  MAX_CONCURRENT_IMAGE_LOADS = isMobile ? 2 : 6;
+  // 🔧 태블릿에서 이미지 동시 로드 수 조정 (너무 적으면 로딩 느림)
+  MAX_CONCURRENT_IMAGE_LOADS = isMobile ? 4 : 6;
   
   // 🔧 태블릿에서는 큐 길이도 줄여서 한 번에 폭주 방지
   const queueSize = isMobile ? 10 : MAX_IMAGE_QUEUE_LENGTH;
@@ -2138,12 +2138,16 @@ function setup() {
 
   rebuildWorldMetrics(); // 월드 메트릭스 초기화
   
+  // 초기 배경 버퍼 생성 (깜빡임 방지)
+  bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
+  bgBuffer.background(BG_COLOR);
+  
   // 🔧 태블릿은 무거운 작업을 살짝 뒤로 미뤄서 첫 화면이 먼저 뜨도록
   if (isMobile) {
-    // 태블릿은 0.4초 뒤에 무거운 작업 시작 (캔버스 먼저 그려짐)
+    // 태블릿은 0.1초 뒤에 무거운 작업 시작 (깜빡임 최소화하면서 빠른 로딩)
     setTimeout(() => {
   loadBubbleDataFromJSON();
-    }, 400);
+    }, 100);
   } else {
     // 데스크탑은 바로
     loadBubbleDataFromJSON();
@@ -2386,8 +2390,11 @@ function setupPointerBridges() {
 function softReset() {
   if (resetInProgress) return;
   resetInProgress = true;
-  clear();
-  background(BG_COLOR);
+  // clear() 제거: 배경 버퍼를 재사용하여 깜빡임 방지
+  // 배경 버퍼가 있으면 재생성, 없으면 기본 배경 설정
+  if (bgBuffer) {
+    redrawBackgroundBuffer();
+  }
   if (panController) {
     panController.panVelocityX = 0;
     panController.panVelocityY = 0;
