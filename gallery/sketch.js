@@ -13,7 +13,6 @@ let captureButton; // 캡쳐 버튼 이미지
 let workroomButton; // 워크룸 버튼 이미지
 let navigationBar; // 네비게이션 바 이미지
 let bgImage; // 배경 이미지
-let searchInput; // 검색 입력 필드
 let bubbleCap; // 버블 캡 이미지
 let navBarBuffer; // 네비게이션 바 고해상도 버퍼
 let bubbleImages = []; // 버블 이미지들 (지연 로딩)
@@ -24,9 +23,12 @@ let bubbleData = []; // 버블 제목/태그 데이터
 let imageFiles = []; // 이미지 파일명 목록 (전역으로 이동)
 let pretendardFont; // Pretendard 폰트
 let showModal = false; // 모달 표시 여부
-let showToggles = false; // 토글 표시 여부 (더 이상 사용하지 않음)
-let selectedToggles = []; // 선택된 토글들 (더 이상 사용하지 않음)
-let previousSelectedToggles = []; // 이전에 선택된 토글들 (더 이상 사용하지 않음)
+
+// 전체 화면 모드
+let fullscreenMode = false; // 전체 화면 모드 여부
+let selectedBubbleForFullscreen = null; // 전체 화면으로 표시할 버블
+let fullscreenAnimationProgress = 0; // 전체 화면 애니메이션 진행도 (0~1)
+let fullscreenStartTime = 0; // 전체 화면 시작 시간
 
 // 시각적 언어 카드 시스템
 let visualLanguageCards = []; // 시각적 언어 카드 데이터
@@ -66,7 +68,7 @@ const SEARCH_WIDTH_RATIO = 0.2; // 검색창 너비 비율 (화면 너비의 65%
 const SEARCH_NAV_GAP = 40; // 네비게이션 바와 검색창 사이 간격
 
 // ---- ARC CAROUSEL ----
-let ARC_MODE = false; // 아크 캐러셀 켜기(카드 선택 시에만 켜짐)
+let ARC_MODE = true; // 아크 캐러셀 항상 켜기
 const ARC_VISIBLE_COUNT = 7; // 한번에 그릴 슬롯 수 (7개 고정)
 const ARC_SPREAD_RAD = (150 * Math.PI) / 180; // 간격 줄이기 위해 180도 → 150도로 축소
 const ARC_MIN_R = 50; // 버블 최소 반지름 (양 끝, 적당한 크기)
@@ -100,22 +102,15 @@ let frameSkipCounter = 0; // 프레임 스킵 카운터
 // UI sizes
 const NAV_H = 64;
 
-// ---------- STATE for panning ----------
-let offsetX = 0; // X 오프셋 (스와이프로 이동)
-let offsetY = 0; // Y 오프셋
-let isDragging = false; // 드래그 중인지
+// ---------- STATE for dragging ----------
+let isDragging = false; // 드래그 중인지 (아크 캐러셀 외부 영역)
 let dragStartX = 0; // 드래그 시작 X
 let dragStartY = 0; // 드래그 시작 Y
-let dragOffsetX = 0; // 드래그 시작 시 오프셋 X
-let dragOffsetY = 0; // 드래그 시작 시 오프셋 Y
-let panVelocityX = 0; // X 방향 이동 속도 (관성)
-let panVelocityY = 0; // Y 방향 이동 속도 (관성)
-let snapTargetX = null;
 let lastPointerStamp = 0; // 마지막 포인터 입력 타임스탬프
-const RELEASE_IDLE_MS = 140; // 손을 뗀 뒤 이 시간 이상 입력 없으면 릴리즈로 간주 // 스냅 타겟 X 오프셋
-let snapTargetY = null; // 스냅 타겟 Y 오프셋
-let snapCompleted = false; // 스냅이 완료되었는지 여부
-const SNAP_SPEED = 0.15; // 스냅 애니메이션 속도 (낮을수록 느림)
+const RELEASE_IDLE_MS = 140; // 손을 뗀 뒤 이 시간 이상 입력 없으면 릴리즈로 간주
+let clickedBubbleAtPress = null; // mousePressed 시점의 클릭된 버블
+let hasDragged = false; // 드래그가 발생했는지 여부
+const DRAG_THRESHOLD = 5; // 드래그로 간주하는 최소 이동 거리 (픽셀)
 
 // ---------- CLASSES ----------
 class FrameCircle {
@@ -151,20 +146,21 @@ class Bubble {
     this.isPopping = false; // 팡 터지는 애니메이션 중인지
     this.popProgress = 0; // 팡 터지는 진행도 (0~1)
     this.popStartTime = 0; // 팡 터지기 시작 시간
-    // 버블 설명 정보
-    if (imageIndex !== null && bubbleData[imageIndex]) {
+    // 버블 설명 정보 (익스플로어와 동일하게 매핑)
+    if (imageIndex !== null && imageIndex < bubbleData.length && bubbleData[imageIndex]) {
       this.name = bubbleData[imageIndex].title;
       this.tags = bubbleData[imageIndex].tags;
-      this.attributes = bubbleData[imageIndex].attributes || []; // 속성 추가
-      this.visualLanguageAttributes =
-        bubbleData[imageIndex].visualLanguageAttributes || []; // 시각적 언어 속성 추가
+      this.attributes = bubbleData[imageIndex].attributes || [];
+      this.visualTags = bubbleData[imageIndex].visualTags || [];
+      this.emotionalTags = bubbleData[imageIndex].emotionalTags || [];
     } else {
       this.name = `버블 ${
         gridX + gridY * Math.ceil(Math.sqrt(TOTAL_BUBBLES)) + 1
       }`;
       this.tags = ["#버블", "#색상", "#기본"];
-      this.attributes = []; // 기본 속성 없음
-      this.visualLanguageAttributes = []; // 시각적 언어 속성 없음
+      this.attributes = [];
+      this.visualTags = [];
+      this.emotionalTags = [];
     }
   }
 
@@ -455,26 +451,36 @@ function loadVisibleBubbleImages() {
 
 // 개별 버블 이미지 로드 함수
 function loadBubbleImage(imageIndex) {
-  if (imageIndex === null || imageIndex >= imageFiles.length) return;
+  if (imageIndex === null || imageIndex >= imageFiles.length) {
+    console.warn(`[Gallery] loadBubbleImage: 잘못된 인덱스 ${imageIndex} (imageFiles.length: ${imageFiles.length})`);
+    return;
+  }
   if (imageLoading.has(imageIndex) || imageLoaded.has(imageIndex)) return;
 
   imageLoading.add(imageIndex);
+  const imagePath = `../public/assets/bubble-imgs/${imageFiles[imageIndex]}`;
+  console.log(`[Gallery] 이미지 로딩 시작: ${imagePath}`);
 
   loadImage(
-    `../public/assets/bubble-imgs/${imageFiles[imageIndex]}`,
+    imagePath,
     (img) => {
       // 로드 성공
-      bubbleImages[imageIndex] = img;
-      imageLoaded.add(imageIndex);
+      if (img && img.width > 0) {
+        bubbleImages[imageIndex] = img;
+        imageLoaded.add(imageIndex);
+        console.log(`[Gallery] 이미지 로드 성공: ${imageFiles[imageIndex]}`);
+        
+        // 해당 이미지를 사용하는 스프라이트 캐시 무효화
+        invalidateSpriteCacheForImage(imageIndex);
+      } else {
+        console.error(`[Gallery] 이미지 로드 실패: ${imageFiles[imageIndex]} (이미지가 유효하지 않음)`);
+      }
       imageLoading.delete(imageIndex);
-
-      // 해당 이미지를 사용하는 스프라이트 캐시 무효화
-      invalidateSpriteCacheForImage(imageIndex);
     },
     (e) => {
       // 로드 실패
       console.error(
-        `bubbleImage[${imageIndex}] (${imageFiles[imageIndex]}) 로딩 실패:`,
+        `[Gallery] bubbleImage[${imageIndex}] (${imageFiles[imageIndex]}) 로딩 실패:`,
         e
       );
       imageLoading.delete(imageIndex);
@@ -506,6 +512,8 @@ function getBubbleSprite(r, hueSeed, imageIndex = null) {
 
   const size = bucket * 2;
   const g = createGraphics(size, size);
+  g.drawingContext.imageSmoothingEnabled = true;
+  g.drawingContext.imageSmoothingQuality = "high";
   g.noStroke();
 
   // 이미지가 있으면 이미지 사용, 없으면 색상 사용
@@ -604,6 +612,8 @@ function rebuildWorldMetrics() {
 // 배경 버퍼 재생성
 function redrawBackgroundBuffer() {
   bgBuffer = createGraphics(width, height);
+  bgBuffer.drawingContext.imageSmoothingEnabled = true;
+  bgBuffer.drawingContext.imageSmoothingQuality = "high";
   if (
     bgImage &&
     typeof bgImage.width !== "undefined" &&
@@ -944,14 +954,26 @@ function drawBubbleInfo(bubble, centerX, centerY) {
   text(bubble.name, bubble.pos.x + 0.5, titleY);
   text(bubble.name, bubble.pos.x, titleY + 0.5);
 
-  // 태그 (아래쪽)
-  if (bubble.tags && bubble.tags.length > 0) {
-    fill(255, 255, 255, 180); // 0.7 * 255 ≈ 180
+  // 태그 (아래쪽) - 익스플로어와 동일하게 표시
+  let currentY = infoY + 55;
+  
+  // visualTags 표시 (흰색, 최대 3개)
+  if (bubble.visualTags && bubble.visualTags.length > 0) {
+    fill(255, 255, 255, 180);
     textSize(14);
     textStyle(NORMAL);
-    const tagsText = bubble.tags.slice(0, 3).join("  "); // 최대 3개 태그, 공백으로 구분
-    const tagsY = infoY + 55;
-    text(tagsText, bubble.pos.x, tagsY);
+    const visualTagsText = bubble.visualTags.slice(0, 3).map(tag => `#${tag}`).join("  ");
+    text(visualTagsText, bubble.pos.x, currentY);
+    currentY += 25;
+  }
+  
+  // emotionalTags 표시 (노란색, 최대 3개)
+  if (bubble.emotionalTags && bubble.emotionalTags.length > 0) {
+    fill(255, 255, 0, 220);
+    textSize(14);
+    textStyle(NORMAL);
+    const emotionalTagsText = bubble.emotionalTags.slice(0, 3).map(tag => `#${tag}`).join("  ");
+    text(emotionalTagsText, bubble.pos.x, currentY);
   }
   pop();
 }
@@ -989,19 +1011,39 @@ function drawBubbleInfoInCircle(bubble, x, y, r) {
   text(bubble.name, x, titleY);
   drawingContext.restore();
 
-  // 설명/태그 (제목 아래, 반응형 크기)
-  if (bubble.tags && bubble.tags.length > 0) {
+  // 설명/태그 (제목 아래, 반응형 크기) - 익스플로어와 동일하게 표시
+  let currentY = tagsY;
+  
+  // visualTags 표시 (흰색, 최대 3개)
+  if (bubble.visualTags && bubble.visualTags.length > 0) {
     fill(255, 255, 255, 220);
     textSize(14 * responsiveScale);
     textStyle(NORMAL);
-    const tagsText = bubble.tags.slice(0, 2).join("  "); // 최대 2개 태그
+    const visualTagsText = bubble.visualTags.slice(0, 3).map(tag => `#${tag}`).join("  ");
 
     drawingContext.save();
     drawingContext.shadowBlur = 8;
     drawingContext.shadowColor = "rgba(0, 0, 0, 0.7)";
     drawingContext.shadowOffsetX = 0;
     drawingContext.shadowOffsetY = 1;
-    text(tagsText, x, tagsY);
+    text(visualTagsText, x, currentY);
+    drawingContext.restore();
+    currentY += 25 * responsiveScale;
+  }
+  
+  // emotionalTags 표시 (노란색, 최대 3개)
+  if (bubble.emotionalTags && bubble.emotionalTags.length > 0) {
+    fill(255, 255, 0, 220);
+    textSize(14 * responsiveScale);
+    textStyle(NORMAL);
+    const emotionalTagsText = bubble.emotionalTags.slice(0, 3).map(tag => `#${tag}`).join("  ");
+
+    drawingContext.save();
+    drawingContext.shadowBlur = 8;
+    drawingContext.shadowColor = "rgba(0, 0, 0, 0.7)";
+    drawingContext.shadowOffsetX = 0;
+    drawingContext.shadowOffsetY = 1;
+    text(emotionalTagsText, x, currentY);
     drawingContext.restore();
   }
 
@@ -1031,164 +1073,13 @@ function preload() {
   // 공용 버블 데이터 JSON은 setup()에서 비동기로 로드
   // (preload에서 loadJSON이 제대로 작동하지 않을 수 있음)
 
-  // 시각적 언어 카테고리 정의 (이미지 설명 기반)
-  // 하나의 사진이 여러 카테고리에 속할 수 있도록 키워드를 확장
-  visualLanguageCards = [
-    {
-      id: "traditional-pattern",
-      title: "전통적인 문양",
-      subtitle: "Traditional Pattern",
-      visualAttributes: [
-        "전통",
-        "문양",
-        "민속",
-        "대칭",
-        "전통적",
-        "궁궐",
-        "고전",
-        "전통건축",
-      ],
-      count: 0, // 버블 개수는 나중에 계산
-      imageFile: "kyeongbokgung.webp", // 전통 궁궐 이미지
-    },
-    {
-      id: "strong-contrast",
-      title: "강한 대비감",
-      subtitle: "Strong Contrast",
-      visualAttributes: [
-        "대비",
-        "명조",
-        "대비감",
-        "대비 강화",
-        "엣지",
-        "부분대비",
-        "명도 대비",
-        "온냉색 대비",
-        "색 대비",
-        "브루탈리즘",
-        "사선 구도",
-      ],
-      count: 0,
-      imageFile: "building.webp", // 강한 대비 이미지
-    },
-    {
-      id: "vivid-color",
-      title: "비비드한 컬러",
-      subtitle: "Vivid Color",
-      visualAttributes: [
-        "비비드",
-        "컬러",
-        "고채도",
-        "형광",
-        "밝은",
-        "선명한",
-        "비비드 컬러",
-        "네온",
-        "팝 아트",
-        "형광 물질",
-      ],
-      count: 0,
-      imageFile: "super-market.webp", // 슈퍼마켓 이미지
-    },
-    {
-      id: "casual-style",
-      title: "캐주얼한 스타일",
-      subtitle: "Casual Style",
-      visualAttributes: [
-        "캐주얼",
-        "일상",
-        "부드러운",
-        "편안한",
-        "자연스러운",
-        "일상적",
-        "리듬감",
-        "횡단보도",
-        "거리",
-        "도심",
-      ],
-      count: 0,
-      imageFile: "crosswalk.webp", // 횡단보도 이미지
-    },
-    {
-      id: "unique-pattern",
-      title: "독특한 패턴",
-      subtitle: "Unique Pattern",
-      visualAttributes: [
-        "패턴",
-        "독특한",
-        "반복",
-        "리듬",
-        "구조",
-        "그리드",
-        "지오메트릭",
-        "프랙탈",
-        "그물맥",
-        "세포 패터닝",
-        "반복 패턴",
-        "규칙적인",
-        "하이라키",
-      ],
-      count: 0,
-      imageFile: "sweater.webp", // 패턴 이미지
-    },
-  ];
+  // 시각적 언어 카테고리 정의 (태그 기반)
+  // visualTags와 emotionalTags에서 가장 많이 사용된 태그 6개를 선택
+  // 초기값은 빈 배열, loadBubbleDataFromJSON에서 채워짐
+  visualLanguageCards = [];
 
-  // 카드 이미지 로드 (태블릿 최적화 포함)
+  // 카드 이미지 로드 제거 (이미지 없이 텍스트만 표시)
   cardImages = [];
-  const isMobile = isMobileOrTablet();
-  visualLanguageCards.forEach((card) => {
-    if (card.imageFile) {
-      loadImage(
-        `../public/assets/bubble-imgs/${card.imageFile}`,
-        (img) => {
-          // 태블릿에서는 이미지 해상도 제한 (성능 최적화, 화질 유지)
-          if (isMobile && img) {
-            const MAX_TABLET_DIMENSION = 1200;
-            if (img.width > MAX_TABLET_DIMENSION || img.height > MAX_TABLET_DIMENSION) {
-              const scale = Math.min(
-                MAX_TABLET_DIMENSION / img.width,
-                MAX_TABLET_DIMENSION / img.height
-              );
-              const newWidth = Math.floor(img.width * scale);
-              const newHeight = Math.floor(img.height * scale);
-              
-              // 고품질 리사이징을 위한 임시 캔버스
-              const tempCanvas = document.createElement('canvas');
-              tempCanvas.width = newWidth;
-              tempCanvas.height = newHeight;
-              const ctx = tempCanvas.getContext('2d');
-              ctx.imageSmoothingEnabled = true;
-              ctx.imageSmoothingQuality = 'high';
-              ctx.drawImage(img.elt, 0, 0, newWidth, newHeight);
-              
-              // 리사이즈된 이미지로 교체
-              const resizedImg = createImage(newWidth, newHeight);
-              resizedImg.loadPixels();
-              const imageData = ctx.getImageData(0, 0, newWidth, newHeight);
-              resizedImg.pixels = imageData.data;
-              resizedImg.updatePixels();
-              cardImages.push(resizedImg);
-              card.image = resizedImg;
-            } else {
-              cardImages.push(img);
-              card.image = img;
-            }
-          } else {
-            cardImages.push(img);
-            card.image = img;
-          }
-        },
-        (e) => {
-          console.error(`카드 이미지 로딩 실패: ${card.imageFile}`, e);
-          cardImages.push(null);
-          card.image = null;
-        }
-      );
-    } else {
-      cardImages.push(null);
-      card.image = null;
-    }
-  });
 
   // mapTagsToVisualLanguage 함수는 전역으로 이동 (loadBubbleDataFromJSON에서 사용)
 
@@ -1381,17 +1272,7 @@ function preload() {
   ];
   */
 
-  // 모든 버블 데이터에 시각적 언어 속성 자동 매핑
-  bubbleData.forEach((data) => {
-    data.visualLanguageAttributes = mapTagsToVisualLanguage(data.tags);
-  });
-
-  // 각 카드의 버블 개수 계산
-  visualLanguageCards.forEach((card) => {
-    card.count = bubbleData.filter((data) =>
-      data.visualLanguageAttributes.includes(card.id)
-    ).length;
-  });
+  // 태그 기반 카테고리는 loadBubbleDataFromJSON에서 생성됨
 
   // 버블 이미지 배열 초기화 (지연 로딩을 위해 null로 초기화)
   for (let i = 0; i < imageFiles.length; i++) {
@@ -1414,45 +1295,176 @@ function isMobileOrTablet() {
   return isMobile || isTablet || (isTouchDevice && isSmallScreen);
 }
 
-// 태그를 분석하여 시각적 언어 속성 자동 매핑
-// 하나의 사진이 여러 카테고리에 속할 수 있도록 개선
-function mapTagsToVisualLanguage(tags) {
-  const attributes = [];
-  // 태그를 공백으로 합친 전체 문자열
-  const tagString = tags.join(" ").toLowerCase();
-  // 각 태그를 개별적으로도 확인 (더 정확한 매핑을 위해)
-  const individualTags = tags.map((tag) =>
-    tag.toLowerCase().replace("#", "").trim()
-  );
+// ---------- 집단별 언어 데이터 (익스플로어와 동일) ----------
+const groupLanguages = {
+  1: {
+    // 여행자 (traveler)
+    visual: [
+      "깊이감",
+      "메탈릭 쉐이드",
+      "자연광 리플렉션",
+      "미드나잇 톤",
+      "풍경 반사감",
+    ],
+    emotional: [
+      "탐험",
+      "긴장과 기대",
+      "미지로 향함",
+      "고독한 낭만",
+      "체험의 몰입",
+    ],
+  },
+  2: {
+    // 20대 여성 (20s)
+    visual: [
+      "핑크-옐로우",
+      "젤리 텍스처",
+      "따뜻한 난색",
+      "부드러운 곡면",
+      "글로시한 윤기",
+    ],
+    emotional: ["활력", "사랑스러움", "자기표현", "로맨틱", "설렘"],
+  },
+  3: {
+    // 50대 남성 (50s)
+    visual: [
+      "고명도 대비",
+      "안정된 구형",
+      "시원한 색",
+      "투명한 반사광",
+      "균형적 분포",
+    ],
+    emotional: ["보호", "책임감", "신뢰", "안정", "성취"],
+  },
+  4: {
+    // 주부 (housewife)
+    visual: [
+      "소프트 톤",
+      "파스텔 옐로",
+      "투명한 안정감",
+      "부드러운 난반사",
+      "깨끗한 정결 이미지",
+    ],
+    emotional: ["온기", "안정", "배려", "평온", "따뜻한 일상"],
+  },
+  5: {
+    // 10대 여성 (10s)
+    visual: [
+      "네온 핑크",
+      "사이버 파스텔",
+      "디지털 글로시",
+      "높은 채도",
+      "K-pop 팔레트",
+    ],
+    emotional: [
+      "흥미",
+      "자기취향 강도",
+      "아이코닉함",
+      "통통 귀여움",
+      "즉각적 몰입",
+    ],
+  },
+};
 
-  // 각 카드의 visualAttributes와 태그를 비교
-  visualLanguageCards.forEach((card) => {
-    // 전체 태그 문자열에서 확인
-    const matchesInString = card.visualAttributes.some((attr) =>
-      tagString.includes(attr.toLowerCase())
-    );
-
-    // 개별 태그에서도 확인 (더 정확한 매칭)
-    const matchesInTags = card.visualAttributes.some((attr) => {
-      const attrLower = attr.toLowerCase();
-      return individualTags.some(
-        (tag) => tag.includes(attrLower) || attrLower.includes(tag)
-      );
-    });
-
-    // 둘 중 하나라도 매칭되면 해당 카테고리에 속함
-    if (matchesInString || matchesInTags) {
-      attributes.push(card.id);
+// 태그 기반 카테고리 생성 함수
+function createTagBasedCategories() {
+  // 모든 태그 수집 (visualTags + emotionalTags)
+  const tagCounts = new Map();
+  
+  bubbleData.forEach((data) => {
+    // visualTags 수집
+    if (data.visualTags && Array.isArray(data.visualTags)) {
+      data.visualTags.forEach(tag => {
+        tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+      });
+    }
+    // emotionalTags 수집
+    if (data.emotionalTags && Array.isArray(data.emotionalTags)) {
+      data.emotionalTags.forEach(tag => {
+        tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+      });
     }
   });
+  
+  // 태그를 사용 횟수 순으로 정렬하고 상위 6개 선택
+  const sortedTags = Array.from(tagCounts.entries())
+    .sort((a, b) => b[1] - a[1]) // 사용 횟수 내림차순
+    .slice(0, 6) // 상위 6개
+    .map(entry => entry[0]); // 태그 이름만 추출
+  
+  // visualLanguageCards 생성
+  visualLanguageCards = sortedTags.map((tag, index) => {
+    // 해당 태그를 가진 버블 개수 계산
+    const count = bubbleData.filter((data) => {
+      const hasVisualTag = data.visualTags && data.visualTags.includes(tag);
+      const hasEmotionalTag = data.emotionalTags && data.emotionalTags.includes(tag);
+      return hasVisualTag || hasEmotionalTag;
+    }).length;
+    
+    return {
+      id: tag, // 태그 이름을 ID로 사용
+      title: tag,
+      subtitle: tag, // 영어 부제목은 태그 이름 그대로
+      count: count,
+    };
+  });
+  
+  console.log(`[Gallery] 태그 기반 카테고리 생성: ${visualLanguageCards.length}개`);
+}
 
-  return attributes;
+// 버블 데이터에 언어를 자동 할당하는 함수 (익스플로어와 동일)
+function assignLanguagesToBubbles() {
+  for (let i = 0; i < bubbleData.length; i++) {
+    const bubble = bubbleData[i];
+    if (!bubble.attributes || bubble.attributes.length === 0) {
+      bubble.visualTags = [];
+      bubble.emotionalTags = [];
+      continue;
+    }
+
+    const visualTags = [];
+    const emotionalTags = [];
+
+    // 각 속성에 대해 언어 선택 (랜덤하게 선택)
+    bubble.attributes.forEach((attr) => {
+      const lang = groupLanguages[attr];
+      if (lang) {
+        // 시각적 언어 2-3개 선택
+        const visualCount = Math.floor(Math.random() * 2) + 2; // 2-3개
+        const selectedVisual = [];
+        const visualCopy = [...lang.visual];
+        for (let j = 0; j < visualCount && visualCopy.length > 0; j++) {
+          const idx = Math.floor(Math.random() * visualCopy.length);
+          selectedVisual.push(visualCopy[idx]);
+          visualCopy.splice(idx, 1);
+        }
+        visualTags.push(...selectedVisual);
+
+        // 감정적 언어 2-3개 선택
+        const emotionalCount = Math.floor(Math.random() * 2) + 2; // 2-3개
+        const selectedEmotional = [];
+        const emotionalCopy = [...lang.emotional];
+        for (let j = 0; j < emotionalCount && emotionalCopy.length > 0; j++) {
+          const idx = Math.floor(Math.random() * emotionalCopy.length);
+          selectedEmotional.push(emotionalCopy[idx]);
+          emotionalCopy.splice(idx, 1);
+        }
+        emotionalTags.push(...selectedEmotional);
+      }
+    });
+
+    // 중복 제거
+    bubble.visualTags = [...new Set(visualTags)];
+    bubble.emotionalTags = [...new Set(emotionalTags)];
+  }
 }
 
 // 공용 버블 데이터 JSON 비동기 로드 함수
 async function loadBubbleDataFromJSON() {
   try {
-    const response = await fetch("../public/assets/data/bubbles.json");
+    const jsonPath = "../public/assets/data/bubbles.json";
+    console.log(`[Gallery] JSON 로딩 시작: ${jsonPath}`);
+    const response = await fetch(jsonPath);
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
@@ -1473,7 +1485,9 @@ async function loadBubbleDataFromJSON() {
       bubbleData = bubblesJson.bubbles.map(bubble => ({
         title: bubble.title,
         tags: bubble.tags,
-        attributes: bubble.attributes
+        attributes: bubble.attributes,
+        visualTags: [], // assignLanguagesToBubbles에서 채워짐
+        emotionalTags: [] // assignLanguagesToBubbles에서 채워짐
       }));
       console.log(`[Gallery] JSON에서 ${bubbleData.length}개의 버블 데이터 로드됨`);
       
@@ -1482,21 +1496,25 @@ async function loadBubbleDataFromJSON() {
         bubbleImages.push(null);
       }
       
-      // 모든 버블 데이터에 시각적 언어 속성 자동 매핑
-      bubbleData.forEach((data) => {
-        data.visualLanguageAttributes = mapTagsToVisualLanguage(data.tags);
-      });
+      // 버블 데이터에 언어 할당 (visualTags, emotionalTags 생성)
+      assignLanguagesToBubbles();
+      console.log(`[Gallery] 버블 데이터에 언어 할당 완료`);
       
-      // 각 카드의 버블 개수 계산
-      visualLanguageCards.forEach((card) => {
-        card.count = bubbleData.filter((data) =>
-          data.visualLanguageAttributes.includes(card.id)
-        ).length;
-      });
+      // 태그 기반 카테고리 생성 (visualTags와 emotionalTags에서 가장 많이 사용된 태그 6개 선택)
+      createTagBasedCategories();
+      console.log(`[Gallery] 태그 기반 카테고리 생성 완료`);
       
       // 버블 재생성 (JSON 데이터가 로드된 후)
       buildBubbles();
       console.log(`[Gallery] 버블 재생성 완료`);
+      
+      // 초기 상태에서 첫 번째 카테고리 자동 선택
+      if (visualLanguageCards.length > 0) {
+        selectCard(0);
+      }
+      
+      // 버블 생성 후 화면에 보이는 이미지 로드 시작
+      loadVisibleBubbleImages();
     } else {
       console.error("[Gallery] JSON에서 bubbles를 로드할 수 없습니다", bubblesJson);
     }
@@ -1510,7 +1528,13 @@ async function loadBubbleDataFromJSON() {
 function setup() {
   // 태블릿/모바일 최적화
   const isMobile = isMobileOrTablet();
-  pixelDensity(1); // 모든 기기에서 pixelDensity 1로 통일 (성능 최적화)
+  
+  // 화질 향상: 데스크톱에서는 pixelDensity를 높게 설정
+  if (isMobile) {
+    pixelDensity(1); // 모바일/태블릿은 1로 유지 (성능 최적화)
+  } else {
+    pixelDensity(1.5); // 데스크톱은 적당한 밀도로 유지 (화질 향상)
+  }
 
   if (isMobile) {
     frameRate(30); // 태블릿/모바일에서는 30fps로 제한
@@ -1526,8 +1550,6 @@ function setup() {
   // 공용 버블 데이터 JSON 비동기 로드 (로드 완료 후 버블 생성)
   loadBubbleDataFromJSON();
 
-  // 검색 입력 필드 생성 (interested 이미지 사용 시 숨김)
-  // createSearchInput(); // interested 이미지 사용으로 인해 주석 처리
 
   // 자산 로딩 확인 및 에러 체크
   if (
@@ -1578,10 +1600,12 @@ function setup() {
     // 반응형 스케일 계산 (헬퍼 함수 사용)
     const responsiveScale = getResponsiveScale();
 
-    const NAV_W = navigationBar.width * 0.65 * responsiveScale;
-    const NAV_H = navigationBar.height * 0.65 * responsiveScale;
+    const NAV_W = navigationBar.width * 0.455 * responsiveScale;
+    const NAV_H = navigationBar.height * 0.455 * responsiveScale;
     const scaleFactor = 2;
     navBarBuffer = createGraphics(NAV_W * scaleFactor, NAV_H * scaleFactor);
+    navBarBuffer.drawingContext.imageSmoothingEnabled = true;
+    navBarBuffer.drawingContext.imageSmoothingQuality = "high";
     navBarBuffer.imageMode(CORNER);
     navBarBuffer.image(
       navigationBar,
@@ -1617,10 +1641,7 @@ function setup() {
   // 포인터 이벤트 브릿지 설정 (Windows 터치스크린 지원)
   setupPointerBridges();
 
-  // 초기 상태에서 첫 번째 카테고리 자동 선택
-  if (visualLanguageCards.length > 0) {
-    selectCard(0);
-  }
+  // 초기 카테고리 선택은 loadBubbleDataFromJSON에서 카테고리 생성 후에 수행됨
 }
 
 // 포인터 이벤트 브릿지 함수 (Windows 터치스크린/펜 지원)
@@ -1720,44 +1741,6 @@ function setupPointerBridges() {
   window.addEventListener("pointercancel", handlePointerCancel);
 }
 
-function createSearchInput() {
-  const responsiveScale = getResponsiveScale();
-  const { W, H, X, Y } = getSearchMetrics();
-
-  // 아이콘 영역을 제외한 텍스트 입력 영역 - 30% 증가
-  const iconSize = 24 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3;
-  const iconX = X + 24 * SEARCH_SCALE * responsiveScale * 1.3;
-  const textStartX =
-    iconX + iconSize + 16 * SEARCH_SCALE * responsiveScale * 1.3;
-  const textWidth =
-    W - (textStartX - X) - 24 * SEARCH_SCALE * responsiveScale * 1.3;
-
-  searchInput = createInput("");
-  searchInput.attribute("placeholder", "");
-  searchInput.position(textStartX, Y);
-  searchInput.size(textWidth, H);
-  searchInput.style("background", "transparent");
-  searchInput.style("border", "none");
-  searchInput.style("outline", "none");
-  searchInput.style("color", "rgba(255,255,255,0.8)");
-  searchInput.style(
-    "font-size",
-    `${16 * SEARCH_SCALE * responsiveScale * 1.2 * 1.5 * 1.3}px`
-  );
-  searchInput.style("font-family", "inherit");
-  searchInput.style("padding", "0");
-  searchInput.style("margin", "0");
-  searchInput.style("z-index", "1000"); // 가장 위에 표시
-  searchInput.style("text-align", "center"); // 텍스트 중앙 정렬
-  searchInput.style("line-height", `${H}px`); // 세로 중앙 정렬을 위한 line-height
-
-  // Windows에서 레이어 문제 방지: pointer-events 및 위치 제어
-  searchInput.style("pointer-events", "auto"); // 포커스 가능
-  searchInput.style("position", "absolute");
-  searchInput.style("overflow", "hidden");
-  searchInput.style("white-space", "nowrap");
-}
-
 function draw() {
   // 태블릿에서 프레임 스킵 로직 (성능 개선)
   const isMobile = isMobileOrTablet();
@@ -1784,336 +1767,52 @@ function draw() {
     background(BG_COLOR);
   }
 
-  // 릴리즈 워치독: 드래그 중 입력이 끊기면 자동으로 손을 뗀 것으로 처리
-  if (isDragging && millis() - lastPointerStamp > RELEASE_IDLE_MS) {
-    isDragging = false;
-    // pointercancel/leave 등으로 놓치는 경우 보정
-    snapTargetX = null;
-    snapTargetY = null;
-    snapCompleted = false;
-    // 바로 중앙 버블로 스냅 시작
-    snapToCenterBubble();
-  }
 
-  // 패닝 애니메이션 업데이트 (관성 및 스냅)
-  if (!isDragging) {
-    // 스냅 타겟이 있으면 부드럽게 스냅
-    if (snapTargetX !== null && snapTargetY !== null) {
-      const dx = snapTargetX - offsetX;
-      const dy = snapTargetY - offsetY;
-      const dist = sqrt(dx * dx + dy * dy);
-
-      // 목표 위치에 충분히 가까우면 스냅 완료
-      if (dist < 0.1) {
-        offsetX = snapTargetX;
-        offsetY = snapTargetY;
-        snapTargetX = null;
-        snapTargetY = null;
-        panVelocityX = 0;
-        panVelocityY = 0;
-        snapCompleted = true; // 스냅 완료 표시
-        // 중앙 버블이 있으면 빛 효과를 위해 애니메이션 계속 실행
-        // stopAnim()은 나중에 중앙 버블 확인 후 호출
-      } else {
-        // 부드럽게 타겟으로 이동 (거리에 따라 속도 조정)
-        const dx = snapTargetX - offsetX;
-        const dy = snapTargetY - offsetY;
-        const dist = sqrt(dx * dx + dy * dy);
-
-        // 거리가 멀수록 더 빠르게, 가까울수록 더 느리게 (자연스러운 감속)
-        const dynamicSpeed = min(SNAP_SPEED * (1 + dist / 1000), 0.25);
-
-        offsetX = lerp(offsetX, snapTargetX, dynamicSpeed);
-        offsetY = lerp(offsetY, snapTargetY, dynamicSpeed);
-        panVelocityX = 0; // 스냅 중에는 관성 무시
-        panVelocityY = 0;
-      }
-    } else {
-      // 관성 이동
-      panVelocityX *= 0.95; // 감쇠
-      panVelocityY *= 0.95;
-      offsetX += panVelocityX;
-      offsetY += panVelocityY;
-
-      // 속도가 매우 작아지면 스냅 시작 (한 번만)
-      if (abs(panVelocityX) < 0.1 && abs(panVelocityY) < 0.1) {
-        panVelocityX = 0;
-        panVelocityY = 0;
-        // 스냅 타겟이 없고, 아직 스냅이 완료되지 않았을 때만 스냅 시작
-        if (snapTargetX === null && snapTargetY === null && !snapCompleted) {
-          snapToCenterBubble();
-        }
-      }
-    }
-  }
-
-  // 중심 위치 계산 (검색창 아래 영역의 중앙)
-  const { H: SEARCH_H, bottom: SEARCH_BOTTOM } = getSearchMetrics();
-  const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
-  const BUBBLE_AREA_BOTTOM = height - 10;
-  const BUBBLE_AREA_CENTER =
-    BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
-
-  const centerX = width * CENTER_X_RATIO;
-  const centerY = BUBBLE_AREA_CENTER - 70; // 검색창 아래 영역의 중앙에서 70픽셀 위 (더 위로)
-
-  // 버블 필터링 (선택된 카드가 있으면 해당 시각적 언어 속성을 가진 버블만 표시)
-  let filteredBubbles = bubbles;
+  // 버블 필터링 (선택된 카드가 있으면 해당 태그를 가진 버블만 표시)
   if (selectedCardIndex !== null && visualLanguageCards[selectedCardIndex]) {
     const selectedCard = visualLanguageCards[selectedCardIndex];
-    filteredBubbles = bubbles.filter((b) => {
-      // 버블의 시각적 언어 속성 중 하나라도 선택된 카드에 포함되면 표시
-      return (
-        b.visualLanguageAttributes &&
-        b.visualLanguageAttributes.includes(selectedCard.id)
-      );
-    });
-
-    // 필터링된 버블을 전역 변수에 저장 (snapToCenterBubble에서 사용)
-    currentFilteredBubbles = filteredBubbles;
-
-    // 이전 카테고리와 새 카테고리 모두에 포함되는 버블 찾기 (유지되는 버블)
-    let previousFilteredBubbles = [];
-    if (
-      previousSelectedCardIndex !== null &&
-      visualLanguageCards[previousSelectedCardIndex]
-    ) {
-      const previousCard = visualLanguageCards[previousSelectedCardIndex];
-      previousFilteredBubbles = bubbles.filter((b) => {
-        return (
-          b.visualLanguageAttributes &&
-          b.visualLanguageAttributes.includes(previousCard.id)
-        );
-      });
-    }
-
-    // 공통 버블 (이전과 새 카테고리 모두에 포함되는 버블)
-    const commonBubbles = filteredBubbles.filter((b) =>
-      previousFilteredBubbles.includes(b)
-    );
-
-    // 필터링되지 않은 버블들 팡 터지기 시작 (단, 공통 버블은 제외)
-    bubbles.forEach((b) => {
-      const isFiltered = filteredBubbles.includes(b);
-      const isCommon = commonBubbles.includes(b);
-      // 필터링되지 않았고, 공통 버블이 아니면 팡 터지기
-      if (!isFiltered && !isCommon && !b.isPopping) {
-        b.isPopping = true;
-        b.popStartTime = millis();
-        b.popProgress = 0;
-      }
+    const selectedTag = selectedCard.id; // 태그 이름
+    currentFilteredBubbles = bubbles.filter((b) => {
+      // 버블의 visualTags 또는 emotionalTags에 선택된 태그가 포함되면 표시
+      const hasVisualTag = b.visualTags && b.visualTags.includes(selectedTag);
+      const hasEmotionalTag = b.emotionalTags && b.emotionalTags.includes(selectedTag);
+      return hasVisualTag || hasEmotionalTag;
     });
   } else {
-    // 토글이 선택되지 않았으면 모든 팡 터지는 애니메이션 중지
-    bubbles.forEach((b) => {
-      if (b.isPopping) {
-        b.isPopping = false;
-        b.popProgress = 0;
-        b.alpha = 1.0;
-      }
-    });
-    // 필터링되지 않았으므로 모든 버블 사용
+    // 카테고리가 선택되지 않았으면 모든 버블 표시
     currentFilteredBubbles = bubbles;
   }
 
-  // 팡 터지는 애니메이션 업데이트
-  const POP_DURATION = 500; // 0.5초 동안 팡 터짐 (더 부드럽게)
-  let allPopped = true; // 모든 팡 터지는 버블이 완료되었는지 확인
-  let lastPopEndTime = 0; // 마지막 팡 터짐 완료 시간
-
-  // Easing 함수: ease-out cubic
-  function easeOutCubic(t) {
-    return 1 - pow(1 - t, 3);
-  }
-
-  bubbles.forEach((b) => {
-    if (b.isPopping) {
-      const elapsed = millis() - b.popStartTime;
-      const rawProgress = Math.min(elapsed / POP_DURATION, 1.0);
-      b.popProgress = easeOutCubic(rawProgress); // easing 적용
-
-      if (b.popProgress >= 1.0) {
-        b.alpha = 0; // 완전히 사라짐
-        // 팡 터짐 완료 시간 기록
-        const popEndTime = b.popStartTime + POP_DURATION;
-        if (popEndTime > lastPopEndTime) {
-          lastPopEndTime = popEndTime;
-        }
-      } else {
-        // 팡 터지는 효과: 커지면서 투명해짐 (더 부드러운 곡선)
-        const scale = 1.0 + b.popProgress * 1.2; // 1.0에서 2.2배까지 (더 부드럽게)
-        b.alpha = 1.0 - b.popProgress; // 투명도 감소
-        // 실제 반지름은 업데이트하지 않고 그릴 때만 스케일 적용
-        allPopped = false; // 아직 팡 터지는 중인 버블이 있음
-      }
-    }
-  });
-
   // === 버블 섹션 ===
-  let centerBubble = null;
+  // 아크 캐러셀 모드로 항상 표시
+  drawArcCarousel();
+  
+  // 전체 화면 모드일 때는 애니메이션 계속 실행
+  if (fullscreenMode) {
+    startAnim();
+  }
 
-  if (ARC_MODE) {
-    // 아크 캐러셀 모드
-    // 버블이 아크를 따라 이동하는 애니메이션 (drawArcCarousel 내부에서 처리)
-    drawArcCarousel();
-    // 아크 캐러셀에서는 centerBubble을 drawArcCarousel 내부에서 처리
+  // 전체 화면 모드
+  if (fullscreenMode) {
+    // 전체 화면 이미지 그리기
+    drawFullscreenImage();
+    // 전체 화면 UI 그리기 (날씨 바, 조도 바, 뒤로가기 버튼)
+    drawFullscreenUI();
   } else {
-    // 기존 자유 패닝(애플워치식) 모드
-    // 버블 업데이트 및 그리기 (화면에 보이는 것만)
-    // 먼저 모든 버블 업데이트하여 중앙 버블 찾기 (1차 업데이트)
-    // 필터링된 버블들은 alpha를 1.0으로 보장하고 페이드아웃 로직 건너뛰기
-    filteredBubbles.forEach((b) => {
-      // 필터링된 버블은 팡 터지는 중이 아니면 alpha를 1.0으로 강제 설정
-      if (!b.isPopping) {
-        b.alpha = 1.0;
-      }
-      // 필터링된 버블임을 표시하기 위해 임시 속성 추가 (update에서 사용)
-      b._isFiltered = true;
-      b.update(centerX, centerY, offsetX, offsetY, null);
-      b._isFiltered = false; // 업데이트 후 제거
-    });
+    // 일반 모드
+    vignette();
 
-    // 팡 터지는 버블도 위치 업데이트 (애니메이션을 위해)
-    bubbles.forEach((b) => {
-      if (b.isPopping && b.alpha > 0.01) {
-        b.update(centerX, centerY, offsetX, offsetY, null);
-      }
-    });
+    // 검색창과 네비게이션 바를 가장 위에 그리기 (버블 위에 표시)
+    drawNavBar();
+    drawSearchBar();
 
-    // 중앙에 가장 가까운 버블 찾기 (필터링된 버블 중에서)
-    let minDistToCenter = Infinity;
-    filteredBubbles.forEach((b) => {
-      const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
-      if (distToCenter < minDistToCenter) {
-        minDistToCenter = distToCenter;
-        centerBubble = b;
-      }
-    });
+    // 시각적 언어 카드 그리기 (검색창 아래)
+    drawVisualLanguageCards();
 
-    // 중앙 버블을 최대 크기로 부드럽게 설정 (배경 움직임에 따라 동적으로 변함)
-    if (centerBubble) {
-      // 부드럽게 최대 크기로 변화 (1.4배 * 0.9 = 1.26배, 더 크게)
-      centerBubble.r = lerp(centerBubble.r, MAX_BUBBLE_RADIUS * 1.4 * 0.9, 0.2);
-
-      // 중앙 버블 위치를 전달하여 주변 버블들이 작아지도록 재업데이트 (필터링된 버블만)
-      filteredBubbles.forEach((b) => {
-        if (b !== centerBubble) {
-          b.update(centerX, centerY, offsetX, offsetY, centerBubble.pos);
-        }
-      });
+    // 모달 표시
+    if (showModal) {
+      drawModal();
     }
-
-    // 검색창과 네비게이션 바 영역 계산 (재사용)
-    const NAV_Y = 20;
-    // 반응형 스케일 계산 (헬퍼 함수 사용)
-    const responsiveScale = getResponsiveScale();
-    const NAV_H = navigationBar
-      ? navigationBar.height * 0.45 * responsiveScale
-      : 64;
-    const NAV_BOTTOM = NAV_Y + NAV_H;
-
-    // 화면에 보이는 버블의 이미지 지연 로딩
-    loadVisibleBubbleImages();
-
-    // LOD: 보이는 버블만 수집하고 가까운 순으로 정렬 (성능 최적화)
-    // 필터링된 버블과 팡 터지는 버블 모두 포함
-    const visible = [];
-    for (const b of bubbles) {
-      // alpha가 너무 작으면 스킵
-      if (b.alpha < 0.01) continue;
-
-      // 팡 터지는 버블은 스케일을 고려한 크기로 확인
-      const effectiveR =
-        b.isPopping && b.popProgress < 1.0
-          ? b.r * (1.0 + b.popProgress * 1.5)
-          : b.r;
-
-      // 버블이 화면에 보이는지 확인
-      const isOnScreen =
-        b.pos.x + effectiveR > -50 &&
-        b.pos.x - effectiveR < width + 50 &&
-        b.pos.y + effectiveR > -50 &&
-        b.pos.y - effectiveR < height + 50;
-
-      // 버블이 검색창 아래 영역에만 있는지 확인
-      const bubbleTop = b.pos.y - effectiveR;
-      const bubbleBottom = b.pos.y + effectiveR;
-      const isInAllowedArea =
-        bubbleTop >= SEARCH_BOTTOM - 50 && bubbleBottom <= height - 10 + 50;
-
-      if (isOnScreen && isInAllowedArea) {
-        // 거리 제곱 계산 (루트 없이 - 성능 최적화)
-        const dx = b.pos.x - centerX;
-        const dy = b.pos.y - centerY;
-        const distSq = dx * dx + dy * dy;
-        visible.push([distSq, b]);
-      }
-    }
-
-    // 가까운 순으로 정렬 후 큰 것부터 그리기 (오버드로우 감소)
-    visible.sort((a, b) => a[0] - b[0]); // 거리 순 정렬
-    // 큰 버블부터 그리기 (오버드로우 감소)
-    visible.sort((a, b) => b[1].r - a[1].r);
-
-    // 상위 MAX_DRAW개만 그리기 (중앙 버블 제외)
-    for (let i = 0; i < Math.min(MAX_DRAW, visible.length); i++) {
-      if (visible[i][1] !== centerBubble) {
-        visible[i][1].draw();
-      }
-    }
-
-    // 중앙 버블은 별도로 그리기 (이미지 -> 빛 -> 캡 순서)
-    if (centerBubble) {
-      // 1. 버블 이미지/색상만 그리기 (캡 없이)
-      drawCenterBubbleImage(centerBubble);
-      // 2. 빛 효과 그리기 (캡과 사진 사이)
-      drawBubbleLightEffect(centerBubble);
-      // 3. 캡 그리기
-      drawCenterBubbleCap(centerBubble);
-
-      // 중앙 버블이 있으면 빛 효과를 위해 애니메이션 계속 실행
-      startAnim();
-    } else {
-      // 중앙 버블이 없고 모든 움직임이 멈췄으면 애니메이션 정지
-      // 단, 모달이 열려있으면 애니메이션 계속 실행
-      if (
-        snapTargetX === null &&
-        snapTargetY === null &&
-        abs(panVelocityX) < 0.1 &&
-        abs(panVelocityY) < 0.1 &&
-        !isDragging &&
-        !showModal
-      ) {
-        stopAnim();
-      } else if (showModal) {
-        // 모달이 열려있으면 애니메이션 계속 실행
-        startAnim();
-      }
-    }
-  }
-
-  vignette();
-
-  // 검색창과 네비게이션 바를 가장 위에 그리기 (버블 위에 표시)
-  drawNavBar();
-  drawSearchBar();
-
-  // 시각적 언어 카드 그리기 (검색창 아래)
-  drawVisualLanguageCards();
-
-  // 토글 표시 (더 이상 사용하지 않음)
-  // if (showToggles) {
-  //   drawToggles();
-  // }
-
-  // 설명창은 가장 마지막에 그리기 (다른 요소 위에 표시)
-  if (centerBubble) {
-    drawBubbleInfo(centerBubble, centerX, centerY);
-  }
-
-  // 모달 표시
-  if (showModal) {
-    drawModal();
   }
 }
 
@@ -2128,10 +1827,12 @@ function windowResized() {
     // 반응형 스케일 계산 (헬퍼 함수 사용)
     const responsiveScale = getResponsiveScale();
 
-    const NAV_W = navigationBar.width * 0.65 * responsiveScale;
-    const NAV_H = navigationBar.height * 0.65 * responsiveScale;
+    const NAV_W = navigationBar.width * 0.455 * responsiveScale;
+    const NAV_H = navigationBar.height * 0.455 * responsiveScale;
     const scaleFactor = 2;
     navBarBuffer = createGraphics(NAV_W * scaleFactor, NAV_H * scaleFactor);
+    navBarBuffer.drawingContext.imageSmoothingEnabled = true;
+    navBarBuffer.drawingContext.imageSmoothingQuality = "high";
     navBarBuffer.imageMode(CORNER);
     navBarBuffer.image(
       navigationBar,
@@ -2142,26 +1843,6 @@ function windowResized() {
     );
   }
 
-  // 검색 입력 필드 위치 업데이트
-  if (searchInput) {
-    const responsiveScale = getResponsiveScale();
-    const { W, H, X, Y } = getSearchMetrics();
-    const iconSize = 24 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3;
-    const iconX = X + 24 * SEARCH_SCALE * responsiveScale * 1.3;
-    const textStartX =
-      iconX + iconSize + 16 * SEARCH_SCALE * responsiveScale * 1.3;
-    const textWidth =
-      W - (textStartX - X) - 24 * SEARCH_SCALE * responsiveScale * 1.3;
-
-    searchInput.position(textStartX, Y);
-    searchInput.size(textWidth, H);
-    searchInput.style(
-      "font-size",
-      `${16 * SEARCH_SCALE * responsiveScale * 1.2 * 1.5}px`
-    );
-    searchInput.style("text-align", "center"); // 텍스트 중앙 정렬
-    searchInput.style("line-height", `${H}px`); // 세로 중앙 정렬을 위한 line-height
-  }
 }
 
 // ---------- UTILS ----------
@@ -2201,257 +1882,8 @@ function getSearchMetrics() {
   return { W, H, X, Y, bottom: Y + H };
 }
 
-// 중앙 버블을 화면 중앙에 고정하는 함수 (타겟만 설정)
-// filteredBubbles를 전역에서 접근할 수 있도록 변수로 저장
+// 필터링된 버블을 전역에서 접근할 수 있도록 변수로 저장
 let currentFilteredBubbles = [];
-
-function snapToCenterBubble() {
-  // 중심 위치 계산
-  const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
-  const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
-  const BUBBLE_AREA_BOTTOM = height - 10;
-  const BUBBLE_AREA_CENTER =
-    BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
-
-  const centerX = width * CENTER_X_RATIO;
-  const centerY = BUBBLE_AREA_CENTER - 70; // 검색창 아래 영역의 중앙에서 70픽셀 위 (더 위로)
-
-  // 필터링된 버블만 사용 (없으면 모든 버블 사용)
-  const bubblesToUse =
-    currentFilteredBubbles.length > 0 ? currentFilteredBubbles : bubbles;
-
-  // 필터링된 버블만 업데이트하여 현재 위치 계산
-  bubblesToUse.forEach((b) => {
-    b.update(centerX, centerY, offsetX, offsetY, null);
-  });
-
-  // 중앙에 가장 가까운 버블 찾기 (필터링된 버블 중에서)
-  let centerBubble = null;
-  let minDistToCenter = Infinity;
-  bubblesToUse.forEach((b) => {
-    const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
-    if (distToCenter < minDistToCenter) {
-      minDistToCenter = distToCenter;
-      centerBubble = b;
-    }
-  });
-
-  // 중앙 버블이 있으면 그 버블이 화면 중앙에 오도록 타겟 오프셋 계산
-  if (centerBubble) {
-    // 피시아이 효과를 고려하여 반복적으로 정확한 오프셋 계산
-    let hexX = centerBubble.gridX * HEX_SPACING * 1.5;
-    let hexY =
-      centerBubble.gridY * HEX_SPACING * sqrt(3) +
-      ((centerBubble.gridX % 2) * HEX_SPACING * sqrt(3)) / 2;
-
-    // 현재 오프셋을 기준으로 타겟 오프셋 계산
-    let targetOffsetX = offsetX;
-    let targetOffsetY = offsetY;
-
-    // 반복적으로 조정하여 정확한 위치 찾기 (최대 5회)
-    for (let iter = 0; iter < 5; iter++) {
-      // 타겟 오프셋으로 버블 위치 계산
-      const worldWidth = WORLD_W;
-      const worldHeight = WORLD_H;
-      let worldX = hexX + targetOffsetX;
-      let worldY = hexY + targetOffsetY;
-
-      // 토러스 래핑
-      worldX = ((worldX % worldWidth) + worldWidth) % worldWidth;
-      worldY = ((worldY % worldHeight) + worldHeight) % worldHeight;
-
-      // 화면 중심 기준 상대 위치
-      let screenX = worldX - centerX;
-      let screenY = worldY - centerY;
-
-      // 토러스 래핑
-      if (abs(screenX) > worldWidth / 2) {
-        screenX = screenX > 0 ? screenX - worldWidth : screenX + worldWidth;
-      }
-      if (abs(screenY) > worldHeight / 2) {
-        screenY = screenY > 0 ? screenY - worldHeight : screenY + worldHeight;
-      }
-
-      // 피시아이 효과 적용 전 거리
-      const distFromCenter = sqrt(screenX * screenX + screenY * screenY);
-      const maxDist = sqrt(width * width + height * height) / 2;
-      const normalizedDist = min(distFromCenter / maxDist, 1);
-      const fisheyeFactor = 1 + (1 - normalizedDist) * FISHEYE_STRENGTH;
-
-      // 피시아이 효과 적용 후 화면상 위치
-      const displayX = centerX + screenX * fisheyeFactor;
-      const displayY = centerY + screenY * fisheyeFactor;
-
-      // 목표 위치와의 차이
-      const dx = centerX - displayX;
-      const dy = centerY - displayY;
-
-      // 차이가 충분히 작으면 종료
-      if (abs(dx) < 0.1 && abs(dy) < 0.1) break;
-
-      // 피시아이 효과를 역계산하여 타겟 오프셋 조정
-      const reverseScreenX = dx / fisheyeFactor;
-      const reverseScreenY = dy / fisheyeFactor;
-
-      // 타겟 오프셋 업데이트
-      targetOffsetX += reverseScreenX;
-      targetOffsetY += reverseScreenY;
-    }
-
-    // 타겟 오프셋 설정 (부드럽게 이동하도록)
-    snapTargetX = targetOffsetX;
-    snapTargetY = targetOffsetY;
-
-    // 애니메이션 시작
-    startAnim();
-  }
-}
-
-function clampBubbleToCanvas(b) {
-  // 검색창 아래 영역 계산
-  const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
-  const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 20;
-  const BUBBLE_AREA_BOTTOM = height - 20;
-
-  // 버블 중심이 검색창 아래 영역 내에만 있도록 클램프
-  b.pos.x = constrain(b.pos.x, b.r, width - b.r);
-  b.pos.y = constrain(b.pos.y, BUBBLE_AREA_TOP + b.r, BUBBLE_AREA_BOTTOM - b.r);
-}
-
-// ---------- BUILDERS ----------
-function buildFrames() {
-  frames = [];
-  const minSize = Math.min(width, height);
-
-  // 검색창 영역 계산
-  const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
-  const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 20; // 검색창 아래 20px 여유
-  const BUBBLE_AREA_BOTTOM = height - 20; // 하단 여유
-
-  // 중앙 큰 버블 (검색창 아래 영역의 중앙에 배치)
-  const [cxRatio, _, rr] = CENTER_FRAME;
-  const centerY =
-    BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5; // 검색창 아래 영역의 중앙
-  const centerX = cxRatio * width;
-  const centerR = rr * minSize;
-  const centerFrame = new FrameCircle(0, centerX, centerY, centerR);
-  frames.push(centerFrame);
-
-  // 버블 간 최소 거리 (일정한 간격 유지)
-  const MIN_BUBBLE_DISTANCE = 80; // 픽셀 단위 최소 거리
-
-  // 왼쪽에 3개, 오른쪽에 3개 배치 (삼각형 모양)
-  const leftCount = 3;
-  const rightCount = 3;
-
-  // 중앙 버블 기준으로 왼쪽/오른쪽 영역 계산
-  const availableHeight = BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP;
-  const centerRadius = centerR;
-  const centerYPos = centerY;
-
-  // 왼쪽 버블 배치 (3개 - 삼각형 모양)
-  const leftX =
-    centerX - centerRadius - MIN_BUBBLE_DISTANCE - MAX_FRAME_RATIO * minSize;
-
-  // 삼각형 위치: 위(작음), 중간(큼), 아래(중간)
-  const leftPositions = [
-    {
-      yOffset: -availableHeight * 0.25,
-      sizeRatio: MIN_FRAME_RATIO + (MAX_FRAME_RATIO - MIN_FRAME_RATIO) * 0.2,
-    }, // 위쪽 작은 버블
-    {
-      yOffset: 0,
-      sizeRatio: MIN_FRAME_RATIO + (MAX_FRAME_RATIO - MIN_FRAME_RATIO) * 0.8,
-    }, // 중간 큰 버블
-    {
-      yOffset: availableHeight * 0.25,
-      sizeRatio: MIN_FRAME_RATIO + (MAX_FRAME_RATIO - MIN_FRAME_RATIO) * 0.5,
-    }, // 아래쪽 중간 버블
-  ];
-
-  for (let i = 0; i < leftCount; i++) {
-    const frameIndex = i + 1;
-    const pos = leftPositions[i];
-    const rr = pos.sizeRatio;
-    const r = rr * minSize;
-    const cy = centerYPos + pos.yOffset;
-
-    const leftFrame = new FrameCircle(frameIndex, leftX, cy, r);
-    frames.push(leftFrame);
-  }
-
-  // 오른쪽 버블 배치 (3개 - 삼각형 모양)
-  const rightX =
-    centerX + centerRadius + MIN_BUBBLE_DISTANCE + MAX_FRAME_RATIO * minSize;
-
-  // 삼각형 위치: 위(중간), 중간(큼), 아래(작음) - 왼쪽과 약간 다르게
-  const rightPositions = [
-    {
-      yOffset: -availableHeight * 0.25,
-      sizeRatio: MIN_FRAME_RATIO + (MAX_FRAME_RATIO - MIN_FRAME_RATIO) * 0.5,
-    }, // 위쪽 중간 버블
-    {
-      yOffset: 0,
-      sizeRatio: MIN_FRAME_RATIO + (MAX_FRAME_RATIO - MIN_FRAME_RATIO) * 0.9,
-    }, // 중간 큰 버블
-    {
-      yOffset: availableHeight * 0.25,
-      sizeRatio: MIN_FRAME_RATIO + (MAX_FRAME_RATIO - MIN_FRAME_RATIO) * 0.3,
-    }, // 아래쪽 작은 버블
-  ];
-
-  for (let i = 0; i < rightCount; i++) {
-    const frameIndex = leftCount + i + 1;
-    const pos = rightPositions[i];
-    const rr = pos.sizeRatio;
-    const r = rr * minSize;
-    const cy = centerYPos + pos.yOffset;
-
-    const rightFrame = new FrameCircle(frameIndex, rightX, cy, r);
-    frames.push(rightFrame);
-  }
-}
-
-// 안전 반지름 계산: 프레임 간 거리를 고려하여 버블이 겹치지 않는 최대 반지름 계산
-function computeSafeBubbleRadii() {
-  const n = frames.length;
-  const safe = new Array(n).fill(0);
-
-  for (let i = 0; i < n; i++) {
-    let ri = frames[i].r * BUBBLE_RADIUS_FACTOR; // 기본 상한
-
-    // 중앙 버블(인덱스 0)은 항상 가장 크게 유지
-    if (i === 0) {
-      // 중앙 버블은 다른 버블들과의 거리를 고려하되, 최소한 프레임 크기의 90%는 유지
-      const minRadius = frames[i].r * 0.9;
-      for (let j = 1; j < n; j++) {
-        const d = dist(frames[i].cx, frames[i].cy, frames[j].cx, frames[j].cy);
-        const maxAllowed = (d - SEP_PAD) / 2;
-        ri = Math.min(ri, maxAllowed);
-      }
-      safe[i] = Math.max(ri, minRadius);
-    } else {
-      // 나머지 버블들은 일반 계산
-      for (let j = 0; j < n; j++) {
-        if (i === j) continue;
-        const d = dist(frames[i].cx, frames[i].cy, frames[j].cx, frames[j].cy);
-        // 두 버블이 만나지 않도록 한쪽 최대 반지름은 (d - pad)/2
-        ri = Math.min(ri, Math.max(0, (d - SEP_PAD) / 2));
-      }
-      safe[i] = ri;
-    }
-  }
-
-  // 중앙 버블이 항상 가장 큰지 확인하고 보장
-  const centerRadius = safe[0];
-  for (let i = 1; i < n; i++) {
-    if (safe[i] >= centerRadius) {
-      safe[i] = centerRadius * 0.8; // 중앙보다 작게 조정
-    }
-  }
-
-  return safe;
-}
 
 function buildBubbles() {
   bubbles = [];
@@ -2459,13 +1891,18 @@ function buildBubbles() {
   // 35개 버블 생성 (헥사곤 그리드 패턴)
   const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES)); // 대략 6x6 그리드
   let count = 0;
-  const maxImageIndex = Math.min(bubbleImages.length, TOTAL_BUBBLES);
+  
+  // 사용 가능한 이미지 개수 확인 (bubbleData와 imageFiles 중 작은 값)
+  const availableImages = Math.min(bubbleData.length, imageFiles.length);
+  // 버블에 이미지를 순환하여 할당 (모든 버블이 이미지를 가지도록)
+  // 예: 35개 버블, 30개 이미지 → 0~29, 0~4 (순환)
+  const maxImageIndex = availableImages > 0 ? availableImages : 0;
 
   for (let y = 0; y < gridSize && count < TOTAL_BUBBLES; y++) {
     for (let x = 0; x < gridSize && count < TOTAL_BUBBLES; x++) {
       const hueSeed = count + 1;
-      // 이미지가 있으면 이미지 인덱스 사용, 없으면 null (색상 사용)
-      const imageIndex = count < maxImageIndex ? count : null;
+      // 이미지를 순환하여 할당 (모든 버블이 이미지를 가지도록)
+      const imageIndex = maxImageIndex > 0 ? (count % maxImageIndex) : null;
       bubbles.push(new Bubble(x, y, hueSeed, imageIndex));
       count++;
     }
@@ -2473,31 +1910,342 @@ function buildBubbles() {
 
   // 초기 오프셋을 중앙 버블이 화면 중앙에 오도록 설정
   const centerGridX = Math.floor(gridSize / 2);
-  const centerGridY = Math.floor(gridSize / 2);
-  const centerHexX = centerGridX * HEX_SPACING * 1.5;
-  const centerHexY =
-    centerGridY * HEX_SPACING * sqrt(3) +
-    ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
+}
 
-  offsetX = width * CENTER_X_RATIO - centerHexX;
-  offsetY = height * CENTER_Y_RATIO - centerHexY;
+// 버블 클릭 감지 함수 (아크 캐러셀 모드)
+function checkBubbleClick(x, y) {
+  if (fullscreenMode) return null; // 전체 화면 모드에서는 버블 클릭 무시
+  
+  // 아크 캐러셀의 버블 위치를 계산하여 클릭 확인
+  const src =
+    selectedCardIndex !== null && currentFilteredBubbles.length > 0
+      ? currentFilteredBubbles
+      : bubbles;
+  if (src.length === 0) return null;
+
+  const { arcCenterX, arcCenterY, arcRadius } = getArcMetrics();
+  const step = ARC_SPREAD_RAD / Math.max(1, ARC_VISIBLE_COUNT - 1);
+  const mid = Math.floor(ARC_VISIBLE_COUNT / 2);
+  const angleBase = -Math.PI / 2;
+  const responsiveScale = getResponsiveScale();
+  const bubbleScale = Math.max(0.7, responsiveScale);
+
+  // 버블 크기 계산
+  const bubbleRadii = [];
+  for (let i = -mid; i <= mid; i++) {
+    const distanceFromCenter = Math.abs(i);
+    const maxDistance = mid;
+    const normalizedDistance = distanceFromCenter / maxDistance;
+    const sizeRatio = 1 - Math.pow(normalizedDistance, 4) * 0.8;
+    const maxR = i === 0 ? ARC_HERO_R : ARC_MAX_R;
+    const r = lerp(ARC_MIN_R, maxR, sizeRatio) * bubbleScale;
+    bubbleRadii.push({ index: i, r: r });
+  }
+
+  // 각도 계산 (간단한 버전)
+  const EDGE_GAP = 20 * responsiveScale;
+  const angles = [];
+  let currentAngle = angleBase;
+  angles.push({ index: 0, angle: currentAngle });
+
+  for (let i = 1; i <= mid; i++) {
+    const prevR = bubbleRadii[mid - i + 1].r;
+    const currR = bubbleRadii[mid - i].r;
+    const centerDistance = EDGE_GAP + prevR + currR;
+    const angleDiff = centerDistance / arcRadius;
+    currentAngle -= angleDiff;
+    angles.push({ index: -i, angle: currentAngle });
+  }
+
+  currentAngle = angleBase;
+  for (let i = 1; i <= mid; i++) {
+    const prevR = bubbleRadii[mid + i - 1].r;
+    const currR = bubbleRadii[mid + i].r;
+    const centerDistance = EDGE_GAP + prevR + currR;
+    const angleDiff = centerDistance / arcRadius;
+    currentAngle += angleDiff;
+    angles.push({ index: i, angle: currentAngle });
+  }
+
+  // arcScroll 적용
+  const indexOffset = arcCurrentIndex - Math.floor(arcCurrentIndex);
+  const currentArcScroll = -indexOffset * step;
+  angles.forEach((angle) => {
+    angle.angle += currentArcScroll;
+  });
+
+  // 클릭 위치에서 가장 가까운 버블 찾기
+  let clickedBubble = null;
+  let minDist = Infinity;
+  const baseIndex = Math.floor(arcCurrentIndex);
+
+  for (let i = -mid; i <= mid; i++) {
+    const angleData = angles.find((a) => a.index === i);
+    const fixedAngle = angleData
+      ? angleData.angle
+      : angleBase + i * step + currentArcScroll;
+    const bubbleX = arcCenterX + Math.cos(fixedAngle) * arcRadius;
+    const bubbleY = arcCenterY + Math.sin(fixedAngle) * arcRadius;
+
+    const bubbleData = bubbleRadii.find((b) => b.index === i);
+    const r = bubbleData ? bubbleData.r : ARC_MIN_R;
+
+    const idx = positiveMod(baseIndex + i, src.length);
+    const bubble = src[idx];
+
+    // 클릭 위치와 버블 중심 사이의 거리
+    const distToBubble = dist(x, y, bubbleX, bubbleY);
+
+    // 버블 반지름 내에 클릭이 있는지 확인
+    if (distToBubble <= r && distToBubble < minDist) {
+      minDist = distToBubble;
+      clickedBubble = bubble;
+    }
+  }
+
+  return clickedBubble;
+}
+
+// 전체 화면 모드 시작
+function enterFullscreenMode(bubble) {
+  fullscreenMode = true;
+  selectedBubbleForFullscreen = bubble;
+  fullscreenAnimationProgress = 0;
+  fullscreenStartTime = millis();
+  startAnim();
+}
+
+// 전체 화면 모드 종료
+function exitFullscreenMode() {
+  fullscreenMode = false;
+  selectedBubbleForFullscreen = null;
+  fullscreenAnimationProgress = 0;
+  startAnim();
+}
+
+// 전체 화면 UI 그리기 (날씨 바, 조도 바, 뒤로가기 버튼)
+function drawFullscreenUI() {
+  if (!fullscreenMode || !selectedBubbleForFullscreen) return;
+  
+  const responsiveScale = getResponsiveScale();
+  const centerX = width / 2;
+  const topY = 60 * responsiveScale; // 화면 상단에서 60px
+  
+  push();
+  drawingContext.save();
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  
+  // 날씨 바
+  const weatherBarWidth = 200 * responsiveScale;
+  const weatherBarHeight = 40 * responsiveScale;
+  const weatherBarX = centerX - weatherBarWidth / 2;
+  const weatherBarY = topY;
+  
+  // 날씨 바 배경 (글래스모피즘)
+  const weatherGradient = drawingContext.createLinearGradient(
+    weatherBarX, weatherBarY,
+    weatherBarX, weatherBarY + weatherBarHeight
+  );
+  weatherGradient.addColorStop(0, "rgba(255, 255, 255, 0.2)");
+  weatherGradient.addColorStop(1, "rgba(255, 255, 255, 0.1)");
+  drawingContext.fillStyle = weatherGradient;
+  drawingContext.shadowBlur = 10;
+  drawingContext.shadowColor = "rgba(0, 0, 0, 0.3)";
+  drawingContext.shadowOffsetX = 0;
+  drawingContext.shadowOffsetY = 2;
+  roundedRect(weatherBarX, weatherBarY, weatherBarWidth, weatherBarHeight, 20 * responsiveScale);
+  drawingContext.fill();
+  
+  // 날씨 텍스트
+  if (pretendardFont) textFont(pretendardFont);
+  textAlign(CENTER, CENTER);
+  fill(255, 255, 255, 255);
+  textSize(16 * responsiveScale);
+  textStyle(NORMAL);
+  text("☀️ 맑음 22°C", centerX, weatherBarY + weatherBarHeight / 2);
+  
+  // 조도 바 (날씨 바 아래)
+  const lightBarWidth = 200 * responsiveScale;
+  const lightBarHeight = 40 * responsiveScale;
+  const lightBarX = centerX - lightBarWidth / 2;
+  const lightBarY = topY + weatherBarHeight + 15 * responsiveScale;
+  
+  // 조도 바 배경
+  const lightGradient = drawingContext.createLinearGradient(
+    lightBarX, lightBarY,
+    lightBarX, lightBarY + lightBarHeight
+  );
+  lightGradient.addColorStop(0, "rgba(255, 255, 255, 0.2)");
+  lightGradient.addColorStop(1, "rgba(255, 255, 255, 0.1)");
+  drawingContext.fillStyle = lightGradient;
+  drawingContext.shadowBlur = 10;
+  drawingContext.shadowColor = "rgba(0, 0, 0, 0.3)";
+  roundedRect(lightBarX, lightBarY, lightBarWidth, lightBarHeight, 20 * responsiveScale);
+  drawingContext.fill();
+  
+  // 조도 텍스트
+  fill(255, 255, 255, 255);
+  textSize(16 * responsiveScale);
+  text("💡 조도 850 lux", centerX, lightBarY + lightBarHeight / 2);
+  
+  // 뒤로가기 버튼 (조도 바 아래)
+  const backButtonWidth = 120 * responsiveScale;
+  const backButtonHeight = 40 * responsiveScale;
+  const backButtonX = centerX - backButtonWidth / 2;
+  const backButtonY = lightBarY + lightBarHeight + 15 * responsiveScale;
+  
+  // 뒤로가기 버튼 배경
+  const backGradient = drawingContext.createLinearGradient(
+    backButtonX, backButtonY,
+    backButtonX, backButtonY + backButtonHeight
+  );
+  backGradient.addColorStop(0, "rgba(255, 255, 255, 0.25)");
+  backGradient.addColorStop(1, "rgba(255, 255, 255, 0.15)");
+  drawingContext.fillStyle = backGradient;
+  drawingContext.shadowBlur = 15;
+  drawingContext.shadowColor = "rgba(0, 0, 0, 0.4)";
+  roundedRect(backButtonX, backButtonY, backButtonWidth, backButtonHeight, 20 * responsiveScale);
+  drawingContext.fill();
+  
+  // 뒤로가기 텍스트
+  fill(255, 255, 255, 255);
+  textSize(16 * responsiveScale);
+  textStyle(BOLD);
+  text("← 뒤로", centerX, backButtonY + backButtonHeight / 2);
+  
+  drawingContext.restore();
+  pop();
+}
+
+// 뒤로가기 버튼 클릭 확인
+function checkBackButtonClick(x, y) {
+  if (!fullscreenMode) return false;
+  
+  const responsiveScale = getResponsiveScale();
+  const centerX = width / 2;
+  const topY = 60 * responsiveScale;
+  const weatherBarHeight = 40 * responsiveScale;
+  const lightBarHeight = 40 * responsiveScale;
+  const backButtonWidth = 120 * responsiveScale;
+  const backButtonHeight = 40 * responsiveScale;
+  const backButtonX = centerX - backButtonWidth / 2;
+  const backButtonY = topY + weatherBarHeight + 15 * responsiveScale + lightBarHeight + 15 * responsiveScale;
+  
+  return (
+    x >= backButtonX &&
+    x <= backButtonX + backButtonWidth &&
+    y >= backButtonY &&
+    y <= backButtonY + backButtonHeight
+  );
+}
+
+// 둥근 사각형 그리기 헬퍼 함수
+function roundedRect(x, y, w, h, r) {
+  drawingContext.beginPath();
+  drawingContext.moveTo(x + r, y);
+  drawingContext.lineTo(x + w - r, y);
+  drawingContext.quadraticCurveTo(x + w, y, x + w, y + r);
+  drawingContext.lineTo(x + w, y + h - r);
+  drawingContext.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  drawingContext.lineTo(x + r, y + h);
+  drawingContext.quadraticCurveTo(x, y + h, x, y + h - r);
+  drawingContext.lineTo(x, y + r);
+  drawingContext.quadraticCurveTo(x, y, x + r, y);
+  drawingContext.closePath();
+}
+
+// 전체 화면 이미지 그리기
+function drawFullscreenImage() {
+  if (!fullscreenMode || !selectedBubbleForFullscreen) return;
+  
+  const bubble = selectedBubbleForFullscreen;
+  const animationDuration = 500; // 0.5초 애니메이션
+  const elapsed = millis() - fullscreenStartTime;
+  fullscreenAnimationProgress = Math.min(elapsed / animationDuration, 1.0);
+  
+  // Easing 함수 (ease-out)
+  const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+  const easedProgress = easeOut(fullscreenAnimationProgress);
+  
+  // 시작 위치 (버블의 현재 위치)
+  const startX = bubble.pos.x;
+  const startY = bubble.pos.y;
+  const startR = bubble.r;
+  
+  // 목표 위치 (화면 중앙)
+  const targetX = width / 2;
+  const targetY = height / 2;
+  const targetR = Math.min(width, height) * 0.8; // 화면의 80%
+  
+  // 애니메이션된 위치와 크기
+  const currentX = lerp(startX, targetX, easedProgress);
+  const currentY = lerp(startY, targetY, easedProgress);
+  const currentR = lerp(startR, targetR, easedProgress);
+  
+  push();
+  drawingContext.save();
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  
+  // 배경 오버레이 (어둡게)
+  fill(0, 0, 0, 200 * easedProgress);
+  noStroke();
+  rect(0, 0, width, height);
+  
+  // 이미지 그리기
+  if (bubble.imageIndex !== null && bubbleImages[bubble.imageIndex] && bubbleImages[bubble.imageIndex].width > 0) {
+    const img = bubbleImages[bubble.imageIndex];
+    const imgRatio = img.width / img.height;
+    const targetRatio = 1;
+    
+    let drawW, drawH;
+    if (imgRatio > targetRatio) {
+      drawH = currentR * 2;
+      drawW = imgRatio * drawH;
+    } else {
+      drawW = currentR * 2;
+      drawH = drawW / imgRatio;
+    }
+    
+    // 클리핑 마스크로 원형으로 자르기
+    drawingContext.beginPath();
+    drawingContext.arc(currentX, currentY, currentR, 0, Math.PI * 2);
+    drawingContext.clip();
+    
+    imageMode(CENTER);
+    image(img, currentX, currentY, drawW, drawH);
+  } else {
+    // 색상 버블
+    const base = bubbleColor(bubble.hueSeed);
+    fill(base.outer);
+    circle(currentX, currentY, currentR * 2);
+  }
+  
+  drawingContext.restore();
+  pop();
 }
 
 // ---------- PANNING (스와이프) ----------
 function mousePressed() {
   lastPointerStamp = millis();
+  
+  // 전체 화면 모드에서 뒤로가기 버튼 클릭 확인
+  if (fullscreenMode) {
+    if (checkBackButtonClick(mouseX, mouseY)) {
+      exitFullscreenMode();
+      return;
+    }
+    // 전체 화면 모드에서는 다른 클릭 무시
+    return;
+  }
+  
   // 검색창 클릭 확인 (드래그 방지 전에 확인)
   const isSearchBarClick = checkSearchBarClick(mouseX, mouseY);
-
-  // 검색창이 아닌 곳을 클릭하면 input 비활성화하여 드래그 확보
-  if (!isSearchBarClick && searchInput) {
-    searchInput.style("pointer-events", "none"); // 캔버스 드래그 확보
-  }
 
   // 네비게이션 바 클릭 확인
   if (navigationBar && checkNavBarClick(mouseX, mouseY)) {
     showModal = true;
-    showToggles = false; // 모달 열릴 때 토글 닫기
     startAnim(); // 모달 애니메이션을 위해 애니메이션 시작
     return;
   }
@@ -2515,21 +2263,7 @@ function mousePressed() {
     startAnim();
     return;
   }
-
-  // 토글이 열려있으면 토글 클릭 확인 (더 이상 사용하지 않음)
-  // if (showToggles) {
-  //   const clickedToggle = checkToggleClick(mouseX, mouseY);
-  //   if (clickedToggle !== null) {
-  //     // 토글 클릭 시 바로 적용
-  //     toggleSelect(clickedToggle);
-  //     return;
-  //   }
-  //   // 토글 외부 클릭 시 닫기
-  //   if (!isSearchBarClick) {
-  //     showToggles = false;
-  //   }
-  // }
-
+  
   // 검색창 클릭 확인
   if (isSearchBarClick) {
     // 검색창 클릭 시 전체보기로 전환
@@ -2540,13 +2274,18 @@ function mousePressed() {
     return;
   }
 
+  // 버블 클릭 확인 (나중에 mouseReleased에서 처리하기 위해 저장)
+  clickedBubbleAtPress = checkBubbleClick(mouseX, mouseY);
+  hasDragged = false; // 드래그 플래그 초기화
+
   // 아크 캐러셀 모드에서 아크 영역 드래그
-  if (ARC_MODE && isInArcArea(mouseX, mouseY)) {
+  if (isInArcArea(mouseX, mouseY)) {
     arcDragging = true;
     arcDragStartX = mouseX; // 드래그 시작점 저장
     arcDragStartIndex = arcCurrentIndex; // 드래그 시작 시점의 인덱스 저장
     arcVel = 0;
     startAnim();
+    // 아크 영역에서도 버블 클릭은 유지 (드래그가 발생하면 취소됨)
     return; // 월드 패닝 방지
   }
 
@@ -2554,19 +2293,11 @@ function mousePressed() {
   isDragging = true;
   dragStartX = mouseX;
   dragStartY = mouseY;
-  dragOffsetX = offsetX;
-  dragOffsetY = offsetY;
-  panVelocityX = 0;
-  panVelocityY = 0;
-  // 드래그 시작 시 스냅 타겟 취소 및 스냅 완료 플래그 리셋
-  snapTargetX = null;
-  snapTargetY = null;
-  snapCompleted = false;
 }
 
 function mouseDragged() {
   lastPointerStamp = millis();
-  if (ARC_MODE && arcDragging) {
+  if (arcDragging) {
     // 전체 드래그 거리 계산
     const totalDragDistance = mouseX - arcDragStartX;
     // 아크 형태는 고정, 버블 인덱스만 변경 (시각적 피드백)
@@ -2593,23 +2324,18 @@ function mouseDragged() {
   }
 
   if (!isDragging) return;
-  startAnim(); // 애니메이션 시작
-
-  const deltaX = mouseX - dragStartX;
-  const deltaY = mouseY - dragStartY;
-
-  // 오프셋 업데이트 (감도 적용)
-  offsetX = dragOffsetX + deltaX * PAN_SENSITIVITY;
-  offsetY = dragOffsetY + deltaY * PAN_SENSITIVITY;
-
-  // 속도 계산 (관성용) - 감도 적용
-  panVelocityX = deltaX * 0.05 * PAN_SENSITIVITY;
-  panVelocityY = deltaY * 0.05 * PAN_SENSITIVITY;
+  
+  // 드래그 거리 확인
+  const dragDistance = dist(mouseX, mouseY, dragStartX, dragStartY);
+  if (dragDistance > DRAG_THRESHOLD) {
+    hasDragged = true; // 드래그 발생 표시
+    clickedBubbleAtPress = null; // 드래그가 발생하면 버블 클릭 취소
+  }
 }
 
 function mouseReleased() {
   lastPointerStamp = millis();
-  if (ARC_MODE && arcDragging) {
+  if (arcDragging) {
     arcDragging = false;
 
     // 드래그 종료 시 버블 인덱스만 변경 (아크 형태는 고정)
@@ -2632,28 +2358,48 @@ function mouseReleased() {
     }
 
     arcVel = 0; // 관성 초기화
+    
+    // 아크 드래그가 없었고, 버블을 클릭했으면 확대
+    const totalDragDistance = abs(mouseX - arcDragStartX);
+    if (totalDragDistance <= DRAG_THRESHOLD && clickedBubbleAtPress) {
+      enterFullscreenMode(clickedBubbleAtPress);
+    }
+    
+    // 상태 초기화
+    clickedBubbleAtPress = null;
+    hasDragged = false;
     return;
   }
 
   if (!isDragging) return;
   isDragging = false;
 
-  // input 다시 활성화
-  if (searchInput) {
-    searchInput.style("pointer-events", "auto");
+  // 드래그가 없었고, 버블을 클릭했으면 확대
+  if (!hasDragged && clickedBubbleAtPress) {
+    enterFullscreenMode(clickedBubbleAtPress);
   }
-
-  // 드래그가 끝난 직후 바로 중앙 버블로 스냅
-  // 관성이 시작되기 전에 스냅하여 버블이 흐르지 않도록 함
-  snapToCenterBubble();
-
-  // 관성은 draw()에서 처리됨
+  
+  // 상태 초기화
+  clickedBubbleAtPress = null;
+  hasDragged = false;
 }
 
 // ---------- TOUCH EVENTS (모바일 지원) ----------
 function touchStarted() {
   lastPointerStamp = millis();
-  if (ARC_MODE && touches.length > 0) {
+  
+  // 전체 화면 모드에서 뒤로가기 버튼 클릭 확인
+  if (fullscreenMode && touches.length > 0) {
+    const touch = touches[0];
+    if (checkBackButtonClick(touch.x, touch.y)) {
+      exitFullscreenMode();
+      return false;
+    }
+    // 전체 화면 모드에서는 다른 클릭 무시
+    return false;
+  }
+  
+  if (touches.length > 0) {
     const t = touches[0];
     if (isInArcArea(t.x, t.y)) {
       arcDragging = true;
@@ -2671,7 +2417,6 @@ function touchStarted() {
     // 네비게이션 바 클릭 확인
     if (navigationBar && checkNavBarClick(touch.x, touch.y)) {
       showModal = true;
-      showToggles = false; // 모달 열릴 때 토글 닫기
       startAnim(); // 모달 애니메이션을 위해 애니메이션 시작
       return false;
     }
@@ -2690,20 +2435,6 @@ function touchStarted() {
       return false;
     }
 
-    // 토글이 열려있으면 토글 클릭 확인 (더 이상 사용하지 않음)
-    // if (showToggles) {
-    //   const clickedToggle = checkToggleClick(touch.x, touch.y);
-    //   if (clickedToggle !== null) {
-    //     // 토글 클릭 시 바로 적용
-    //     toggleSelect(clickedToggle);
-    //     return false;
-    //   }
-    //   // 토글 외부 클릭 시 닫기
-    //   if (!checkSearchBarClick(touch.x, touch.y)) {
-    //     showToggles = false;
-    //   }
-    // }
-
     // 검색창 클릭 확인
     if (checkSearchBarClick(touch.x, touch.y)) {
       // 검색창 클릭 시 전체보기로 전환
@@ -2714,18 +2445,25 @@ function touchStarted() {
       return false;
     }
 
+    // 버블 클릭 확인 (나중에 touchEnded에서 처리하기 위해 저장)
+    clickedBubbleAtPress = checkBubbleClick(touch.x, touch.y);
+    hasDragged = false; // 드래그 플래그 초기화
+
+    // 아크 캐러셀 모드에서 아크 영역 드래그
+    if (isInArcArea(touch.x, touch.y)) {
+      arcDragging = true;
+      arcDragStartX = touch.x; // 드래그 시작점 저장
+      arcDragStartIndex = arcCurrentIndex; // 드래그 시작 시점의 인덱스 저장
+      arcVel = 0;
+      startAnim();
+      // 아크 영역에서도 버블 클릭은 유지 (드래그가 발생하면 취소됨)
+      return false; // 월드 패닝 방지
+    }
+
     startAnim(); // 애니메이션 시작
     isDragging = true;
     dragStartX = touch.x;
     dragStartY = touch.y;
-    dragOffsetX = offsetX;
-    dragOffsetY = offsetY;
-    panVelocityX = 0;
-    panVelocityY = 0;
-    // 드래그 시작 시 스냅 타겟 취소 및 스냅 완료 플래그 리셋
-    snapTargetX = null;
-    snapTargetY = null;
-    snapCompleted = false;
     return false; // 기본 동작 방지
   }
   return false;
@@ -2733,54 +2471,22 @@ function touchStarted() {
 
 function touchMoved() {
   lastPointerStamp = millis();
-  if (ARC_MODE && arcDragging && touches.length > 0) {
-    const t = touches[0];
-    // 전체 드래그 거리 계산
-    const totalDragDistance = t.x - arcDragStartX;
-    // 아크 형태는 고정, 버블 인덱스만 변경 (시각적 피드백)
-    const step = ARC_SPREAD_RAD / Math.max(1, ARC_VISIBLE_COUNT - 1);
-    const src =
-      selectedCardIndex !== null && currentFilteredBubbles.length > 0
-        ? currentFilteredBubbles
-        : bubbles;
-    if (src.length > 0) {
-      // 드래그 거리에 따라 실시간으로 arcTargetIndex 업데이트
-      const dragAngle = totalDragDistance * ARC_DRAG_SENSE;
-      const indexChange = dragAngle / step;
-      // 드래그 시작 시점의 arcDragStartIndex를 기준으로 계산
-      // 왼쪽으로 드래그하면 인덱스 증가 (왼쪽 버블이 사라지고 오른쪽에 새 버블)
-      // 오른쪽으로 드래그하면 인덱스 감소
-      const newTargetIndex = arcDragStartIndex - indexChange;
-      arcTargetIndex = positiveMod(newTargetIndex, src.length);
-      // 드래그 중에는 즉시 반응하도록 arcCurrentIndex도 업데이트
-      arcCurrentIndex = newTargetIndex;
-    }
-    arcVel = (t.x - (touches.length > 1 ? touches[1].x : t.x)) * ARC_DRAG_SENSE;
-    startAnim();
-    return false;
-  }
-
   if (!isDragging || touches.length === 0) return false;
-  startAnim(); // 애니메이션 시작
+  
   const touch = touches[0];
-
-  const deltaX = touch.x - dragStartX;
-  const deltaY = touch.y - dragStartY;
-
-  // 오프셋 업데이트 (감도 적용)
-  offsetX = dragOffsetX + deltaX * PAN_SENSITIVITY;
-  offsetY = dragOffsetY + deltaY * PAN_SENSITIVITY;
-
-  // 속도 계산 (관성용) - 감도 적용
-  panVelocityX = deltaX * 0.05 * PAN_SENSITIVITY;
-  panVelocityY = deltaY * 0.05 * PAN_SENSITIVITY;
-
+  // 드래그 거리 확인
+  const dragDistance = dist(touch.x, touch.y, dragStartX, dragStartY);
+  if (dragDistance > DRAG_THRESHOLD) {
+    hasDragged = true; // 드래그 발생 표시
+    clickedBubbleAtPress = null; // 드래그가 발생하면 버블 클릭 취소
+  }
+  
   return false; // 기본 동작 방지
 }
 
 function touchEnded() {
   lastPointerStamp = millis();
-  if (ARC_MODE && arcDragging) {
+  if (arcDragging) {
     arcDragging = false;
 
     // 드래그 종료 시 버블 인덱스만 변경 (아크 형태는 고정)
@@ -2794,15 +2500,33 @@ function touchEnded() {
     }
 
     arcVel = 0; // 관성 초기화
+    
+    // 아크 드래그가 없었고, 버블을 클릭했으면 확대
+    if (touches.length > 0) {
+      const touch = touches[0];
+      const totalDragDistance = abs(touch.x - arcDragStartX);
+      if (totalDragDistance <= DRAG_THRESHOLD && clickedBubbleAtPress) {
+        enterFullscreenMode(clickedBubbleAtPress);
+      }
+    }
+    
+    // 상태 초기화
+    clickedBubbleAtPress = null;
+    hasDragged = false;
     return false;
   }
 
   if (!isDragging) return false;
   isDragging = false;
 
-  // 드래그가 끝난 직후 바로 중앙 버블로 스냅
-  // 관성이 시작되기 전에 스냅하여 버블이 흐르지 않도록 함
-  snapToCenterBubble();
+  // 드래그가 없었고, 버블을 클릭했으면 확대
+  if (!hasDragged && clickedBubbleAtPress) {
+    enterFullscreenMode(clickedBubbleAtPress);
+  }
+  
+  // 상태 초기화
+  clickedBubbleAtPress = null;
+  hasDragged = false;
 
   return false; // 기본 동작 방지
 }
@@ -2814,13 +2538,13 @@ function drawNavBar() {
   // 반응형 스케일 계산 (헬퍼 함수 사용)
   const responsiveScale = getResponsiveScale();
 
-  // 버튼 크기 (반응형 스케일 적용) - 20% 증가
-  const BUTTON_W = captureButton.width * 0.8 * responsiveScale;
-  const BUTTON_H = captureButton.height * 0.8 * responsiveScale;
+  // 버튼 크기 (반응형 스케일 적용)
+  const BUTTON_W = captureButton.width * 0.56 * responsiveScale;
+  const BUTTON_H = captureButton.height * 0.56 * responsiveScale;
 
-  // 네비게이션 바 크기 (반응형 스케일 적용) - 20% 증가
-  const NAV_W = navigationBar.width * 0.65 * responsiveScale;
-  const NAV_H = navigationBar.height * 0.65 * responsiveScale;
+  // 네비게이션 바 크기 (반응형 스케일 적용) - 익스플로어와 동일
+  const NAV_W = navigationBar.width * 0.455 * responsiveScale;
+  const NAV_H = navigationBar.height * 0.455 * responsiveScale;
 
   // 상단 위치
   const Y = 20;
@@ -2837,9 +2561,8 @@ function drawNavBar() {
   const navBarX = (width - NAV_W) / 2;
   push();
   drawingContext.imageSmoothingEnabled = true;
-  // 태블릿에서는 성능을 위해 medium으로 설정 (화질은 여전히 좋음)
-  const isMobile = isMobileOrTablet();
-  drawingContext.imageSmoothingQuality = isMobile ? "medium" : "high";
+  // 화질 향상: 항상 high로 설정
+  drawingContext.imageSmoothingQuality = "high";
   imageMode(CORNER);
   if (navBarBuffer) {
     // 고해상도 버퍼를 원래 크기로 축소하여 그리기
@@ -2859,10 +2582,10 @@ function checkNavBarClick(x, y) {
   const responsiveScale = getResponsiveScale();
 
   const BUTTON_W = captureButton
-    ? captureButton.width * 0.8 * responsiveScale
+    ? captureButton.width * 0.56 * responsiveScale
     : 0;
-  const NAV_W = navigationBar.width * 0.65 * responsiveScale;
-  const NAV_H = navigationBar.height * 0.65 * responsiveScale;
+  const NAV_W = navigationBar.width * 0.455 * responsiveScale;
+  const NAV_H = navigationBar.height * 0.455 * responsiveScale;
   const Y = 20;
   const navBarX = (width - NAV_W) / 2;
 
@@ -3000,29 +2723,31 @@ function drawVisualLanguageCards() {
   const CARD_AREA_TOP = SEARCH_BOTTOM + 20; // 검색창 아래 20px
   // 태블릿에서 카드를 30픽셀 더 아래로 내림 (20 + 10)
   const tabletOffset = responsiveScale < 1 ? 30 : 0; // 태블릿(작은 화면)일 때만 오프셋 적용
-  const CARD_Y = CARD_AREA_TOP + 20 + tabletOffset; // 카드 Y 위치
-  const CARD_HEIGHT = 180 * responsiveScale; // 카드 높이
-  const CARD_WIDTH = 200 * responsiveScale; // 카드 너비
-  const CARD_GAP = 20 * responsiveScale; // 카드 간 간격
-  const TOTAL_CARDS_WIDTH =
-    visualLanguageCards.length * CARD_WIDTH +
-    (visualLanguageCards.length - 1) * CARD_GAP;
-  const CARD_START_X = (width - TOTAL_CARDS_WIDTH) / 2; // 카드 시작 X 위치
+  const CARD_START_Y = CARD_AREA_TOP + 20 + tabletOffset; // 카드 시작 Y 위치
+  const CARD_HEIGHT = 80 * responsiveScale; // 카드 높이 (6개가 모두 보이도록 줄임)
+  const CARD_WIDTH = 220 * responsiveScale; // 카드 너비 (가로로 더 길게)
+  const CARD_GAP = 10 * responsiveScale; // 카드 간 간격 (줄임)
+  const CARD_START_X = 40 * responsiveScale; // 왼쪽 정렬을 위한 시작 X 위치
 
   push();
   drawingContext.save();
+  
+  // 화질 향상을 위한 렌더링 설정
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
 
   for (let i = 0; i < visualLanguageCards.length; i++) {
     const card = visualLanguageCards[i];
-    const cardX = CARD_START_X + i * (CARD_WIDTH + CARD_GAP);
+    const cardX = CARD_START_X; // 모든 카드가 같은 X 위치 (왼쪽 정렬)
+    const cardY = CARD_START_Y + i * (CARD_HEIGHT + CARD_GAP); // 세로로 배치
     const isSelected = selectedCardIndex === i;
 
     // 카드 배경 (글래스모피즘)
     const gradient = drawingContext.createLinearGradient(
       cardX,
-      CARD_Y,
+      cardY,
       cardX,
-      CARD_Y + CARD_HEIGHT
+      cardY + CARD_HEIGHT
     );
     if (isSelected) {
       gradient.addColorStop(0, "rgba(255, 255, 255, 0.25)");
@@ -3044,30 +2769,30 @@ function drawVisualLanguageCards() {
     // 둥근 사각형
     const radius = 16 * responsiveScale;
     drawingContext.beginPath();
-    drawingContext.moveTo(cardX + radius, CARD_Y);
-    drawingContext.lineTo(cardX + CARD_WIDTH - radius, CARD_Y);
+    drawingContext.moveTo(cardX + radius, cardY);
+    drawingContext.lineTo(cardX + CARD_WIDTH - radius, cardY);
     drawingContext.quadraticCurveTo(
       cardX + CARD_WIDTH,
-      CARD_Y,
+      cardY,
       cardX + CARD_WIDTH,
-      CARD_Y + radius
+      cardY + radius
     );
-    drawingContext.lineTo(cardX + CARD_WIDTH, CARD_Y + CARD_HEIGHT - radius);
+    drawingContext.lineTo(cardX + CARD_WIDTH, cardY + CARD_HEIGHT - radius);
     drawingContext.quadraticCurveTo(
       cardX + CARD_WIDTH,
-      CARD_Y + CARD_HEIGHT,
+      cardY + CARD_HEIGHT,
       cardX + CARD_WIDTH - radius,
-      CARD_Y + CARD_HEIGHT
+      cardY + CARD_HEIGHT
     );
-    drawingContext.lineTo(cardX + radius, CARD_Y + CARD_HEIGHT);
+    drawingContext.lineTo(cardX + radius, cardY + CARD_HEIGHT);
     drawingContext.quadraticCurveTo(
       cardX,
-      CARD_Y + CARD_HEIGHT,
+      cardY + CARD_HEIGHT,
       cardX,
-      CARD_Y + CARD_HEIGHT - radius
+      cardY + CARD_HEIGHT - radius
     );
-    drawingContext.lineTo(cardX, CARD_Y + radius);
-    drawingContext.quadraticCurveTo(cardX, CARD_Y, cardX + radius, CARD_Y);
+    drawingContext.lineTo(cardX, cardY + radius);
+    drawingContext.quadraticCurveTo(cardX, cardY, cardX + radius, cardY);
     drawingContext.closePath();
     drawingContext.fill();
 
@@ -3081,83 +2806,12 @@ function drawVisualLanguageCards() {
     drawingContext.lineWidth = isSelected ? 2 : 1;
     drawingContext.stroke();
 
-    // 카드 이미지 그리기 (배경 위, 텍스트 아래)
-    if (card.image && card.image.width > 0) {
-      const IMAGE_PADDING = 8 * responsiveScale;
-      const IMAGE_Y = CARD_Y + IMAGE_PADDING;
-      const IMAGE_HEIGHT = CARD_HEIGHT * 0.5; // 카드 높이의 50%
-      const IMAGE_WIDTH = CARD_WIDTH - IMAGE_PADDING * 2;
-      const IMAGE_X = cardX + IMAGE_PADDING;
-
-      // 이미지를 둥근 사각형으로 클리핑
-      drawingContext.save();
-      drawingContext.beginPath();
-      const imageRadius = 8 * responsiveScale;
-      drawingContext.moveTo(IMAGE_X + imageRadius, IMAGE_Y);
-      drawingContext.lineTo(IMAGE_X + IMAGE_WIDTH - imageRadius, IMAGE_Y);
-      drawingContext.quadraticCurveTo(
-        IMAGE_X + IMAGE_WIDTH,
-        IMAGE_Y,
-        IMAGE_X + IMAGE_WIDTH,
-        IMAGE_Y + imageRadius
-      );
-      drawingContext.lineTo(
-        IMAGE_X + IMAGE_WIDTH,
-        IMAGE_Y + IMAGE_HEIGHT - imageRadius
-      );
-      drawingContext.quadraticCurveTo(
-        IMAGE_X + IMAGE_WIDTH,
-        IMAGE_Y + IMAGE_HEIGHT,
-        IMAGE_X + IMAGE_WIDTH - imageRadius,
-        IMAGE_Y + IMAGE_HEIGHT
-      );
-      drawingContext.lineTo(IMAGE_X + imageRadius, IMAGE_Y + IMAGE_HEIGHT);
-      drawingContext.quadraticCurveTo(
-        IMAGE_X,
-        IMAGE_Y + IMAGE_HEIGHT,
-        IMAGE_X,
-        IMAGE_Y + IMAGE_HEIGHT - imageRadius
-      );
-      drawingContext.lineTo(IMAGE_X, IMAGE_Y + imageRadius);
-      drawingContext.quadraticCurveTo(
-        IMAGE_X,
-        IMAGE_Y,
-        IMAGE_X + imageRadius,
-        IMAGE_Y
-      );
-      drawingContext.closePath();
-      drawingContext.clip();
-
-      // 이미지 그리기 (cover 방식으로 채우기)
-      const imgRatio = card.image.width / card.image.height;
-      const targetRatio = IMAGE_WIDTH / IMAGE_HEIGHT;
-      let drawW, drawH, offsetX, offsetY;
-
-      if (imgRatio > targetRatio) {
-        // 이미지가 더 넓음 → 높이에 맞춰 확대
-        drawH = IMAGE_HEIGHT;
-        drawW = imgRatio * drawH;
-        offsetX = (IMAGE_WIDTH - drawW) / 2;
-        offsetY = 0;
-      } else {
-        // 이미지가 더 높음 → 너비에 맞춰 확대
-        drawW = IMAGE_WIDTH;
-        drawH = drawW / imgRatio;
-        offsetX = 0;
-        offsetY = (IMAGE_HEIGHT - drawH) / 2;
-      }
-
-      imageMode(CORNER);
-      image(card.image, IMAGE_X + offsetX, IMAGE_Y + offsetY, drawW, drawH);
-      drawingContext.restore();
-    }
-
-    // 텍스트 그리기
+    // 텍스트 그리기 (화질 향상)
     if (pretendardFont) {
       textFont(pretendardFont);
     }
 
-    // 카드 개수 표시 (좌상단, 이미지 위)
+    // 카드 개수 표시 (좌상단)
     textAlign(LEFT, TOP);
     fill(255, 255, 255, isSelected ? 255 : 200);
     textSize(14 * responsiveScale);
@@ -3171,7 +2825,7 @@ function drawVisualLanguageCards() {
     const countPadding = 6 * responsiveScale;
     rect(
       cardX + 12 * responsiveScale - countPadding / 2,
-      CARD_Y + 12 * responsiveScale - countPadding / 2,
+      cardY + 12 * responsiveScale - countPadding / 2,
       countTextWidth + countPadding,
       20 * responsiveScale
     );
@@ -3179,22 +2833,22 @@ function drawVisualLanguageCards() {
     text(
       countText,
       cardX + 12 * responsiveScale,
-      CARD_Y + 12 * responsiveScale
+      cardY + 12 * responsiveScale
     );
 
-    // 제목 (이미지 아래, 중앙)
-    textAlign(CENTER, CENTER);
+    // 제목 (카드 중앙)
+    textAlign(LEFT, CENTER);
     fill(255, 255, 255, isSelected ? 255 : 230);
     textSize(18 * responsiveScale);
     textStyle(BOLD);
-    const titleY = CARD_Y + CARD_HEIGHT * 0.5 + 25 * responsiveScale;
-    text(card.title, cardX + CARD_WIDTH / 2, titleY);
+    const titleY = cardY + CARD_HEIGHT * 0.4;
+    text(card.title, cardX + 15 * responsiveScale, titleY);
 
     // 부제목 (제목 아래)
     fill(255, 255, 255, isSelected ? 200 : 150);
     textSize(12 * responsiveScale);
     textStyle(NORMAL);
-    text(card.subtitle, cardX + CARD_WIDTH / 2, titleY + 20 * responsiveScale);
+    text(card.subtitle, cardX + 15 * responsiveScale, titleY + 20 * responsiveScale);
   }
 
   drawingContext.restore();
@@ -3208,25 +2862,22 @@ function checkCardClick(x, y) {
   const responsiveScale = getResponsiveScale();
   const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
   const CARD_AREA_TOP = SEARCH_BOTTOM + 20;
-  // 태블릿에서 카드를 30픽셀 더 아래로 내림 (drawVisualLanguageCards와 동일, 20 + 10)
+  // 태블릿에서 카드를 30픽셀 더 아래로 내림 (drawVisualLanguageCards와 동일)
   const tabletOffset = responsiveScale < 1 ? 30 : 0; // 태블릿(작은 화면)일 때만 오프셋 적용
-  const CARD_Y = CARD_AREA_TOP + 20 + tabletOffset;
-  const CARD_HEIGHT = 180 * responsiveScale;
-  const CARD_WIDTH = 200 * responsiveScale;
-  const CARD_GAP = 20 * responsiveScale;
-
-  const totalW =
-    visualLanguageCards.length * CARD_WIDTH +
-    (visualLanguageCards.length - 1) * CARD_GAP;
-  const startX = (width - totalW) / 2;
+  const CARD_START_Y = CARD_AREA_TOP + 20 + tabletOffset;
+  const CARD_HEIGHT = 80 * responsiveScale; // drawVisualLanguageCards와 동일
+  const CARD_WIDTH = 220 * responsiveScale; // drawVisualLanguageCards와 동일
+  const CARD_GAP = 10 * responsiveScale; // drawVisualLanguageCards와 동일
+  const CARD_START_X = 40 * responsiveScale; // drawVisualLanguageCards와 동일
 
   for (let i = 0; i < visualLanguageCards.length; i++) {
-    const cx = startX + i * (CARD_WIDTH + CARD_GAP);
+    const cx = CARD_START_X;
+    const cy = CARD_START_Y + i * (CARD_HEIGHT + CARD_GAP);
     if (
       x >= cx &&
       x <= cx + CARD_WIDTH &&
-      y >= CARD_Y &&
-      y <= CARD_Y + CARD_HEIGHT
+      y >= cy &&
+      y <= cy + CARD_HEIGHT
     ) {
       return i;
     }
@@ -3241,7 +2892,7 @@ function drawSearchBar() {
 
   // 검색창 메트릭 (크기는 고정, 간격만 반응형)
   const NAV_Y = 20;
-  const NAV_H = navigationBar ? navigationBar.height * 0.45 : 64;
+  const NAV_H = navigationBar ? navigationBar.height * 0.315 : 64;
   const NAV_BOTTOM = NAV_Y + NAV_H;
   const W = width * SEARCH_WIDTH_RATIO * 1.3; // 크기 고정
   const H = 75 * SEARCH_SCALE * 1.3; // 크기 고정
@@ -3255,30 +2906,7 @@ function drawSearchBar() {
   const tabletButtonOffset = responsiveScale < 1 ? -20 : 0;
   const Y = NAV_BOTTOM + gap - 10 + tabletButtonOffset;
 
-  // interested 이미지만 표시 (배경 컴포넌트 제거)
-  if (interestedImage && interestedImage.width > 0) {
-    imageMode(CORNER);
-    // 이미지 비율 유지하면서 검색창 영역에 맞춤
-    const imgRatio = interestedImage.width / interestedImage.height;
-    const targetRatio = W / H;
-
-    let drawW, drawH, drawX, drawY;
-    if (imgRatio > targetRatio) {
-      // 이미지가 더 넓음 → 높이에 맞춤
-      drawH = H * 0.6;
-      drawW = imgRatio * drawH;
-      drawX = X + (W - drawW) / 2; // 중앙 정렬
-      drawY = Y + (H - drawH) / 2; // 중앙 정렬
-    } else {
-      // 이미지가 더 높음 → 너비에 맞춤
-      drawW = W * 0.6;
-      drawH = drawW / imgRatio;
-      drawX = X + (W - drawW) / 2; // 중앙 정렬
-      drawY = Y + (H - drawH) / 2; // 중앙 정렬
-    }
-
-    image(interestedImage, drawX, drawY, drawW, drawH);
-  }
+  // interested 이미지 제거됨
 }
 
 // 검색창 클릭 확인
@@ -3286,41 +2914,6 @@ function checkSearchBarClick(x, y) {
   const { W, H, X, Y } = getSearchMetrics();
 
   return x >= X && x <= X + W && y >= Y && y <= Y + H;
-}
-
-// 토글 클릭 확인
-function checkToggleClick(x, y) {
-  if (!showToggles) return null;
-
-  const toggleLabels = [
-    "전체 보기",
-    "여행자의 취향 탐색",
-    "20대 여성의 취향 탐색",
-    "50대 남성의 취향 탐색",
-    "주부들의 취향 탐색",
-    "10대 여성의 취향 탐색",
-  ];
-
-  const toggleWidth = 300;
-  const toggleHeight = 50;
-  const toggleX = (width - toggleWidth) / 2;
-  const startY = 220;
-  const spacing = 60;
-
-  // 토글 클릭 확인
-  for (let i = 0; i < toggleLabels.length; i++) {
-    const toggleY = startY + i * spacing;
-    if (
-      x >= toggleX &&
-      x <= toggleX + toggleWidth &&
-      y >= toggleY &&
-      y <= toggleY + toggleHeight
-    ) {
-      return i; // 0~5 반환 (0은 전체 보기)
-    }
-  }
-
-  return null;
 }
 
 // 카드 선택 함수
@@ -3335,32 +2928,29 @@ function selectCard(indexOrNull) {
     selectedCardIndex = indexOrNull;
   }
 
-  // 카드 선택 시에만 아크 모드 켜기
-  ARC_MODE = indexOrNull !== null;
+  // 아크 캐러셀 항상 활성화
+  ARC_MODE = true;
 
   // 아크 캐러셀 초기화
-  if (ARC_MODE) {
-    // 즉시 중앙 고정을 위해 현재 인덱스와 목표 인덱스를 0으로 설정
-    arcTargetIndex = 0;
-    arcCurrentIndex = 0;
-    arcScroll = 0;
-    arcVel = 0;
-  }
+  arcTargetIndex = 0;
+  arcCurrentIndex = 0;
+  arcScroll = 0;
+  arcVel = 0;
 
   // 스냅 상태 초기화
   snapTargetX = null;
   snapTargetY = null;
   snapCompleted = false;
 
-  // 필터링된 버블 찾기
+  // 필터링된 버블 찾기 (태그 기반)
   let filteredBubbles = bubbles;
   if (selectedCardIndex !== null && visualLanguageCards[selectedCardIndex]) {
     const selectedCard = visualLanguageCards[selectedCardIndex];
+    const selectedTag = selectedCard.id; // 태그 이름
     filteredBubbles = bubbles.filter((b) => {
-      return (
-        b.visualLanguageAttributes &&
-        b.visualLanguageAttributes.includes(selectedCard.id)
-      );
+      const hasVisualTag = b.visualTags && b.visualTags.includes(selectedTag);
+      const hasEmotionalTag = b.emotionalTags && b.emotionalTags.includes(selectedTag);
+      return hasVisualTag || hasEmotionalTag;
     });
   }
 
@@ -3371,11 +2961,11 @@ function selectCard(indexOrNull) {
     visualLanguageCards[previousSelectedCardIndex]
   ) {
     const previousCard = visualLanguageCards[previousSelectedCardIndex];
+    const previousTag = previousCard.id;
     previousFilteredBubbles = bubbles.filter((b) => {
-      return (
-        b.visualLanguageAttributes &&
-        b.visualLanguageAttributes.includes(previousCard.id)
-      );
+      const hasVisualTag = b.visualTags && b.visualTags.includes(previousTag);
+      const hasEmotionalTag = b.emotionalTags && b.emotionalTags.includes(previousTag);
+      return hasVisualTag || hasEmotionalTag;
     });
   }
 
@@ -3415,297 +3005,8 @@ function selectCard(indexOrNull) {
 
   currentFilteredBubbles = filteredBubbles;
 
-  // 아크 모드에서는 drawArcCarousel()에서 버블 위치를 직접 설정하므로 정렬 불필요
-  if (!ARC_MODE) {
-    // 전체보기로 전환 시 원래 그리드 위치로 복원
-    const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
-    bubbles.forEach((b, index) => {
-      if (b.isPopping || b.alpha < 0.5) {
-        b.isPopping = false;
-        b.popProgress = 0;
-        b.alpha = 1.0;
-      }
-      // 원래 그리드 위치로 복원
-      b.gridX = index % gridSize;
-      b.gridY = Math.floor(index / gridSize);
-    });
-    currentFilteredBubbles = bubbles;
-
-    // 원래 그리드의 중심으로 정렬
-    const centerGridX = Math.floor(gridSize / 2);
-    const centerGridY = Math.floor(gridSize / 2);
-    const centerHexX = centerGridX * HEX_SPACING * 1.5;
-    const centerHexY =
-      centerGridY * HEX_SPACING * sqrt(3) +
-      ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
-
-    const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
-    const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
-    const BUBBLE_AREA_BOTTOM = height - 10;
-    const BUBBLE_AREA_CENTER =
-      BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
-    const centerX = width * CENTER_X_RATIO;
-    const centerY = BUBBLE_AREA_CENTER - 20;
-
-    snapTargetX = centerX - centerHexX;
-    snapTargetY = centerY - centerHexY;
-    snapCompleted = false;
-  }
-
   // 버블 정렬 (버블이 이동하면서 정렬되도록)
   startAnim(); // 필터링 업데이트를 위해 애니메이션 시작
-}
-
-// 토글 선택/해제 (더 이상 사용하지 않음)
-function toggleSelect(toggleIndex) {
-  // toggleIndex: 0 = 전체 보기, 1~5 = 각 카테고리
-  if (toggleIndex === 0) {
-    // 전체 보기 선택
-    previousSelectedToggles = [...selectedToggles]; // 이전 선택 저장
-    selectedToggles = [];
-    // 모든 버블 복구 및 원래 그리드 위치로 복원
-    const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
-    bubbles.forEach((b, index) => {
-      if (b.isPopping || b.alpha < 0.5) {
-        b.isPopping = false;
-        b.popProgress = 0;
-        b.alpha = 1.0;
-      }
-      // 원래 그리드 위치로 복원
-      b.gridX = index % gridSize;
-      b.gridY = Math.floor(index / gridSize);
-    });
-    currentFilteredBubbles = bubbles;
-
-    // 원래 그리드의 중심으로 정렬
-    const centerGridX = Math.floor(gridSize / 2);
-    const centerGridY = Math.floor(gridSize / 2);
-    const centerHexX = centerGridX * HEX_SPACING * 1.5;
-    const centerHexY =
-      centerGridY * HEX_SPACING * sqrt(3) +
-      ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
-
-    const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
-    const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
-    const BUBBLE_AREA_BOTTOM = height - 10;
-    const BUBBLE_AREA_CENTER =
-      BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
-    const centerX = width * CENTER_X_RATIO;
-    const centerY = BUBBLE_AREA_CENTER - 20;
-
-    snapTargetX = centerX - centerHexX;
-    snapTargetY = centerY - centerHexY;
-    snapCompleted = false;
-  } else {
-    // 카테고리 선택 (1~5를 1~5로 매핑)
-    const categoryIndex = toggleIndex; // 1~5
-
-    // 이전 선택된 토글 저장 (카테고리 변경 비교용)
-    previousSelectedToggles = [...selectedToggles];
-
-    selectedToggles = [categoryIndex];
-
-    // 필터링된 버블 찾기 및 복구
-    const filteredBubbles = bubbles.filter((b) => {
-      return (
-        b.attributes &&
-        b.attributes.some((attr) => selectedToggles.includes(attr))
-      );
-    });
-
-    // 이전 카테고리와 새 카테고리 모두에 포함되는 버블 찾기 (유지되는 버블)
-    let previousFilteredBubbles = [];
-    if (previousSelectedToggles.length > 0) {
-      previousFilteredBubbles = bubbles.filter((b) => {
-        return (
-          b.attributes &&
-          b.attributes.some((attr) => previousSelectedToggles.includes(attr))
-        );
-      });
-    }
-
-    // 공통 버블 (이전과 새 카테고리 모두에 포함되는 버블)
-    const commonBubbles = filteredBubbles.filter((b) =>
-      previousFilteredBubbles.includes(b)
-    );
-
-    // 필터링된 버블 복구 (alpha 및 팡 터짐 상태 초기화)
-    // 단, 공통 버블은 이미 보이는 상태이므로 alpha만 확인
-    filteredBubbles.forEach((b) => {
-      if (!commonBubbles.includes(b)) {
-        // 공통 버블이 아닌 새로 나타나는 버블만 복구
-        b.isPopping = false;
-        b.popProgress = 0;
-        b.alpha = 1.0; // 바로 보이도록 설정
-      } else {
-        // 공통 버블은 팡 터지는 상태만 해제
-        if (b.isPopping) {
-          b.isPopping = false;
-          b.popProgress = 0;
-        }
-        b.alpha = 1.0; // alpha는 유지
-      }
-    });
-
-    currentFilteredBubbles = filteredBubbles;
-  }
-
-  // 토글 닫기
-  showToggles = false;
-
-  // 버블 정렬 (버블이 이동하면서 정렬되도록)
-  startAnim(); // 필터링 업데이트를 위해 애니메이션 시작
-}
-
-// 토글 UI 그리기
-function drawToggles() {
-  const toggleLabels = [
-    "전체 보기",
-    "여행자의 취향 탐색",
-    "20대 여성의 취향 탐색",
-    "50대 남성의 취향 탐색",
-    "주부들의 취향 탐색",
-    "10대 여성의 취향 탐색",
-  ];
-
-  const toggleWidth = 300;
-  const toggleHeight = 50;
-  const toggleX = (width - toggleWidth) / 2;
-  const startY = 220;
-  const spacing = 60;
-  const radius = 16;
-
-  push();
-  drawingContext.save();
-
-  // 배경 오버레이 (약간 어둡게)
-  fill(0, 0, 0, 100);
-  noStroke();
-  rect(0, 0, width, height);
-
-  for (let i = 0; i < toggleLabels.length; i++) {
-    const toggleY = startY + i * spacing;
-    // 전체 보기(0)는 selectedToggles가 비어있을 때 선택됨
-    // 카테고리(1~5)는 selectedToggles에 포함되어 있을 때 선택됨
-    const isSelected =
-      i === 0 ? selectedToggles.length === 0 : selectedToggles.includes(i);
-
-    // 토글 배경
-    const gradient = drawingContext.createLinearGradient(
-      toggleX,
-      toggleY,
-      toggleX,
-      toggleY + toggleHeight
-    );
-
-    if (isSelected) {
-      gradient.addColorStop(0, "rgba(255, 255, 255, 0.3)");
-      gradient.addColorStop(1, "rgba(255, 255, 255, 0.2)");
-    } else {
-      gradient.addColorStop(0, "rgba(255, 255, 255, 0.15)");
-      gradient.addColorStop(1, "rgba(255, 255, 255, 0.1)");
-    }
-
-    drawingContext.fillStyle = gradient;
-    drawingContext.strokeStyle = isSelected
-      ? "rgba(255, 255, 255, 0.5)"
-      : "rgba(255, 255, 255, 0.3)";
-    drawingContext.lineWidth = isSelected ? 2 : 1;
-
-    // 둥근 사각형
-    drawingContext.beginPath();
-    drawingContext.moveTo(toggleX + radius, toggleY);
-    drawingContext.lineTo(toggleX + toggleWidth - radius, toggleY);
-    drawingContext.quadraticCurveTo(
-      toggleX + toggleWidth,
-      toggleY,
-      toggleX + toggleWidth,
-      toggleY + radius
-    );
-    drawingContext.lineTo(
-      toggleX + toggleWidth,
-      toggleY + toggleHeight - radius
-    );
-    drawingContext.quadraticCurveTo(
-      toggleX + toggleWidth,
-      toggleY + toggleHeight,
-      toggleX + toggleWidth - radius,
-      toggleY + toggleHeight
-    );
-    drawingContext.lineTo(toggleX + radius, toggleY + toggleHeight);
-    drawingContext.quadraticCurveTo(
-      toggleX,
-      toggleY + toggleHeight,
-      toggleX,
-      toggleY + toggleHeight - radius
-    );
-    drawingContext.lineTo(toggleX, toggleY + radius);
-    drawingContext.quadraticCurveTo(
-      toggleX,
-      toggleY,
-      toggleX + radius,
-      toggleY
-    );
-    drawingContext.closePath();
-    drawingContext.fill();
-    drawingContext.stroke();
-
-    // 텍스트
-    push();
-    noStroke();
-    textAlign(CENTER, CENTER);
-
-    if (pretendardFont) {
-      textFont(pretendardFont);
-    }
-
-    fill(255, 255, 255, isSelected ? 255 : 200);
-    textSize(16);
-    textStyle(NORMAL);
-    text(
-      toggleLabels[i],
-      toggleX + toggleWidth / 2,
-      toggleY + toggleHeight / 2
-    );
-    pop();
-  }
-
-  drawingContext.restore();
-  pop();
-}
-
-function vignette() {
-  push();
-  drawingContext.save();
-  const g = drawingContext.createRadialGradient(
-    width * 0.5,
-    height * 0.55,
-    Math.min(width, height) * 0.25,
-    width * 0.5,
-    height * 0.55,
-    Math.max(width, height) * 0.7
-  );
-  g.addColorStop(0, "rgba(0,0,0,0)");
-  g.addColorStop(1, "rgba(0,0,0,0.35)");
-  drawingContext.fillStyle = g;
-  drawingContext.fillRect(0, 0, width, height);
-  drawingContext.restore();
-  pop();
-}
-
-// 캔버스용 라운드 사각형 path 유틸
-function roundedRectPath(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
 }
 
 // =======================
@@ -3911,3 +3212,38 @@ function drawArcCarousel() {
     );
   }
 }
+
+function vignette() {
+  push();
+  drawingContext.save();
+  const g = drawingContext.createRadialGradient(
+    width * 0.5,
+    height * 0.55,
+    Math.min(width, height) * 0.25,
+    width * 0.5,
+    height * 0.55,
+    Math.max(width, height) * 0.7
+  );
+  g.addColorStop(0, "rgba(0,0,0,0)");
+  g.addColorStop(1, "rgba(0,0,0,0.35)");
+  drawingContext.fillStyle = g;
+  drawingContext.fillRect(0, 0, width, height);
+  drawingContext.restore();
+  pop();
+}
+
+// 캔버스용 라운드 사각형 path 유틸
+function roundedRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+

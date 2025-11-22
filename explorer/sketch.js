@@ -356,26 +356,30 @@ class BubbleInfoComponent {
     if (!this.name) return;
     
     withTextRendering(() => {
-    // 제목
+    // 제목 (1.2배 크기, PretendardVariable 엑스트라 볼드)
     fill(255, 255, 255, 230 * alpha);
-    textSize(titleSize);
-    textStyle(BOLD);
-    text(this.name, x, y);
+    const titleFontSize = titleSize * 1.2;
     
-    // 태그 표시
-    let currentY = y + 35;
-    if (this.visualTags.length > 0) {
+    // withTextRendering에서 textFont()를 호출하므로, text() 호출 직전에 drawingContext.font를 재설정
+    // PretendardVariable 폰트의 엑스트라 볼드 적용 (font-weight: 800)
+    drawingContext.font = `700 ${titleFontSize}px "Pretendard Variable", Pretendard, sans-serif`;
+    // p5.js의 text() 함수가 내부적으로 폰트를 재설정할 수 있으므로, 
+    // 실제 텍스트 렌더링을 위해 fillText를 직접 사용
+    drawingContext.fillStyle = `rgba(255, 255, 255, ${230 * alpha / 255})`;
+    drawingContext.fillText(this.name, x, y);
+    
+    // 태그 표시 (visual/emotional 구분 없이 합쳐서 3개만, 흰색, 1.3배 크기)
+    const allTags = [...this.visualTags, ...this.emotionalTags];
+    const displayTags = allTags.slice(0, 3);
+    
+    if (displayTags.length > 0) {
       fill(255, 255, 255, 180 * alpha);
-      textSize(tagSize);
-      textStyle(NORMAL);
-      text(this.visualTags.slice(0, 3).map(tag => `#${tag}`).join("  "), x, currentY);
-      currentY += 25;
-    }
-    if (this.emotionalTags.length > 0) {
-      fill(255, 255, 0, 220 * alpha);
-      textSize(tagSize);
-      textStyle(NORMAL);
-      text(this.emotionalTags.slice(0, 3).map(tag => `#${tag}`).join("  "), x, currentY);
+      const tagFontSize = tagSize * 1.3;
+      // 태그는 일반 굵기 (400)
+      drawingContext.font = `400 ${tagFontSize}px "Pretendard Variable", Pretendard, sans-serif`;
+      drawingContext.fillStyle = `rgba(255, 255, 255, ${180 * alpha / 255})`;
+      const tagText = displayTags.map(tag => `#${tag}`).join("  ");
+      drawingContext.fillText(tagText, x, y + 35);
     }
     });
   }
@@ -1842,9 +1846,9 @@ const groupLanguages = {
   2: {
     // 20대 여성 (20s)
     visual: [
-      "핑크-옐로우 그라데이션",
-      "젤리 같은 텍스처",
-      "따뜻한 난색 반짝임",
+      "핑크-옐로우",
+      "젤리 텍스처",
+      "따뜻한 난색 ",
       "부드러운 곡면",
       "글로시한 윤기",
     ],
@@ -1854,10 +1858,10 @@ const groupLanguages = {
     // 50대 남성 (50s)
     visual: [
       "고명도 대비",
-      "크고 안정된 구형",
-      "차분하고 시원한 색",
-      "투명도 높은 반사광",
-      "균형 잡힌 색 분포",
+      "안정된 구형",
+      "시원한 색",
+      "투명한 반사광",
+      "균형적 분포",
     ],
     emotional: ["보호", "책임감", "신뢰", "안정", "성취"],
   },
@@ -1865,7 +1869,7 @@ const groupLanguages = {
     // 주부 (housewife)
     visual: [
       "소프트 톤",
-      "은은한 파스텔 옐로",
+      "파스텔 옐로",
       "투명한 안정감",
       "부드러운 난반사",
       "깨끗한 정결 이미지",
@@ -1879,13 +1883,13 @@ const groupLanguages = {
       "사이버 파스텔",
       "디지털 글로시",
       "높은 채도",
-      "K-pop 컬러 팔레트",
+      "K-pop 팔레트",
     ],
     emotional: [
       "흥미",
       "자기취향 강도",
       "아이코닉함",
-      "통통 튀는 귀여움",
+      "통통 귀여움",
       "즉각적 몰입",
     ],
   },
@@ -3947,30 +3951,175 @@ function forEachGroupTag(groupIndex, cb) {
   
   const responsiveScale = getResponsiveScale();
   const { imageX, imageY, imageSize } = getOrbitCenterMetrics();
-  const allTags = [...groupLang.visual, ...groupLang.emotional];
-  const tagRadius = imageSize / 2 + 80;
-  const angleStep = (Math.PI * 2) / allTags.length;
+  const imageRadius = imageSize / 2;
+  
+  // 태그를 4개로 제한 (visual 2개, emotional 2개)
+  const visualTags = groupLang.visual.slice(0, 2);
+  const emotionalTags = groupLang.emotional.slice(0, 2);
+  const selectedTags = [...visualTags, ...emotionalTags];
+  
   const TAG_FONT_SCALE = 1.4;
   const fontSize = 16 * TAG_FONT_SCALE * responsiveScale;
   const padding = 28 * responsiveScale;
+  const tagHeight = 56 * responsiveScale;
   
   push();
   if (pretendardFont) textFont(pretendardFont);
   textSize(fontSize);
   
-  allTags.forEach((tag, index) => {
-    const angle = angleStep * index - Math.PI / 2;
-    const tagX = imageX + Math.cos(angle) * tagRadius;
-    const tagY = imageY + Math.sin(angle) * tagRadius;
-    const tagWidth = textWidth(tag) + padding * 2;
-    const tagHeight = 56 * responsiveScale;
+  // 먼저 모든 태그의 크기를 계산
+  const tagSizes = selectedTags.map(tag => ({
+    tag,
+    width: textWidth(tag) + padding * 2,
+    height: tagHeight
+  }));
+  
+  // 대표사진의 위아래 20% 영역 계산
+  const topExcludeZone = imageY - imageRadius; // 상단 경계
+  const topExcludeEnd = imageY - imageRadius * 0.8; // 상단 20% 끝
+  const bottomExcludeStart = imageY + imageRadius * 0.8; // 하단 20% 시작
+  const bottomExcludeZone = imageY + imageRadius; // 하단 경계
+  
+  // 위아래 20% 영역 체크 함수
+  function isInExcludeZone(tagY, tagHeight) {
+    const tagTop = tagY - tagHeight / 2;
+    const tagBottom = tagY + tagHeight / 2;
+    
+    // 태그가 상단 20% 영역과 겹치는지 확인
+    if (tagBottom > topExcludeZone && tagTop < topExcludeEnd) {
+      return true;
+    }
+    
+    // 태그가 하단 20% 영역과 겹치는지 확인
+    if (tagTop < bottomExcludeZone && tagBottom > bottomExcludeStart) {
+      return true;
+    }
+    
+    return false;
+  }
+  
+  // 충돌 감지 함수
+  function checkCollision(newBox, existingBoxes) {
+    // 위아래 20% 제외 영역 체크
+    if (isInExcludeZone(newBox.y, newBox.h)) {
+      return true;
+    }
+    
+    // 다른 태그와의 충돌 체크
+    for (const existing of existingBoxes) {
+      const margin = 10; // 태그 간 최소 간격
+      if (
+        newBox.x - newBox.w/2 < existing.x + existing.w/2 + margin &&
+        newBox.x + newBox.w/2 > existing.x - existing.w/2 - margin &&
+        newBox.y - newBox.h/2 < existing.y + existing.h/2 + margin &&
+        newBox.y + newBox.h/2 > existing.y - existing.h/2 - margin
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+  
+  // 연령별 태그 위치 설정 (픽셀 조정 포함)
+  // 픽셀 값을 imageRadius 비율로 변환하여 offset에 반영
+  const pixelToOffsetRatio = 1.0 / imageRadius;
+  
+  const groupTagPositions = {
+    1: [ // 여행자 (왼쪽 태그들 위로 20픽셀)
+      { offsetX: -0.7, offsetY: -0.1 - 20 * pixelToOffsetRatio }, // 왼쪽 위
+      { offsetX: 0.7, offsetY: -0.3 },  // 오른쪽 위
+      { offsetX: 0.7, offsetY: 0.3 },   // 오른쪽 아래
+      { offsetX: -0.7, offsetY: 0.5 - 20 * pixelToOffsetRatio },  // 왼쪽 아래
+    ],
+    2: [ // 20대 여성
+      { offsetX: -0.6, offsetY: -0.4 }, // 왼쪽 위
+      { offsetX: 0.6, offsetY: -0.3 },  // 오른쪽 위
+      { offsetX: 0.6, offsetY: 0.5 },   // 오른쪽 아래
+      { offsetX: -0.6, offsetY: 0.4 },  // 왼쪽 아래
+    ],
+    3: [ // 50대 남성
+      { offsetX: -0.5, offsetY: -0.5 }, // 왼쪽 위
+      { offsetX: 0.5, offsetY: -0.5 },  // 오른쪽 위
+      { offsetX: 0.5, offsetY: 0.5 },   // 오른쪽 아래
+      { offsetX: -0.5, offsetY: 0.5 },  // 왼쪽 아래
+    ],
+    4: [ // 주부 (오른쪽 태그들 위로 25픽셀)
+      { offsetX: -0.65, offsetY: -0.35 }, // 왼쪽 위
+      { offsetX: 0.65, offsetY: -0.35 - 25 * pixelToOffsetRatio },  // 오른쪽 위
+      { offsetX: 0.65, offsetY: 0.35 - 25 * pixelToOffsetRatio },   // 오른쪽 아래
+      { offsetX: -0.65, offsetY: 0.35 },  // 왼쪽 아래
+    ],
+    5: [ // 10대 여성 (왼쪽 태그들 왼쪽으로 100픽셀, 아래 왼쪽 위로 100픽셀)
+      { offsetX: -0.55 - 100 * pixelToOffsetRatio, offsetY: -0.45 }, // 왼쪽 위
+      { offsetX: 0.55, offsetY: -0.45 },  // 오른쪽 위
+      { offsetX: 0.55, offsetY: 0.45 },   // 오른쪽 아래
+      { offsetX: -0.55 - 100 * pixelToOffsetRatio, offsetY: 0.45 - 100 * pixelToOffsetRatio },  // 왼쪽 아래
+    ],
+  };
+  
+  // 현재 그룹에 맞는 위치 설정 (기본값은 3번)
+  const basePositions = groupTagPositions[groupIndex] || groupTagPositions[3];
+  
+  const placedTags = [];
+  
+  selectedTags.forEach((tag, index) => {
+    if (index >= 4) return; // 최대 4개만
+    
+    const tagSize = tagSizes[index];
+    const basePos = basePositions[index];
+    
+    // 태그 박스의 중심이 대표이미지의 경계에 위치하도록 설정
+    // 태그 박스가 반 정도는 안쪽, 반 정도는 바깥쪽에 있게 함
+    const angle = Math.atan2(basePos.offsetY, basePos.offsetX);
+    
+    // 기본 위치: 태그 박스의 중심이 대표이미지의 경계(반경)에 위치
+    const baseTagX = imageX + Math.cos(angle) * imageRadius;
+    const baseTagY = imageY + Math.sin(angle) * imageRadius;
+    
+    // 특정 태그만 추가 조정
+    let adjustY = 0;
+    let adjustX = 0;
+    if (tag === "핑크-옐로우") {
+      adjustY = -5;
+    } else if (tag === "사랑스러움") {
+      adjustY = -25;
+    } else if (tag === "안정된 구형") {
+      adjustY = 10; // 아래로 10픽셀
+    } else if (tag === "책임감") {
+      adjustY = -60; // 위로 10픽셀 더 올림 (기존 -50에서 -60)
+      adjustX = -20; // 왼쪽으로 20픽셀
+    } else if (tag === "보호") {
+      adjustY = -50;
+      adjustX = 20; // 오른쪽으로 20픽셀
+    } else if (tag === "자기취향 강도") {
+      adjustY = 30; // 아래로 30픽셀
+      adjustX = -10; // 왼쪽으로 10픽셀
+    } else if (tag === "네온 핑크") {
+      adjustY = -30; // 위로 30픽셀
+      adjustX = 10; // 오른쪽으로 10픽셀
+    } else if (tag === "흥미") {
+      adjustX = 10; // 오른쪽으로 10픽셀
+    }
+    
+    // 최종 위치 계산 (한 번에)
+    const finalTagX = baseTagX + adjustX;
+    const finalTagY = baseTagY + adjustY;
+    
+    const finalBox = {
+      x: finalTagX,
+      y: finalTagY,
+      w: tagSize.width,
+      h: tagSize.height
+    };
+    
+    placedTags.push(finalBox);
     
     cb({
       tag,
-      x: tagX,
-      y: tagY,
-      w: tagWidth,
-      h: tagHeight,
+      x: finalTagX,
+      y: finalTagY,
+      w: tagSize.width,
+      h: tagSize.height,
       fontSize,
     });
   });
@@ -4251,16 +4400,17 @@ function drawGlassTag(x, y, w, h, r, isSelected = false, isHovered = false) {
   ctx.save();
   roundRectPath(ctx, x, y, w, h, r);
   ctx.clip();
-
+  ctx.globalAlpha = 0.5;
+  // 백드롭 블러 효과 (태그 뒤 배경이 블러로 보이게)
   if (bgBuffer) {
-    // 유리감: 블러 + 채도↑ + 밝기↓ (더 어둡고 흐리게)
-    ctx.filter = "blur(16px) saturate(140%) brightness(60%)";
+    // 유리감: 강한 블러 효과로 배경이 블러로 보이게
+    ctx.filter = "blur(5px) saturate(120%) brightness(80%)";
     const src = bgBuffer.canvas || bgBuffer.elt;
     ctx.drawImage(src, 0, 0);
     ctx.filter = "none";
   } else if (bgImage && bgImage.width > 0) {
     // 배경 이미지가 있으면 사용
-    ctx.filter = "blur(16px) saturate(140%) brightness(60%)";
+    ctx.filter = "blur(5px) saturate(120%) brightness(80%)";
     const src = bgImage.canvas || bgImage.elt;
     ctx.drawImage(src, 0, 0, width, height);
     ctx.filter = "none";
@@ -4270,19 +4420,26 @@ function drawGlassTag(x, y, w, h, r, isSelected = false, isHovered = false) {
     ctx.fillRect(x, y, w, h);
   }
 
-  // 3) 어두운 오버레이 (배경을 더 어둡게, hover 시 더 밝게)
-  const overlayAlpha = isHovered ? 0.25 : 0.4; // hover 시 더 밝게
-  ctx.fillStyle = `rgba(0,0,0,${overlayAlpha})`;
+  // 반투명 효과 적용 (투명도 0.5)
+  ctx.globalAlpha = 0.5;
+
+  // 3) 글래스모피즘 그라디언트 배경 (180deg, rgba(0,0,0,0.08) → rgba(0,0,0,0.10))
+  const glassGradient = ctx.createLinearGradient(x, y, x, y + h);
+  glassGradient.addColorStop(0, "rgba(0, 0, 0, 0.08)");
+  glassGradient.addColorStop(1, "rgba(0, 0, 0, 0.10)");
+  ctx.fillStyle = glassGradient;
   ctx.fillRect(x, y, w, h);
 
-  // 4) 유리 틴트(상→하 미묘한 그라디언트, hover 시 더 밝게)
-  const tint = ctx.createLinearGradient(x, y, x, y + h);
-  const tintTop = isHovered ? 0.25 : 0.15; // hover 시 더 밝게
-  const tintBottom = isHovered ? 0.15 : 0.08;
-  tint.addColorStop(0, `rgba(255,255,255,${tintTop})`);
-  tint.addColorStop(1, `rgba(255,255,255,${tintBottom})`);
-  ctx.fillStyle = tint;
-  ctx.fillRect(x, y, w, h);
+  // 4) 내부 하이라이트 그라디언트 (글래스모피즘 효과 강화)
+  const innerHighlight = ctx.createLinearGradient(x, y, x, y + h * 0.5);
+  innerHighlight.addColorStop(0, "rgba(255, 255, 255, 0.15)");
+  innerHighlight.addColorStop(0.5, "rgba(255, 255, 255, 0.08)");
+  innerHighlight.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.fillStyle = innerHighlight;
+  ctx.fillRect(x, y, w, h * 0.5);
+  
+  // globalAlpha 복원
+  ctx.globalAlpha = 1.0;
 
   // 5) 유리 테두리(대각선 그라디언트 하이라이트)
   // 선택된 태그는 더 진한 스트로크, hover 시도 더 밝게
