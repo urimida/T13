@@ -305,7 +305,7 @@ class GraphicsManager {
     this._bgImageDrawn = false; // 배경 이미지 그리기 완료 플래그 (깜빡임 방지)
   }
 
-  // 배경 그리기 (ResourceManager 사용, 깜빡임 방지)
+  // 배경 그리기 (ResourceManager 사용, 깜빡임 방지 강화)
   drawBackground() {
     // 배경 버퍼가 없으면 즉시 생성하고 배경색으로 채우기 (깜빡임 방지)
     if (!bgBuffer) {
@@ -316,9 +316,10 @@ class GraphicsManager {
       }
       // 배경 이미지가 로드되기 전에도 배경색으로 즉시 채우기
       bgBuffer.background(BG_COLOR);
+      this._bgImageDrawn = false; // 초기화
     }
     
-    // 배경 이미지가 로드되었는지 확인하고, 로드되었으면 그리기
+    // 배경 이미지가 로드되었는지 확인하고, 로드되었으면 그리기 (한 번만)
     if (bgImage && bgImage.width > 0 && bgImage.height > 0) {
       // 배경 버퍼에 이미지가 그려져 있지 않으면 그리기
       if (!this._bgImageDrawn) {
@@ -327,8 +328,19 @@ class GraphicsManager {
       }
     }
     
-    // 배경 버퍼를 메인 캔버스에 그리기 (항상 안정적으로 표시)
-    image(bgBuffer, 0, 0);
+    // 배경 버퍼를 메인 캔버스에 그리기 (항상 안정적으로 표시, 깜빡임 방지)
+    // 태블릿에서는 더블 버퍼링 강화
+    if (IS_MOBILE) {
+      push();
+      drawingContext.save();
+      drawingContext.imageSmoothingEnabled = true;
+      drawingContext.imageSmoothingQuality = 'high';
+      image(bgBuffer, 0, 0);
+      drawingContext.restore();
+      pop();
+    } else {
+      image(bgBuffer, 0, 0);
+    }
   }
 
   // 비네팅 효과 캐싱 (메모리 누수 방지)
@@ -2599,7 +2611,9 @@ class Bubble {
         bubbleBottom <= height - 10; // 화면 하단 위
 
       const targetAlpha = isOnScreen && isInAllowedArea ? 1.0 : 0.0;
-      const alphaEase = targetAlpha > this.alpha ? 0.18 : 0.08;
+      // 태블릿에서 알파 전환을 더 부드럽게 (깜빡임 방지)
+      const baseEase = targetAlpha > this.alpha ? 0.18 : 0.08;
+      const alphaEase = IS_MOBILE ? baseEase * 0.7 : baseEase; // 태블릿은 30% 느리게
       this.alpha = lerp(this.alpha, targetAlpha, alphaEase);
     } else if (this._isFiltered && !this.isPopping) {
       // 필터링된 버블은 항상 alpha를 1.0으로 유지 (페이드아웃 로직 건너뛰기)
@@ -4187,26 +4201,29 @@ function updateState() {
             const fadeProgress = (distToCenter - CENTER_INFLUENCE_RADIUS) / fadeRange;
             targetAlpha = lerp(1.0, MIN_ALPHA, fadeProgress);
           }
-          b.alpha = lerp(b.alpha, targetAlpha, 0.12);
+          // 태블릿에서 알파 전환을 더 부드럽게 (깜빡임 방지)
+          const alphaEase = IS_MOBILE ? 0.08 : 0.12; // 태블릿은 더 느리게
+          b.alpha = lerp(b.alpha, targetAlpha, alphaEase);
         });
       }
       centerBubble.alpha = 1.0;
     }
   }
 
-  // orbitInfoAlpha 업데이트
+  // orbitInfoAlpha 업데이트 (태블릿에서 더 부드럽게)
   const shouldShowInfo = selectedOrbitBubble && hasTagFilter && !isOrbitInfoFadingOut;
+  const orbitAlphaEase = IS_MOBILE ? 0.10 : 0.15; // 태블릿은 더 느리게
   if (shouldShowInfo) {
-    orbitInfoAlpha = lerp(orbitInfoAlpha, 1.0, 0.15);
+    orbitInfoAlpha = lerp(orbitInfoAlpha, 1.0, orbitAlphaEase);
   } else if (selectedOrbitBubble) {
-    orbitInfoAlpha = lerp(orbitInfoAlpha, 0.0, 0.15);
+    orbitInfoAlpha = lerp(orbitInfoAlpha, 0.0, orbitAlphaEase);
     if (orbitInfoAlpha < 0.01) {
       selectedOrbitBubble = null;
       orbitInfoAlpha = 0.0;
       isOrbitInfoFadingOut = false;
     }
   } else {
-    orbitInfoAlpha = lerp(orbitInfoAlpha, 0.0, 0.15);
+    orbitInfoAlpha = lerp(orbitInfoAlpha, 0.0, orbitAlphaEase);
     isOrbitInfoFadingOut = false;
   }
 }
@@ -4372,12 +4389,43 @@ function renderScene() {
   }
 }
 
+// 태블릿 깜빡임 방지를 위한 프레임 관리
+let lastFrameTime = 0;
+let frameSkipCounter = 0;
+const TARGET_FRAME_TIME = 1000 / 30; // 30fps 목표
+
 function draw() {
   // 페이지가 보이지 않으면 렌더링 중단 (깜빡임 방지를 위해 clear() 대신 배경만 그리기)
   if (!isPageVisible) {
     // clear() 대신 배경만 그려서 깜빡임 최소화
     background(BG_COLOR);
     return;
+  }
+
+  // 태블릿에서 프레임 드롭 감지 및 대응 (깜빡임 방지)
+  if (IS_MOBILE) {
+    const currentTime = millis();
+    const frameDelta = currentTime - lastFrameTime;
+    
+    // 프레임이 너무 빠르게 실행되면 스킵 (드래그 중이 아닐 때만)
+    if (frameDelta < TARGET_FRAME_TIME * 0.7 && !panController?.isDragging) {
+      frameSkipCounter++;
+      if (frameSkipCounter < 2) {
+        // 배경만 그려서 깜빡임 방지
+        if (graphicsManager) {
+          graphicsManager.drawBackground();
+        } else if (bgBuffer) {
+          image(bgBuffer, 0, 0);
+        } else {
+          background(BG_COLOR);
+        }
+        return;
+      }
+      frameSkipCounter = 0;
+    } else {
+      frameSkipCounter = 0;
+    }
+    lastFrameTime = currentTime;
   }
 
   // 1. 상태 업데이트 (데이터 변경)
@@ -4653,7 +4701,9 @@ function draw() {
         
         // 부드럽게 alpha 조정
         // 이미지가 로드된 버블 또는 이미지가 없는 버블 모두 거리 기반 투명도 적용
-        b.alpha = lerp(b.alpha, targetAlpha, 0.12);
+        // 태블릿에서 알파 전환을 더 부드럽게 (깜빡임 방지)
+        const alphaEase = IS_MOBILE ? 0.08 : 0.12; // 태블릿은 더 느리게
+        b.alpha = lerp(b.alpha, targetAlpha, alphaEase);
         });
       }
       
