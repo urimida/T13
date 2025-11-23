@@ -101,8 +101,6 @@ let bgImage; // 배경 이미지
 let bubbleCap; // 버블 캡 이미지
 let navBarBuffer; // 네비게이션 바 고해상도 버퍼
 let bubbleImages = []; // 버블 이미지들 (지연 로딩)
-let imageLoading = new Set(); // 현재 로딩 중인 이미지 인덱스
-let imageLoaded = new Set(); // 로드 완료된 이미지 인덱스
 let bubbleData = []; // 버블 제목/태그 데이터
 let imageFiles = []; // 이미지 파일명 목록 (전역으로 이동)
 let pretendardFont; // Pretendard 폰트
@@ -112,8 +110,17 @@ explorerRuntime.registerCleanup("asset-cache", ({ keepCache } = {}) => {
   if (keepCache) return;
   bubbleImages.length = 0;
   imageFiles.length = 0;
-  imageLoading.clear();
-  imageLoaded.clear();
+  // ImageLoader는 별도로 관리되므로 여기서는 제거하지 않음
+  
+  // ResourceManager 정리
+  if (resourceManager) {
+    resourceManager.destroy();
+  }
+  
+  // InputManager 정리
+  if (inputManager) {
+    inputManager.destroy();
+  }
 });
 
 function loadCachedAsset(path) {
@@ -159,7 +166,1015 @@ function loadDeferredAssets() {
   });
 }
 
+// 리소스 관리자 클래스 (버퍼 및 자산 관리)
+class ResourceManager {
+  constructor() {
+    this.buffers = new Map(); // 버퍼 캐시 (key -> buffer)
+    this.assets = {
+      images: {},
+      fonts: {},
+      data: null
+    };
+  }
+
+  // 그래픽 버퍼 가져오기 또는 업데이트 (메모리 누수 방지)
+  getOrUpdateBuffer(key, width, height) {
+    const existing = this.buffers.get(key);
+    const needsNewBuffer = !existing || existing.width !== width || existing.height !== height;
+    
+    if (needsNewBuffer) {
+      // 기존 버퍼가 있으면 반드시 메모리 해제 (태블릿 멈춤 방지 핵심)
+      if (existing?.remove) {
+        existing.remove();
+      }
+      const newBuffer = createGraphics(width, height);
+      this.buffers.set(key, newBuffer);
+      return newBuffer;
+    }
+    
+    existing.clear();
+    return existing;
+  }
+
+  // 버퍼 제거
+  removeBuffer(key) {
+    const buffer = this.buffers.get(key);
+    if (buffer?.remove) {
+      buffer.remove();
+    }
+    this.buffers.delete(key);
+  }
+
+  // 모든 버퍼 정리
+  clearBuffers() {
+    this.buffers.forEach((buffer, key) => {
+      if (buffer?.remove) {
+        buffer.remove();
+      }
+    });
+    this.buffers.clear();
+  }
+
+  // 자산 검증 헬퍼
+  checkAsset(asset, name, onSuccess = null) {
+    const isValid = asset && (!asset.width || asset.width > 0);
+    if (!isValid) {
+      logError(`${name} 로딩 실패`);
+      return false;
+    } else if (onSuccess) {
+      onSuccess();
+    }
+    return true;
+  }
+
+  // 버블 데이터 비동기 로드
+  async loadBubbleData() {
+    try {
+      const response = await fetch("../public/assets/data/bubbles.json");
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const bubblesJson = await response.json();
+      log("[Explorer] JSON 로드 성공:", bubblesJson);
+
+      // 버블 이미지 데이터 정의
+      if (bubblesJson && bubblesJson.imageFiles && Array.isArray(bubblesJson.imageFiles)) {
+        imageFiles = bubblesJson.imageFiles;
+        log(`[Explorer] JSON에서 ${imageFiles.length}개의 이미지 파일 로드됨`);
+      } else {
+        logError("[Explorer] JSON에서 imageFiles를 로드할 수 없습니다", bubblesJson);
+      }
+
+      // 버블 데이터
+      if (bubblesJson && bubblesJson.bubbles && Array.isArray(bubblesJson.bubbles)) {
+        bubbleData = bubblesJson.bubbles.map(bubble => ({
+          title: bubble.title,
+          tags: bubble.tags,
+          attributes: bubble.attributes,
+          visualTags: [],
+          emotionalTags: []
+        }));
+        log(`[Explorer] JSON에서 ${bubbleData.length}개의 버블 데이터 로드됨`);
+
+        // 버블 이미지 배열 초기화
+        if (bubbleImageLoader) {
+          for (let i = 0; i < imageFiles.length; i++) {
+            bubbleImageLoader.images.push(null);
+          }
+          bubbleImages = bubbleImageLoader.images;
+        }
+
+        // 버블 데이터에 언어 할당
+        assignLanguagesToBubbles();
+        log(`[Explorer] 버블 데이터에 언어 할당 완료`);
+
+        return true;
+      } else {
+        logError("[Explorer] JSON에서 bubbles를 로드할 수 없습니다", bubblesJson);
+        return false;
+      }
+    } catch (error) {
+      logError("[Explorer] JSON 로드 중 오류 발생:", error);
+      bubbleData = [];
+      imageFiles = [];
+      return false;
+    }
+  }
+
+  // 정리
+  destroy() {
+    this.clearBuffers();
+    this.assets = {
+      images: {},
+      fonts: {},
+      data: null
+    };
+  }
+}
+
+// 전역 리소스 관리자 인스턴스
+let resourceManager = null;
+
+// 그래픽 관리자 클래스 (비네팅 캐싱 및 버퍼 관리)
+class GraphicsManager {
+  constructor() {
+    this.vignetteBuffer = null;
+    this.lastVignetteSize = { w: 0, h: 0 };
+    this.lastWindowSize = { w: 0, h: 0 };
+  }
+
+  // 배경 그리기 (ResourceManager 사용)
+  drawBackground() {
+    if (!bgBuffer) {
+      if (resourceManager) {
+        bgBuffer = resourceManager.getOrUpdateBuffer('bg', width, height);
+      } else {
+        bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
+      }
+      bgBuffer.background(BG_COLOR);
+    }
+    image(bgBuffer, 0, 0);
+  }
+
+  // 비네팅 효과 캐싱 (메모리 누수 방지)
+  drawVignette() {
+    // 화면 크기가 변경되었거나 버퍼가 없으면 재생성
+    const needsUpdate = !this.vignetteBuffer || 
+                       this.lastVignetteSize.w !== width || 
+                       this.lastVignetteSize.h !== height;
+
+    if (needsUpdate) {
+      // 기존 버퍼 해제
+      if (this.vignetteBuffer?.remove) {
+        this.vignetteBuffer.remove();
+      }
+
+      // 새 버퍼 생성
+      this.vignetteBuffer = createGraphics(width, height);
+      this.vignetteBuffer.clear();
+      
+      // 비네팅 그리기 (한 번만)
+      const gTop = this.vignetteBuffer.drawingContext.createLinearGradient(0, 0, 0, height * 0.25);
+      gTop.addColorStop(0, "rgba(0,0,0,0.35)");
+      gTop.addColorStop(1, "rgba(0,0,0,0)");
+      this.vignetteBuffer.drawingContext.fillStyle = gTop;
+      this.vignetteBuffer.noStroke();
+      this.vignetteBuffer.rect(0, 0, width, height * 0.25);
+
+      const gBot = this.vignetteBuffer.drawingContext.createLinearGradient(0, height, 0, height * 0.75);
+      gBot.addColorStop(0, "rgba(0,0,0,0.35)");
+      gBot.addColorStop(1, "rgba(0,0,0,0)");
+      this.vignetteBuffer.drawingContext.fillStyle = gBot;
+      this.vignetteBuffer.rect(0, height * 0.75, width, height * 0.25);
+
+      this.lastVignetteSize = { w: width, h: height };
+    }
+
+    // 캐시된 비네팅 그리기
+    if (this.vignetteBuffer) {
+      image(this.vignetteBuffer, 0, 0);
+    }
+  }
+
+  // 정리
+  destroy() {
+    if (this.vignetteBuffer?.remove) {
+      this.vignetteBuffer.remove();
+    }
+    this.vignetteBuffer = null;
+    this.lastVignetteSize = { w: 0, h: 0 };
+  }
+}
+
+// 전역 그래픽 관리자 인스턴스
+let graphicsManager = null;
+
+// 그룹 뷰 렌더러 클래스 (그라디언트 및 태그 레이아웃 캐싱)
+class GroupViewRenderer {
+  static glowBuffer = null;
+  static cachedTagLayouts = {}; // groupIndex -> [{tag, x, y, w, h, fontSize}]
+  static lastOrbitMetrics = null;
+
+  // 백글로우 버퍼 생성 (한 번만)
+  static _createGlowBuffer(imageX, imageY, imageRadius) {
+    const glowRadius = imageRadius * 1.7;
+    const bufferSize = Math.ceil(glowRadius * 2) + 20;
+    
+    // 기존 버퍼 해제
+    if (this.glowBuffer?.remove) {
+      this.glowBuffer.remove();
+    }
+
+    // 새 버퍼 생성
+    this.glowBuffer = createGraphics(bufferSize, bufferSize);
+    this.glowBuffer.clear();
+    
+    const centerX = bufferSize / 2;
+    const centerY = bufferSize / 2;
+    
+    // 빛 효과 그리기 (한 번만)
+    const glowGradient = this.glowBuffer.drawingContext.createRadialGradient(
+      centerX,
+      centerY,
+      imageRadius * 0.4,
+      centerX,
+      centerY,
+      glowRadius
+    );
+    
+    glowGradient.addColorStop(0, "rgba(255,255,255,0.7)");
+    glowGradient.addColorStop(0.5, "rgba(255, 243, 156, 0.18)");
+    glowGradient.addColorStop(1, "rgba(255, 255, 217, 0)");
+    
+    this.glowBuffer.drawingContext.fillStyle = glowGradient;
+    this.glowBuffer.drawingContext.beginPath();
+    this.glowBuffer.drawingContext.arc(centerX, centerY, glowRadius, 0, Math.PI * 2);
+    this.glowBuffer.drawingContext.fill();
+    
+    this.lastOrbitMetrics = { imageX, imageY, imageRadius };
+  }
+
+  // 태그 레이아웃 계산 (그룹 변경 시에만)
+  static _calculateTagLayout(groupIndex) {
+    const groupLang = BubbleDataManager.groupLanguages[groupIndex];
+    if (!groupLang) return;
+
+    const responsiveScale = LayoutManager.getScale();
+    const orbitMetrics = this._getOrbitCenterMetrics();
+    const { imageX, imageY, imageSize } = orbitMetrics;
+    const imageRadius = imageSize / 2;
+
+    // 태그를 4개로 제한
+    const visualTags = groupLang.visual.slice(0, 2);
+    const emotionalTags = groupLang.emotional.slice(0, 2);
+    const selectedTags = [...visualTags, ...emotionalTags];
+
+    const TAG_FONT_SCALE = 1.4;
+    const fontSize = 16 * TAG_FONT_SCALE * responsiveScale;
+    const padding = 28 * responsiveScale;
+    const tagHeight = 56 * responsiveScale;
+
+    // 텍스트 크기 계산
+    push();
+    if (pretendardFont) textFont(pretendardFont);
+    textSize(fontSize);
+    
+    const tagSizes = selectedTags.map(tag => ({
+      tag,
+      width: textWidth(tag) + padding * 2,
+      height: tagHeight
+    }));
+    pop();
+
+    // 대표사진의 위아래 20% 영역 계산
+    const topExcludeZone = imageY - imageRadius;
+    const topExcludeEnd = imageY - imageRadius * 0.8;
+    const bottomExcludeStart = imageY + imageRadius * 0.8;
+    const bottomExcludeZone = imageY + imageRadius;
+
+    // 연령별 태그 위치 설정
+    const pixelToOffsetRatio = 1.0 / imageRadius;
+    const groupTagPositions = {
+      1: [
+        { offsetX: -0.7, offsetY: -0.1 - 20 * pixelToOffsetRatio },
+        { offsetX: 0.7, offsetY: -0.3 },
+        { offsetX: 0.7, offsetY: 0.3 },
+        { offsetX: -0.7, offsetY: 0.5 - 20 * pixelToOffsetRatio },
+      ],
+      2: [
+        { offsetX: -0.6, offsetY: -0.4 },
+        { offsetX: 0.6, offsetY: -0.3 },
+        { offsetX: 0.6, offsetY: 0.5 },
+        { offsetX: -0.6, offsetY: 0.4 },
+      ],
+      3: [
+        { offsetX: -0.5, offsetY: -0.5 },
+        { offsetX: 0.5, offsetY: -0.5 },
+        { offsetX: 0.5, offsetY: 0.5 },
+        { offsetX: -0.5, offsetY: 0.5 },
+      ],
+      4: [
+        { offsetX: -0.65, offsetY: -0.35 },
+        { offsetX: 0.65, offsetY: -0.35 - 25 * pixelToOffsetRatio },
+        { offsetX: 0.65, offsetY: 0.35 - 25 * pixelToOffsetRatio },
+        { offsetX: -0.65, offsetY: 0.35 },
+      ],
+      5: [
+        { offsetX: -0.55 - 100 * pixelToOffsetRatio, offsetY: -0.45 },
+        { offsetX: 0.55, offsetY: -0.45 },
+        { offsetX: 0.55, offsetY: 0.45 },
+        { offsetX: -0.55 - 100 * pixelToOffsetRatio, offsetY: 0.45 - 100 * pixelToOffsetRatio },
+      ],
+    };
+
+    const basePositions = groupTagPositions[groupIndex] || groupTagPositions[3];
+    const layout = [];
+
+    selectedTags.forEach((tag, index) => {
+      if (index >= 4) return;
+
+      const tagSize = tagSizes[index];
+      const basePos = basePositions[index];
+      const angle = Math.atan2(basePos.offsetY, basePos.offsetX);
+      const baseTagX = imageX + Math.cos(angle) * imageRadius;
+      const baseTagY = imageY + Math.sin(angle) * imageRadius;
+
+      // 특정 태그만 추가 조정
+      let adjustY = 0;
+      let adjustX = 0;
+      if (tag === "핑크-옐로우") adjustY = -5;
+      else if (tag === "사랑스러움") adjustY = -25;
+      else if (tag === "안정된 구형") adjustY = 10;
+      else if (tag === "책임감") { adjustY = -60; adjustX = -20; }
+      else if (tag === "보호") { adjustY = -50; adjustX = 20; }
+      else if (tag === "자기취향 강도") { adjustY = 30; adjustX = -10; }
+      else if (tag === "네온 핑크") { adjustY = -30; adjustX = 10; }
+      else if (tag === "흥미") adjustX = 10;
+
+      layout.push({
+        tag,
+        x: baseTagX + adjustX,
+        y: baseTagY + adjustY,
+        w: tagSize.width,
+        h: tagSize.height,
+        fontSize
+      });
+    });
+
+    this.cachedTagLayouts[groupIndex] = layout;
+  }
+
+  // 오비트 중심 메트릭 가져오기 (캐시된 값 사용)
+  static _getOrbitCenterMetrics() {
+    const responsiveScale = LayoutManager.getScale();
+    const { bottom: SEARCH_BOTTOM } = LayoutManager.getSearchMetrics();
+    const centerX = width / 2;
+    const centerY = (SEARCH_BOTTOM + height) / 2;
+    const imageSize = min(width * 0.4, height * 0.4) * responsiveScale;
+    const imageX = centerX;
+    const imageY = centerY - 50;
+    return { centerX, centerY, imageX, imageY, imageSize };
+  }
+
+  // 이미지 그리기 (스케일링 로직 포함)
+  static _drawImage(groupIndex) {
+    const groupImg = groupImages[groupIndex];
+    if (!groupImg || !groupImg.width || groupImg.width === 0) return;
+
+    const { imageX, imageY, imageSize } = this._getOrbitCenterMetrics();
+    const imageRadius = imageSize / 2;
+
+    push();
+    drawingContext.save();
+    drawingContext.imageSmoothingEnabled = true;
+    drawingContext.imageSmoothingQuality = "high";
+    drawingContext.beginPath();
+    drawingContext.arc(imageX, imageY, imageRadius, 0, Math.PI * 2);
+    drawingContext.clip();
+
+    imageMode(CENTER);
+    const imgRatio = groupImg.width / groupImg.height;
+    let drawW, drawH;
+    if (imgRatio > 1) {
+      drawH = imageSize;
+      drawW = imgRatio * drawH;
+    } else {
+      drawW = imageSize;
+      drawH = drawW / imgRatio;
+    }
+
+    // 그룹별 스케일링
+    if (groupIndex === 5) {
+      drawW *= 1.5;
+      drawH *= 1.5;
+    } else if (groupIndex === 2) {
+      drawW *= 1.4;
+      drawH *= 1.4;
+    }
+
+    image(groupImg, imageX, imageY, drawW, drawH);
+    drawingContext.restore();
+    pop();
+  }
+
+  // 그룹 뷰 그리기 (메인 메서드)
+  static draw(groupIndex) {
+    if (!groupImages[groupIndex]) return;
+
+    const { imageX, imageY, imageSize } = this._getOrbitCenterMetrics();
+    const imageRadius = imageSize / 2;
+
+    // 백글로우 그리기 (캐시된 버퍼 사용)
+    if (!this.glowBuffer || 
+        !this.lastOrbitMetrics ||
+        this.lastOrbitMetrics.imageRadius !== imageRadius) {
+      this._createGlowBuffer(imageX, imageY, imageRadius);
+    }
+
+    if (this.glowBuffer) {
+      push();
+      drawingContext.save();
+      drawingContext.globalAlpha = 0.85;
+      const bufferSize = this.glowBuffer.width;
+      const offsetX = imageX - bufferSize / 2;
+      const offsetY = imageY - bufferSize / 2;
+      image(this.glowBuffer, offsetX, offsetY);
+      drawingContext.restore();
+      pop();
+    }
+
+    // 이미지 그리기
+    this._drawImage(groupIndex);
+
+    // 태그 그리기 (캐시된 레이아웃 사용)
+    if (!this.cachedTagLayouts[groupIndex]) {
+      this._calculateTagLayout(groupIndex);
+    }
+
+    const tagLayout = this.cachedTagLayouts[groupIndex];
+    if (tagLayout) {
+      push();
+      drawingContext.save();
+      drawingContext.textBaseline = "middle";
+      drawingContext.textAlign = "center";
+      drawingContext.imageSmoothingEnabled = true;
+      drawingContext.imageSmoothingQuality = "high";
+      if (pretendardFont) textFont(pretendardFont);
+      
+      tagLayout.forEach(({ tag, x, y, fontSize }) => {
+        textSize(fontSize);
+        text(tag, x, y);
+      });
+      
+      drawingContext.restore();
+      pop();
+    }
+
+    // 빛 효과 그리기 (버블캡 아래, 이미지 위)
+    const orbitMetrics = this._getOrbitCenterMetrics();
+    const lightImageX = orbitMetrics.imageX;
+    const lightImageY = orbitMetrics.imageY;
+    const lightImageSize = orbitMetrics.imageSize;
+    const lightImageRadius = lightImageSize / 2;
+    const tempBubble = {
+      pos: { x: lightImageX, y: lightImageY },
+      r: lightImageRadius,
+      alpha: 1.0
+    };
+    if (
+      ANIMATION_CONFIG.enableLightEffect &&
+      frameCount % ANIMATION_CONFIG.lightEffectInterval === 0
+    ) {
+      drawBubbleLightEffect(tempBubble);
+    }
+
+    // 버블캡 그리기
+    if (bubbleCap && bubbleCap.width > 0) {
+      push();
+      imageMode(CENTER);
+      drawingContext.save();
+      drawingContext.imageSmoothingEnabled = true;
+      drawingContext.imageSmoothingQuality = "high";
+      image(bubbleCap, lightImageX, lightImageY, lightImageSize, lightImageSize);
+      drawingContext.restore();
+      pop();
+    }
+
+    // 집단 이름 텍스트 그리기
+    const groupNames = {
+      1: "여행자",
+      2: "20대 여성",
+      3: "50대 남성",
+      4: "주부",
+      5: "10대 여성"
+    };
+    
+    const groupName = groupNames[groupIndex];
+    if (groupName) {
+      push();
+      drawingContext.save();
+      drawingContext.textBaseline = "middle";
+      drawingContext.textAlign = "center";
+      drawingContext.imageSmoothingEnabled = true;
+      drawingContext.imageSmoothingQuality = "high";
+      
+      if (pretendardFont) {
+        textFont(pretendardFont);
+      }
+      
+      const responsiveScale = LayoutManager.getScale();
+      const { centerY } = this._getOrbitCenterMetrics();
+      const textSizeValue = 32 * responsiveScale;
+      textSize(textSizeValue);
+      textStyle(BOLD);
+      fill(255);
+      text(groupName, width / 2, centerY);
+      
+      drawingContext.restore();
+      pop();
+    }
+  }
+
+  // 레이아웃 무효화 (리사이즈 시)
+  static invalidateLayout() {
+    this.cachedTagLayouts = {};
+    if (this.glowBuffer?.remove) {
+      this.glowBuffer.remove();
+    }
+    this.glowBuffer = null;
+    this.lastOrbitMetrics = null;
+  }
+
+  // 정리
+  static destroy() {
+    this.invalidateLayout();
+  }
+}
+
+// 오비트 시스템 클래스 (객체 생성 최소화)
+class OrbitSystem {
+  // 오비트 버블 위치 업데이트 (수학 계산만)
+  static updateOrbitPositions(bubbles, filterFn, orbitContextKey) {
+    if (!bubbles || bubbles.length === 0) return [];
+    
+    const targetBubbles = bubbles.filter(filterFn);
+    if (targetBubbles.length === 0) return [];
+    
+    const { imageX, imageY, imageSize } = getOrbitCenterMetrics();
+    const centerRadius = imageSize / 2;
+    const minOrbitRadius = centerRadius + 100;
+    const maxOrbitRadius = min(width, height) * 0.45;
+    const baseTime = RotationController.state.rotationAngle;
+    const tiltAngle = Math.PI / 5;
+    const orbitTilt = Math.cos(tiltAngle) * 0.85;
+    const orbitStretch = 1.3;
+    
+    const totalBubbles = targetBubbles.length;
+    const isMobile = IS_MOBILE;
+    const maxVisibleBubbles = isMobile ? 30 : totalBubbles;
+    const visibleCount = Math.min(totalBubbles, maxVisibleBubbles);
+    const angleStep = totalBubbles > 0 ? (Math.PI * 2) / totalBubbles : 0;
+    
+    // orbitBubblePositions 초기화
+    orbitBubblePositions = [];
+    
+    // 버블에 zDepth 속성 추가하여 정렬에 사용
+    for (let i = 0; i < visibleCount; i++) {
+      const bubble = targetBubbles[i];
+      const angleOffset = i * angleStep;
+      const currentAngle = baseTime + angleOffset;
+      const radiusVariation = 0.4 + (i % 3) * 0.15;
+      const orbitRadius = minOrbitRadius + (maxOrbitRadius - minOrbitRadius) * radiusVariation;
+      const zDepth = Math.sin(currentAngle);
+      const smoothZ = zDepth * zDepth * (3 - 2 * zDepth);
+      const depthAlpha = 0.7 + (smoothZ + 1) * 0.15;
+      const bubbleX = imageX + Math.cos(currentAngle) * orbitRadius * orbitStretch;
+      const bubbleY = imageY + Math.sin(currentAngle) * orbitRadius * orbitTilt;
+      const zOffsetY = smoothZ * 20;
+      const finalY = bubbleY + zOffsetY;
+      const frontFactor = (Math.sin(currentAngle) + 1) / 2;
+      const MIN_R = 50;
+      const MAX_R = 85;
+      const targetBaseR = lerp(MIN_R, MAX_R, frontFactor);
+      
+      // 오비트 버블 준비
+      const justSynced = this.ensureOrbitBubbleReady(bubble, targetBaseR, orbitContextKey);
+      const baseEase = justSynced ? 1.0 : 0.15;
+      bubble.baseRadius = lerp(bubble.baseRadius, targetBaseR, baseEase);
+      
+      // 애니메이션 계산
+      const t = millis() * 0.001;
+      const breathSpeed = 0.5 + (bubble.hueSeed % 7) * 0.1;
+      const breath = sin(t * breathSpeed + (bubble.pulseOffset || 0));
+      const breathFactor = map(breath, -1, 1, 0.95, 1.05);
+      const noiseOffset = bubble.noiseOffset || (bubble.hueSeed * 100);
+      const n = noise(noiseOffset + t * 0.2);
+      const noiseFactor = map(n, 0, 1, 0.97, 1.03);
+      
+      if (!bubble.interactionScale) bubble.interactionScale = 1.0;
+      bubble.r = bubble.baseRadius * breathFactor * noiseFactor * bubble.interactionScale;
+      bubble.pos.set(bubbleX, finalY);
+      bubble.alpha = depthAlpha;
+      
+      // zDepth를 버블 객체에 저장 (정렬용, 임시 객체 생성 방지)
+      bubble._zDepth = zDepth;
+      bubble._finalY = finalY;
+      
+      // 클릭 감지용 위치 정보 저장
+      orbitBubblePositions.push({ bubble, x: bubbleX, y: finalY, r: bubble.r });
+    }
+    
+    return targetBubbles.slice(0, visibleCount);
+  }
+
+  // 오비트 버블 렌더링 (그리기만)
+  static render(bubbles) {
+    if (!bubbles || bubbles.length === 0) return [];
+    
+    const { imageY } = getOrbitCenterMetrics();
+    
+    // zDepth 기준으로 정렬 (뒤에서 앞으로)
+    const sortedBubbles = bubbles.slice().sort((a, b) => {
+      if (a._zDepth === undefined || b._zDepth === undefined) return 0;
+      return a._zDepth - b._zDepth;
+    });
+    
+    // 아래쪽 버블 먼저 그리기
+    const bubblesAbove = [];
+    sortedBubbles.forEach(bubble => {
+      if (bubble._finalY < imageY) {
+        bubble.drawAt(bubble.pos.x, bubble.pos.y);
+      } else {
+        bubblesAbove.push(bubble);
+      }
+    });
+    
+    return bubblesAbove;
+  }
+
+  // 오비트 버블 준비 (상태 초기화)
+  static ensureOrbitBubbleReady(bubble, targetBaseR, orbitContextKey) {
+    if (!bubble) return false;
+    const contextChanged = bubble.orbitContextKey !== orbitContextKey;
+    if (!bubble.isInOrbit || contextChanged) {
+      bubble.baseRadius = targetBaseR;
+      bubble.r = targetBaseR;
+      bubble.interactionScale = 1.0;
+      bubble.isInOrbit = true;
+      bubble.orbitContextKey = orbitContextKey;
+      return true;
+    }
+    return false;
+  }
+
+  // 오비트 버블 상태 초기화
+  static resetOrbitBubbleState() {
+    if (!bubbleManager || !bubbleManager.bubbles) return;
+    bubbleManager.bubbles.forEach((bubble) => {
+      if (bubble.isInOrbit) {
+        bubble.isInOrbit = false;
+        bubble.orbitContextKey = null;
+      }
+    });
+  }
+}
+
+// 토글 관리자 클래스
+class ToggleManager {
+  static TOGGLE_LABELS = [
+    "전체 보기",
+    "여행자의 취향만 모아보고 싶어",
+    "20대 여성의 취향만 모아보고 싶어",
+    "50대 남성의 취향만 모아보고 싶어",
+    "주부들의 취향만 모아보고 싶어",
+    "10대 여성의 취향만 모아보고 싶어",
+  ];
+
+  static buttons = [];
+  static layout = null;
+
+  // 레이아웃 계산 (리사이즈 시에만)
+  static calculateLayout() {
+    const toggleWidth = 300;
+    const toggleHeight = 50;
+    const toggleX = (width - toggleWidth) / 2;
+    const startY = 220;
+    const spacing = 60;
+    const radius = 16;
+    this.layout = { toggleWidth, toggleHeight, toggleX, startY, spacing, radius };
+  }
+
+  // 토글 버튼 초기화
+  static init() {
+    if (!this.layout) {
+      this.calculateLayout();
+    }
+    
+    const { toggleWidth, toggleHeight, toggleX, startY, spacing, radius } = this.layout;
+    
+    this.buttons = this.TOGGLE_LABELS.map((label, i) => {
+      const toggleY = startY + i * spacing;
+      return new ToggleButton(label, i, toggleX, toggleY, toggleWidth, toggleHeight, radius);
+    });
+  }
+
+  // 토글 UI 그리기
+  static draw() {
+    const showToggles = uiStateManager ? uiStateManager.showToggles : false;
+    const selectedToggles = uiStateManager ? uiStateManager.selectedToggles : [];
+    if (!showToggles) return;
+    
+    // 버튼이 초기화되지 않았으면 초기화
+    if (this.buttons.length === 0) {
+      this.init();
+    }
+    
+    push();
+    drawingContext.save();
+    
+    // 버튼 그리기
+    this.buttons.forEach(button => button.draw(selectedToggles));
+    
+    drawingContext.restore();
+    pop();
+  }
+}
+
+// UI 렌더러 클래스 (그라디언트 캐싱 및 UI 렌더링 통합)
+class UIRenderer {
+  constructor() {
+    this.micGlowBuffer = null;
+    this.lastMicGlowSize = { size: 0 };
+  }
+
+  // 마이크 빛 효과 버퍼 생성 (한 번만 생성, 펄스 효과는 tint로 구현)
+  createMicGlowBuffer(iconCenterX, iconCenterY, iconRadius) {
+    const glowRadius = iconRadius * 1.2;
+    const bufferSize = Math.ceil(glowRadius * 2) + 10;
+    
+    // 크기가 변경되었거나 버퍼가 없으면 재생성
+    const needsUpdate = !this.micGlowBuffer || 
+                       this.lastMicGlowSize.size !== bufferSize;
+
+    if (needsUpdate) {
+      // 기존 버퍼 해제
+      if (this.micGlowBuffer?.remove) {
+        this.micGlowBuffer.remove();
+      }
+
+      // 새 버퍼 생성
+      this.micGlowBuffer = createGraphics(bufferSize, bufferSize);
+      this.micGlowBuffer.clear();
+      
+      // 빛 효과 그리기 (중앙 기준)
+      const centerX = bufferSize / 2;
+      const centerY = bufferSize / 2;
+      
+      const glowGradient = this.micGlowBuffer.drawingContext.createRadialGradient(
+        centerX,
+        centerY,
+        iconRadius * 0.2,
+        centerX,
+        centerY,
+        glowRadius
+      );
+      
+      glowGradient.addColorStop(0, "rgba(255, 255, 255, 1.0)");
+      glowGradient.addColorStop(0.3, "rgba(255, 255, 255, 0.6)");
+      glowGradient.addColorStop(0.6, "rgba(255, 255, 255, 0.3)");
+      glowGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+      
+      this.micGlowBuffer.drawingContext.fillStyle = glowGradient;
+      this.micGlowBuffer.drawingContext.beginPath();
+      this.micGlowBuffer.drawingContext.arc(centerX, centerY, glowRadius, 0, Math.PI * 2);
+      this.micGlowBuffer.drawingContext.fill();
+
+      this.lastMicGlowSize = { size: bufferSize };
+    }
+
+    return this.micGlowBuffer;
+  }
+
+  // 네비게이션 바 그리기
+  static drawNavBar() {
+    const metrics = LayoutManager.metrics.nav;
+    if (!metrics) return;
+
+    const { BUTTON_W, BUTTON_H, NAV_W, NAV_H, Y, navBarX } = metrics;
+
+    // 캡쳐 버튼 - 왼쪽 끝
+    imageMode(CORNER);
+    image(captureButton, 0, Y, BUTTON_W, BUTTON_H);
+
+    // 워크룸 버튼 - 오른쪽 끝
+    image(workroomButton, width - BUTTON_W, Y, BUTTON_W, BUTTON_H);
+
+    // 네비게이션 바 - 중앙에 배치
+    push();
+    drawingContext.imageSmoothingEnabled = true;
+    drawingContext.imageSmoothingQuality = "high";
+    imageMode(CORNER);
+    if (navBarBuffer) {
+      image(navBarBuffer, navBarX, Y, NAV_W, NAV_H);
+    } else {
+      image(navigationBar, navBarX, Y, NAV_W, NAV_H);
+    }
+    pop();
+  }
+
+  // 검색창 그리기
+  drawSearchBar() {
+    const { W, H, X, Y } = LayoutManager.getSearchMetrics();
+    const showToggles = uiStateManager ? uiStateManager.showToggles : false;
+
+    // 마이크 아이콘 - 중앙에 배치
+    if (mikeIcon) {
+      const { iconX, iconY, iconSize, iconCenterX, iconCenterY, iconRadius } = LayoutManager.getMicIconRect();
+      imageMode(CORNER);
+
+      // 빛 효과 (캐시된 버퍼 사용)
+      if (ANIMATION_CONFIG.enableMicGlow) {
+        const glowBuffer = this.createMicGlowBuffer(iconCenterX, iconCenterY, iconRadius);
+        
+        if (glowBuffer) {
+          push();
+          drawingContext.save();
+          
+          // 시간에 따른 펄스 효과 (1.5초 주기)
+          const pulseTime = (millis() / 1500) % 1;
+          const pulseValue = (Math.sin(pulseTime * Math.PI * 2) + 1) / 2;
+          const minBrightness = 0.3;
+          const maxBrightness = 0.9;
+          const pulseBrightness = lerp(minBrightness, maxBrightness, pulseValue);
+          
+          // tint로 펄스 효과 구현 (그라디언트 재생성 없이)
+          drawingContext.globalAlpha = pulseBrightness;
+          const bufferSize = this.lastMicGlowSize.size;
+          const offsetX = iconCenterX - bufferSize / 2;
+          const offsetY = iconCenterY - bufferSize / 2;
+          image(glowBuffer, offsetX, offsetY);
+          
+          drawingContext.restore();
+          pop();
+        }
+      }
+
+      // 화질 개선 설정
+      push();
+      drawingContext.save();
+      drawingContext.imageSmoothingEnabled = true;
+      drawingContext.imageSmoothingQuality = "high";
+
+      tint(255, 255, 255, 200);
+      image(mikeIcon, iconX, iconY, iconSize, iconSize);
+      noTint();
+
+      drawingContext.restore();
+      pop();
+    }
+
+    // 선택된 토글이 있으면 마이크 아래에 텍스트 표시
+    if (!showToggles) {
+      push();
+      drawingContext.save();
+      
+      drawingContext.textBaseline = "top";
+      drawingContext.textAlign = "center";
+      drawingContext.imageSmoothingEnabled = true;
+      drawingContext.imageSmoothingQuality = "high";
+      
+      noStroke();
+      textAlign(CENTER, TOP);
+
+      if (pretendardFont) {
+        textFont(pretendardFont);
+      }
+      pop();
+    }
+  }
+
+  // 정리
+  destroy() {
+    if (this.micGlowBuffer?.remove) {
+      this.micGlowBuffer.remove();
+    }
+    this.micGlowBuffer = null;
+    this.lastMicGlowSize = { size: 0 };
+  }
+}
+
+
+// 레이아웃 관리자 클래스 (반응형 수치 캐싱)
+class LayoutManager {
+  static metrics = {
+    scale: 1.0,
+    nav: null,
+    search: { W: 0, H: 0, X: 0, Y: 0, bottom: 0 },
+    bubbleArea: { centerX: 0, centerY: 0, BUBBLE_AREA_CENTER: 0 },
+    micIcon: { iconX: 0, iconY: 0, iconSize: 0, iconCenterX: 0, iconCenterY: 0, iconRadius: 0 }
+  };
+
+  // 모든 레이아웃 메트릭 계산 (windowResized에서만 호출)
+  static calculateMetrics() {
+    // 반응형 스케일 계산
+    const baseWidth = 1920;
+    const baseHeight = 1080;
+    const scaleX = width / baseWidth;
+    const scaleY = height / baseHeight;
+    const scale = Math.min(scaleX, scaleY);
+    const minScale = 0.5;
+    const maxScale = 1.5;
+    this.metrics.scale = Math.max(minScale, Math.min(maxScale, scale));
+
+    // 네비게이션 바 메트릭 계산
+    const responsiveScale = this.metrics.scale;
+    if (captureButton && workroomButton && navigationBar) {
+      const BUTTON_W = captureButton.width * 0.56 * responsiveScale;
+      const BUTTON_H = captureButton.height * 0.56 * responsiveScale;
+      const NAV_W = navigationBar.width * 0.455 * responsiveScale;
+      const NAV_H = navigationBar.height * 0.455 * responsiveScale;
+      const Y = 20;
+      const navBarX = (width - NAV_W) / 2;
+      this.metrics.nav = { BUTTON_W, BUTTON_H, NAV_W, NAV_H, Y, navBarX };
+    } else {
+      this.metrics.nav = null;
+    }
+
+    // 검색창 메트릭 계산
+    const NAV_Y = 20;
+    const NAV_H = navigationBar ? navigationBar.height * 0.315 * responsiveScale : 64;
+    const NAV_BOTTOM = NAV_Y + NAV_H;
+    const W = width * SEARCH_WIDTH_RATIO * responsiveScale * 1.3;
+    const H = 75 * SEARCH_SCALE * responsiveScale * 1.3;
+    const X = (width - W) / 2;
+    const Y = NAV_BOTTOM + SEARCH_NAV_GAP * responsiveScale;
+    this.metrics.search = { W, H, X, Y, bottom: Y + H };
+
+    // 버블 영역 중심 계산
+    const SEARCH_BOTTOM = this.metrics.search.bottom;
+    const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
+    const BUBBLE_AREA_BOTTOM = height - 10;
+    const BUBBLE_AREA_CENTER = BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
+    this.metrics.bubbleArea = {
+      centerX: width * CENTER_X_RATIO,
+      centerY: BUBBLE_AREA_CENTER - 70, // 기본 offsetY
+      BUBBLE_AREA_CENTER
+    };
+
+    // 마이크 아이콘 위치/크기 계산
+    const iconSize = 40 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3 * 4 * 0.7;
+    const iconX = X + (W - iconSize) / 2;
+    const iconY = Y + (H - iconSize) / 2 + 20;
+    this.metrics.micIcon = {
+      iconX,
+      iconY,
+      iconSize,
+      iconCenterX: iconX + iconSize / 2,
+      iconCenterY: iconY + iconSize / 2,
+      iconRadius: iconSize / 2
+    };
+  }
+
+  // 네비게이션 바 메트릭 가져오기
+  static getNavMetrics() {
+    return this.metrics.nav;
+  }
+
+  // 반응형 스케일 가져오기
+  static getScale() {
+    return this.metrics.scale;
+  }
+
+  // 검색창 메트릭 가져오기
+  static getSearchMetrics() {
+    return this.metrics.search;
+  }
+
+  // 버블 영역 중심 가져오기
+  static getBubbleAreaCenter(offsetY = -70) {
+    return {
+      centerX: this.metrics.bubbleArea.centerX,
+      centerY: this.metrics.bubbleArea.centerY + offsetY + 70, // 기본 offsetY 보정
+      BUBBLE_AREA_CENTER: this.metrics.bubbleArea.BUBBLE_AREA_CENTER
+    };
+  }
+
+  // 마이크 아이콘 위치/크기 가져오기
+  static getMicIconRect() {
+    return this.metrics.micIcon;
+  }
+
+  // 네비게이션 바 메트릭 가져오기
+  static getNavMetrics() {
+    return this.metrics.nav;
+  }
+}
+
+// 하위 호환성을 위한 함수 래퍼
 function recreateGraphicsBuffer(buffer, w, h) {
+  if (!resourceManager) {
+    // 레거시 동작 (ResourceManager가 없을 때)
   const needsNewBuffer = !buffer || buffer.width !== w || buffer.height !== h;
   if (needsNewBuffer) {
     if (buffer?.remove) {
@@ -169,6 +1184,9 @@ function recreateGraphicsBuffer(buffer, w, h) {
   }
   buffer.clear();
   return buffer;
+  }
+  // ResourceManager 사용 (임시 키 사용)
+  return resourceManager.getOrUpdateBuffer('_legacy', w, h);
 }
 
 // 중간 단계 버블 드래그 및 길게 누르기 상태
@@ -204,19 +1222,15 @@ function resetOrbitBubbleInfo() {
 // 태그 필터링된 버블의 위치 정보 저장 (클릭 감지용)
 let orbitBubblePositions = []; // [{ bubble, x, y, r }]
 
-// 토글 버튼 컴포넌트 배열
+// 하위 호환성을 위한 전역 변수 (ToggleManager.buttons로 대체됨)
+// 주의: ToggleManager 클래스가 먼저 선언되어야 함
+// 초기화는 ToggleManager.init()에서 수행됨
 let toggleButtons = [];
 
-// 버블 회전 제어 상태 (태그/그룹 뷰에서 사용)
-let bubbleRotationState = {
-  rotationAngle: 0, // 현재 회전 각도 (기준 각도)
-  angularVelocity: 0, // 회전 속도 (관성)
-  isDragging: false, // 드래그 중인지 여부
-  lastX: 0, // 직전에 마우스가 있던 x
-  lastY: 0, // 직전에 마우스가 있던 y
-  autoSpeed: 0.01, // 자동으로 돌아가는 기본 속도
-  didDrag: false // 이번 입력에서 실제 회전 드래그가 있었는지
-};
+// 하위 호환성을 위한 전역 변수 (RotationController.state를 참조)
+// 주의: RotationController 클래스가 먼저 선언되어야 함
+// setup()에서 초기화됨
+let bubbleRotationState = null;
 
 // ---------- CONFIG ----------
 const RENDER_CONFIG = {
@@ -248,6 +1262,9 @@ const UI_CONFIG = {
   searchNavGap: 40,
   searchWRatio: 0.56,
 };
+
+// 성능 최적화 플래그 (태블릿 장시간 운영 시 false로 설정)
+const ENABLE_HIGH_QUALITY_FX = true; // false로 설정하면 고품질 효과 비활성화
 
 const PERFORMANCE_CONFIG = {
   imageCheckInterval: 400,
@@ -309,11 +1326,26 @@ let filterCacheResult = {
 let MAX_CONCURRENT_IMAGE_LOADS = 2;
 let imageLoadQueue = [];
 let imageQueueSet = new Set();
-let activeImageLoads = 0;
 let lastVisibleImageCheck = 0;
 let resetInProgress = false;
 
 explorerRuntime.registerCleanup("graphics-buffers", () => {
+  // GraphicsManager 정리
+  if (graphicsManager) {
+    graphicsManager.destroy();
+  }
+  
+  // UIRenderer 정리
+  if (uiRenderer) {
+    uiRenderer.destroy();
+  }
+  
+  // ResourceManager를 통해 버퍼 정리
+  if (resourceManager) {
+    resourceManager.removeBuffer('bg');
+    resourceManager.removeBuffer('navBar');
+  } else {
+    // 레거시 정리
   if (bgBuffer?.remove) {
     bgBuffer.remove();
   }
@@ -322,6 +1354,7 @@ explorerRuntime.registerCleanup("graphics-buffers", () => {
     navBarBuffer.remove();
   }
   navBarBuffer = null;
+  }
 });
 
 // ---------- UI 헬퍼 함수 ----------
@@ -344,6 +1377,408 @@ function withTextRendering(fn, options = {}) {
 }
 
 // ---------- CLASSES ----------
+
+// 그라디언트 캐시 클래스 (메모리 누수 방지)
+class GradientCache {
+  constructor() {
+    this.cache = new Map();
+    this.maxCacheSize = 100; // 최대 캐시 크기
+  }
+
+  // 캐시 키 생성
+  _createKey(type, ...params) {
+    return `${type}_${params.map(p => Math.round(p * 100) / 100).join('_')}`;
+  }
+
+  // 백글로우 그라디언트 가져오기 또는 생성
+  getBackGlowGradient(x, y, r, glowRadius) {
+    const key = this._createKey('backglow', x, y, r, glowRadius);
+    
+    if (this.cache.has(key)) {
+      return this.cache.get(key);
+    }
+
+    // 캐시 크기 제한
+    if (this.cache.size >= this.maxCacheSize) {
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+
+    const gradient = drawingContext.createRadialGradient(
+      x, y, r * 0.4,
+      x, y, glowRadius
+    );
+    gradient.addColorStop(0, "rgba(255,255,255,0.7)");
+    gradient.addColorStop(0.5, "rgba(255, 243, 156, 0.18)");
+    gradient.addColorStop(1, "rgba(255, 255, 217, 0)");
+    
+    this.cache.set(key, gradient);
+    return gradient;
+  }
+
+  // 버블 글로스 그라디언트 가져오기 또는 생성
+  getGlossGradient(x, y, r, inner) {
+    const key = this._createKey('gloss', x, y, r, inner);
+    
+    if (this.cache.has(key)) {
+      return this.cache.get(key);
+    }
+
+    if (this.cache.size >= this.maxCacheSize) {
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+
+    const grd = drawingContext.createRadialGradient(
+      x - r * 0.35,
+      y - r * 0.35,
+      r * 0.1,
+      x, y, r
+    );
+    grd.addColorStop(0, "rgba(255,255,255,0.45)");
+    grd.addColorStop(0.25, "rgba(255,255,255,0.20)");
+    grd.addColorStop(1, inner);
+    
+    this.cache.set(key, grd);
+    return grd;
+  }
+
+  // 빛 효과 그라디언트 가져오기 또는 생성 (동적 파라미터 포함)
+  getLightGradient(type, lightX, lightY, lightSize, opacity, fadeFactor) {
+    // 동적 파라미터는 반올림하여 캐싱 효율성 향상
+    const roundedX = Math.round(lightX);
+    const roundedY = Math.round(lightY);
+    const roundedSize = Math.round(lightSize * 10) / 10;
+    const roundedOpacity = Math.round(opacity * 100) / 100;
+    const roundedFade = Math.round(fadeFactor * 100) / 100;
+    
+    const key = this._createKey(`light_${type}`, roundedX, roundedY, roundedSize, roundedOpacity, roundedFade);
+    
+    if (this.cache.has(key)) {
+      return this.cache.get(key);
+    }
+
+    if (this.cache.size >= this.maxCacheSize) {
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+
+    let gradient;
+    if (type === 'core') {
+      gradient = drawingContext.createRadialGradient(
+        lightX, lightY, 0,
+        lightX, lightY, lightSize * 0.3
+      );
+      gradient.addColorStop(0, `rgba(255, 255, 255, ${opacity * 0.4 * fadeFactor})`);
+      gradient.addColorStop(0.3, `rgba(255, 255, 240, ${opacity * 0.4 * 0.9 * fadeFactor})`);
+      gradient.addColorStop(0.6, `rgba(255, 250, 200, ${opacity * 0.4 * 0.6 * fadeFactor})`);
+      gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+    } else if (type === 'chromatic') {
+      gradient = drawingContext.createRadialGradient(
+        lightX, lightY, lightSize * 0.2,
+        lightX, lightY, lightSize * 1.2
+      );
+      const chromaticOpacity = opacity * 0.4 * fadeFactor;
+      gradient.addColorStop(0, `rgba(255, 200, 150, ${chromaticOpacity * 0.3})`);
+      gradient.addColorStop(0.2, `rgba(255, 150, 200, ${chromaticOpacity * 0.4})`);
+      gradient.addColorStop(0.4, `rgba(200, 150, 255, ${chromaticOpacity * 0.5})`);
+      gradient.addColorStop(0.6, `rgba(150, 200, 255, ${chromaticOpacity * 0.4})`);
+      gradient.addColorStop(0.8, `rgba(150, 255, 200, ${chromaticOpacity * 0.3})`);
+      gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+    } else if (type === 'bloom') {
+      gradient = drawingContext.createRadialGradient(
+        lightX, lightY, lightSize * 0.5,
+        lightX, lightY, lightSize * 1.5
+      );
+      const bloomOpacity = opacity * 0.2 * fadeFactor;
+      gradient.addColorStop(0, `rgba(255, 255, 255, ${bloomOpacity})`);
+      gradient.addColorStop(0.5, `rgba(255, 255, 240, ${bloomOpacity * 0.5})`);
+      gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+    }
+    
+    if (gradient) {
+      this.cache.set(key, gradient);
+    }
+    return gradient;
+  }
+
+  // 캐시 초기화
+  clear() {
+    this.cache.clear();
+  }
+}
+
+// 전역 그라디언트 캐시 인스턴스
+const gradientCache = new GradientCache();
+
+// 버블 렌더러 클래스 (렌더링 로직 통합)
+class BubbleRenderer {
+  // 버블 시각적 요소 그리기
+  static drawVisual(bubble, x, y, r, { isMain = false, alphaOverride = null } = {}) {
+    if (!bubble) return;
+
+    const effectiveAlpha =
+      alphaOverride !== null && alphaOverride !== undefined
+        ? alphaOverride
+        : bubble.alpha;
+    if (effectiveAlpha < 0.01) return;
+
+    const diameter = r * 2;
+    const hasImage =
+      bubble.imageIndex !== null &&
+      bubbleImages[bubble.imageIndex] &&
+      bubbleImages[bubble.imageIndex].width > 0;
+    
+    // 이미지가 필요한 버블인데 이미지가 아직 로드되지 않았으면 로드 시도
+    if (bubble.imageIndex !== null && !hasImage && bubbleImageLoader && 
+        !bubbleImageLoader.isLoading(bubble.imageIndex) && !bubbleImageLoader.isLoaded(bubble.imageIndex)) {
+      requestBubbleImage(bubble.imageIndex);
+    }
+
+    // 메인 버블 백글로우
+    if (isMain && ENABLE_HIGH_QUALITY_FX) {
+      push();
+      drawingContext.save();
+      drawingContext.globalAlpha = effectiveAlpha * 0.85;
+      const glowRadius = r * 1.7;
+      const glowGradient = gradientCache.getBackGlowGradient(x, y, r, glowRadius);
+      drawingContext.fillStyle = glowGradient;
+      drawingContext.beginPath();
+      drawingContext.arc(x, y, glowRadius, 0, Math.PI * 2);
+      drawingContext.fill();
+      drawingContext.restore();
+      pop();
+    }
+
+    push();
+    drawingContext.save();
+    drawingContext.globalAlpha = effectiveAlpha;
+    drawingContext.imageSmoothingEnabled = true;
+    drawingContext.imageSmoothingQuality = "high";
+
+    drawingContext.beginPath();
+    drawingContext.arc(x, y, r, 0, Math.PI * 2);
+    drawingContext.clip();
+
+    if (hasImage) {
+      imageMode(CENTER);
+      const img = bubbleImages[bubble.imageIndex];
+      const imgRatio = img.width / img.height;
+
+      let drawW, drawH;
+      if (imgRatio > 1) {
+        drawH = diameter;
+        drawW = imgRatio * drawH;
+      } else {
+        drawW = diameter;
+        drawH = drawW / imgRatio;
+      }
+
+      image(img, x, y, drawW, drawH);
+    } else {
+      const base = Bubble.generateColor(bubble.hueSeed);
+      const outer = base.outer;
+      const inner = base.inner;
+
+      drawingContext.shadowBlur = 24;
+      drawingContext.shadowColor = "rgba(0,0,0,0.35)";
+      fill(outer);
+      circle(x, y, diameter);
+
+      if (BUBBLE_GLOSS) {
+        const grd = gradientCache.getGlossGradient(x, y, r, inner);
+        drawingContext.fillStyle = grd;
+        circle(x, y, diameter);
+      }
+    }
+
+    drawingContext.restore();
+    pop();
+
+    if (!isMain && bubbleCap && bubbleCap.width > 0) {
+      push();
+      drawingContext.save();
+      drawingContext.globalAlpha = effectiveAlpha;
+      imageMode(CENTER);
+      image(bubbleCap, x, y, diameter, diameter);
+      drawingContext.restore();
+      pop();
+    }
+
+    push();
+    drawingContext.save();
+    drawingContext.globalAlpha = effectiveAlpha;
+    if (isMain) {
+      // 메인 버블은 추가 링 없이 부드러운 발광만 유지
+    } else {
+      noStroke();
+      fill(255, 25);
+      ellipse(x, y, diameter, diameter);
+    }
+    drawingContext.restore();
+    pop();
+  }
+
+  // 중앙 버블 이미지/색상만 그리기 (캡 없이)
+  static drawCenterImage(bubble) {
+    BubbleRenderer.drawVisual(bubble, bubble.pos.x, bubble.pos.y, bubble.r, {
+      isMain: true,
+    });
+  }
+
+  // 중앙 버블에 빛 효과 그리기 (캡과 사진 사이)
+  static drawLightEffect(bubble) {
+    if (!ENABLE_HIGH_QUALITY_FX) return;
+    push();
+    drawingContext.save();
+
+    // 버블 중심과 반지름
+    const x = bubble.pos.x;
+    const y = bubble.pos.y;
+    const r = bubble.r;
+
+    // 시간에 따라 빛이 왼쪽 위에서 오른쪽 위로 이동 (0~1 사이 값)
+    const time = (millis() / 3000) % 1; // 3초 주기
+
+    // 각도 범위: 왼쪽 위(-135도)에서 오른쪽 위(-45도)로, 약 20픽셀 아래로 이동
+    const offsetPixels = 20;
+    const angleOffset = Math.asin(offsetPixels / r);
+
+    const startAngle = (-Math.PI * 3) / 4 + angleOffset;
+    const endAngle = -Math.PI / 4 + angleOffset;
+    const angleRange = endAngle - startAngle;
+    const lightAngle = startAngle + time * angleRange;
+
+    // 빛의 위치
+    const innerRadius = r * 0.7;
+    const outerRadius = r * 0.95;
+    const lightRadius = outerRadius - time * (outerRadius - innerRadius);
+    const lightX = x + Math.cos(lightAngle) * lightRadius;
+    let lightY = y + Math.sin(lightAngle) * lightRadius;
+
+    // 사라질 때(끝 부분) 10픽셀 위로 이동
+    const fadeOutDurationForY = 0.15;
+    if (time > 1 - fadeOutDurationForY) {
+      const fadeOutProgress = (time - (1 - fadeOutDurationForY)) / fadeOutDurationForY;
+      lightY -= 10 * fadeOutProgress;
+    }
+
+    // 클리핑 마스크로 원형으로 자르기
+    drawingContext.beginPath();
+    drawingContext.arc(x, y, r, 0, Math.PI * 2);
+    drawingContext.clip();
+
+    // 빛의 크기 계산
+    const centerAngle = -Math.PI / 2 + angleOffset;
+    const angleDiff = Math.abs(lightAngle - centerAngle);
+    const maxAngleDiff = Math.PI / 4;
+    const sizeFactor = 1 - (angleDiff / maxAngleDiff) * 0.5;
+    const baseLightSize = r * 0.6 * 1.5;
+    const lightSize = baseLightSize * sizeFactor;
+
+    // 페이드 인/아웃 효과
+    const fadeInDuration = 0.15;
+    const fadeOutDuration = 0.15;
+    let fadeFactor = 1.0;
+
+    if (time < fadeInDuration) {
+      fadeFactor = time / fadeInDuration;
+    } else if (time > 1 - fadeOutDuration) {
+      fadeFactor = (1 - time) / fadeOutDuration;
+    }
+
+    // 빛 효과 그리기
+    const pulse = (Math.sin(millis() / 800) + 1) / 2;
+    const baseOpacity = 0.7 + pulse * 0.25;
+    const lightOpacity = baseOpacity * fadeFactor;
+
+    // 중심부 빛 그라디언트 (캐시 사용)
+    const coreGradient = gradientCache.getLightGradient('core', lightX, lightY, lightSize, baseOpacity, fadeFactor);
+    if (coreGradient) {
+      drawingContext.fillStyle = coreGradient;
+      drawingContext.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+
+    // 색수차 효과 (캐시 사용)
+    const chromaticGradient = gradientCache.getLightGradient('chromatic', lightX, lightY, lightSize, baseOpacity, fadeFactor);
+    if (chromaticGradient) {
+      drawingContext.fillStyle = chromaticGradient;
+      drawingContext.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+
+    // 외곽 빛 번짐 (캐시 사용)
+    const bloomGradient = gradientCache.getLightGradient('bloom', lightX, lightY, lightSize, baseOpacity, fadeFactor);
+    if (bloomGradient) {
+      drawingContext.fillStyle = bloomGradient;
+      drawingContext.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+
+    drawingContext.restore();
+    pop();
+  }
+
+  // 중앙 버블 캡 그리기
+  static drawCenterCap(bubble) {
+    if (!bubbleCap || bubbleCap.width <= 0) return;
+    if (bubble.alpha < 0.01) return;
+
+    const x = bubble.pos.x;
+    const y = bubble.pos.y;
+    const r = bubble.r;
+    const size = r * 2;
+
+    push();
+    imageMode(CENTER);
+    drawingContext.save();
+    drawingContext.globalAlpha = bubble.alpha;
+    image(bubbleCap, x, y, size, size);
+    drawingContext.restore();
+    pop();
+  }
+
+  // 버블 정보 가져오기 (private)
+  static _getBubbleInfo(bubble) {
+    if (bubble.imageIndex !== null && bubbleData?.[bubble.imageIndex]) {
+      const data = bubbleData[bubble.imageIndex];
+      return {
+        name: data.title || "",
+        visualTags: data.visualTags || [],
+        emotionalTags: data.emotionalTags || []
+      };
+    }
+
+    return {
+      name: bubble.name || "",
+      visualTags: bubble.visualTags || [],
+      emotionalTags: bubble.emotionalTags || []
+    };
+  }
+
+  // 버블 정보 표시 통합 함수
+  static drawInfoAt(bubble, x, y, alpha = 1.0, options = {}) {
+    const { name, visualTags, emotionalTags } = BubbleRenderer._getBubbleInfo(bubble);
+    if (!name) return;
+
+    const comp = new BubbleInfoComponent(name, visualTags, emotionalTags);
+    comp.draw(x, y, alpha, options.titleSize ?? 18, options.tagSize ?? 14);
+  }
+
+  // 센터 버블 정보 표시
+  static drawCenterInfo(bubble) {
+    if (!bubble) return;
+    const infoY = bubble.pos.y + bubble.r + 40;
+    BubbleRenderer.drawInfoAt(bubble, bubble.pos.x, infoY, 1.0, { titleSize: 18, tagSize: 14 });
+  }
+
+  // 오빗 버블 정보 표시
+  static drawOrbitInfo(bubble, bubbleX, bubbleY, bubbleRadius = null, orbitInfoAlpha = 1.0) {
+    if (orbitInfoAlpha < 0.01) return;
+
+    const r = bubbleRadius !== null ? bubbleRadius : (bubble.r || 50);
+    const infoY = bubbleY + r + 30;
+    BubbleRenderer.drawInfoAt(bubble, bubbleX, infoY, orbitInfoAlpha, { titleSize: 16, tagSize: 13 });
+  }
+}
 // 버블 정보 표시 컴포넌트 (순수 렌더러)
 class BubbleInfoComponent {
   constructor(name, visualTags = [], emotionalTags = []) {
@@ -414,6 +1849,13 @@ class UIButton {
       : (this.style.type === 'toggle' ? this.isSelected(state.selectedToggles || []) : false);
     
     // 배경 그리기
+    this._drawBackground(isSelected);
+    
+    // 텍스트 렌더링
+    this._drawText(isSelected);
+  }
+  
+  _drawBackground(isSelected) {
     if (this.style.type === 'toggle') {
       // 그라디언트 배경
     const gradient = drawingContext.createLinearGradient(
@@ -439,8 +1881,9 @@ class UIButton {
       // Glass 태그 스타일
       drawGlassTag(this.x, this.y, this.width, this.height, this.radius, isSelected, this.isHovered);
     }
+    }
     
-    // 텍스트 렌더링
+  _drawText(isSelected) {
     const textX = this.x + this.width / 2;
     const textY = this.y + this.height / 2 + (this.style.type === 'toggle' ? -3 : 0);
     const labelFontSize = this.style.type === 'toggle' ? 16 : 14;
@@ -470,6 +1913,9 @@ class UIButton {
       text(this.label, textX, textY);
     }
     });
+    
+    // 그림자 효과 초기화
+    drawingContext.shadowBlur = 0;
   }
   
   contains(x, y) {
@@ -653,6 +2099,53 @@ class UIStateManager {
     // 중간 단계 화면은 유지 (태그 선택을 자유롭게 할 수 있도록)
     // this.showGroupView = false; // 중간 단계 화면 닫기 - 제거
   }
+
+  // 토글 선택 (전체보기 또는 카테고리)
+  selectToggle(toggleIndex) {
+    if (!bubbleManager || !panController) return;
+
+    // toggleIndex: 0 = 전체 보기, 1~5 = 각 카테고리
+    if (toggleIndex === 0) {
+      // 전체 보기 선택
+      this.previousSelectedToggles = [...this.selectedToggles];
+      this.selectedToggles = [];
+      this.backToMainView();
+
+      // 버블 레이아웃 초기화 (BubbleManager에 위임)
+      bubbleManager.resetLayout();
+
+      // 원래 그리드의 중심으로 정렬
+      const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
+      const centerGridX = Math.floor(gridSize / 2);
+      const centerGridY = Math.floor(gridSize / 2);
+      const centerHexX = centerGridX * HEX_SPACING * 1.5;
+      const centerHexY =
+        centerGridY * HEX_SPACING * sqrt(3) +
+        ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
+
+      const { centerX, centerY } = LayoutManager.getBubbleAreaCenter(-20);
+
+      panController.snapTargetX = centerX - centerHexX;
+      panController.snapTargetY = centerY - centerHexY;
+      panController.snapCompleted = false;
+    } else {
+      // 카테고리 선택 (1~5)
+      const categoryIndex = toggleIndex;
+
+      // 같은 카테고리를 다시 클릭하면 선택 해제 (전체보기로 돌아가기)
+      if (this.selectedGroup === categoryIndex && !this.selectedTag) {
+        this.selectToggle(0);
+        return;
+      }
+
+      // 중간 단계 화면으로 이동
+      this.showGroupSelection(categoryIndex);
+      // 주의: return 이후의 죽은 코드는 모두 삭제됨
+    }
+
+    // 토글 닫기
+    this.showToggles = false;
+  }
 }
 
 // 버블 매니저
@@ -726,11 +2219,129 @@ class BubbleManager {
   stopAllPopping(bubbles) {
     bubbles.forEach((b) => {
       if (b.isPopping) {
+        b.stopPop();
+      }
+    });
+  }
+
+  // 화면 내 버블 확인 및 이미지 로딩 요청
+  checkAndLoadVisibleImages(loader, imageFiles) {
+    if (!this.bubbles) return;
+    const now = millis();
+    if (now - lastVisibleImageCheck < IMAGE_CHECK_INTERVAL) return;
+    lastVisibleImageCheck = now;
+    const LOAD_MARGIN = 200;
+    this.bubbles.forEach((b) => {
+      // 이미지 인덱스가 없으면 스킵
+      if (b.imageIndex === null || b.imageIndex === undefined) return;
+      // 이미 로딩 중이거나 완료된 이미지는 스킵
+      if (!loader || loader.isLoading(b.imageIndex) || loader.isLoaded(b.imageIndex)) return;
+      
+      const effectiveR =
+        b.isPopping && b.popProgress < 1.0
+          ? b.r * (1.0 + b.popProgress * 1.5)
+          : b.r;
+      
+      // 화면 안(또는 살짝 밖)에 들어온 버블이라면,
+      // 알파값과 관계없이 이미지 로딩을 요청
+      const isOnScreen =
+        b.pos.x + effectiveR > -LOAD_MARGIN &&
+        b.pos.x - effectiveR < width + LOAD_MARGIN &&
+        b.pos.y + effectiveR > -LOAD_MARGIN &&
+        b.pos.y - effectiveR < height + LOAD_MARGIN;
+      
+      if (isOnScreen) {
+        requestBubbleImage(b.imageIndex);
+      }
+    });
+  }
+
+  // 가시 영역 버블 가져오기 (메모리 할당 최소화)
+  getVisibleBubbles(centerX, centerY, excludeBubble = null) {
+    if (!this.bubbles) return [];
+    
+    const { bottom: SEARCH_BOTTOM } = LayoutManager.getSearchMetrics();
+    const MARGIN = 50;
+    
+    // 임시 객체 생성 최소화: Bubble 클래스에 distToCenter 속성 추가
+    const visible = [];
+    
+    for (const b of this.bubbles) {
+      if (b.alpha < 0.01) continue;
+      if (b === excludeBubble) continue;
+      
+      const effectiveR = b.currentRadius();
+      const isOnScreen = 
+        b.pos.x + effectiveR > -MARGIN && 
+        b.pos.x - effectiveR < width + MARGIN &&
+        b.pos.y + effectiveR > -MARGIN && 
+        b.pos.y - effectiveR < height + MARGIN;
+      
+      if (!isOnScreen) continue;
+      
+      const bubbleTop = b.pos.y - effectiveR;
+      const bubbleBottom = b.pos.y + effectiveR;
+      const isInAllowedArea = 
+        bubbleTop >= SEARCH_BOTTOM - MARGIN && 
+        bubbleBottom <= height - 10 + MARGIN;
+      
+      if (!isInAllowedArea) continue;
+      
+      // distToCenter를 버블 객체에 직접 저장 (임시 객체 생성 방지)
+      const dx = b.pos.x - centerX;
+      const dy = b.pos.y - centerY;
+      b._distToCenterSq = dx * dx + dy * dy;
+      visible.push(b);
+    }
+    
+    // 반지름 기준 정렬 (큰 버블부터)
+    visible.sort((a, b) => b.r - a.r);
+    
+    // 상위 MAX_DRAW개만 반환
+    return visible.slice(0, MAX_DRAW);
+  }
+
+  // 버블 재생성 및 초기 오프셋 설정
+  rebuild() {
+    this.build();
+
+    // 초기 오프셋을 중앙 버블이 화면 중앙에 오도록 설정
+    const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
+    const centerGridX = Math.floor(gridSize / 2);
+    const centerGridY = Math.floor(gridSize / 2);
+    const centerHexX = centerGridX * HEX_SPACING * 1.5;
+    const centerHexY =
+      centerGridY * HEX_SPACING * sqrt(3) +
+      ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
+
+    if (panController) {
+      panController.offsetX = width * CENTER_X_RATIO - centerHexX;
+      panController.offsetY = height * CENTER_Y_RATIO - centerHexY;
+    }
+  }
+
+  // 레이아웃 초기화 (전체보기로 복원)
+  resetLayout() {
+    if (!this.bubbles || this.bubbles.length === 0) return;
+
+    const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
+    
+    // 모든 버블을 원래 그리드 위치로 복원
+    this.bubbles.forEach((b, index) => {
+      // 팡 터짐 상태 초기화
+      if (b.isPopping || b.alpha < 0.5) {
         b.isPopping = false;
         b.popProgress = 0;
         b.alpha = 1.0;
       }
+      
+      // 원래 그리드 위치로 복원
+      b.gridX = index % gridSize;
+      b.gridY = Math.floor(index / gridSize);
     });
+
+    // 필터링된 버블 목록을 전체 버블로 복원
+    this.currentFilteredBubbles = this.bubbles;
   }
 }
 
@@ -847,40 +2458,8 @@ class Bubble {
     let displayX = screenCenterX + screenX * fisheyeFactor;
     let displayY = screenCenterY + screenY * fisheyeFactor;
 
-    // 화면 경계에서의 거리 계산 (화면 바깥으로 나갈수록 작아지도록)
-    const distToLeftEdge = displayX;
-    const distToRightEdge = width - displayX;
-    const distToTopEdge = displayY;
-    const distToBottomEdge = height - displayY;
-
-    // 가장 가까운 경계까지의 거리
-    const distToNearestEdge = min(
-      distToLeftEdge,
-      distToRightEdge,
-      distToTopEdge,
-      distToBottomEdge
-    );
-
-    // 화면 경계에서의 거리를 정규화 (화면 크기의 절반을 기준으로)
-    const maxEdgeDist = min(width, height) / 2;
-    const normalizedEdgeDist = min(distToNearestEdge / maxEdgeDist, 1);
-
-    // 화면 바깥으로 나가면 음수 거리 (더 작아지도록)
-    // 화면 경계에서 멀어질수록 더 작아지도록 강한 감쇠 적용
-    let edgeFactor;
-    if (distToNearestEdge < 0) {
-      // 화면 밖: 거리가 멀수록 더 작아짐
-      edgeFactor = max(0, 1 + (distToNearestEdge / maxEdgeDist) * 2); // 음수일수록 작아짐
-    } else {
-      // 화면 안: 경계에 가까울수록 작아짐
-      edgeFactor = normalizedEdgeDist;
-    }
-
-    // 기본 크기 팩터 (중심 거리 + 화면 경계 거리)
-    // 중심에서 멀수록 작아지고, 화면 경계에서 멀수록 더 작아짐
-    // edgeFactor 감쇠를 줄여서 최소 크기가 너무 작아지지 않도록
-    let sizeFactor =
-      (1 - normalizedDist * 0.5) * (0.4 + edgeFactor * 0.6); // 0.16 ~ 1.0 (최소값 증가)
+    // 크기 팩터 계산
+    let sizeFactor = this._calculateSizeFactor(displayX, displayY, normalizedDist, screenCenterX, screenCenterY, screenX, screenY, centerBubblePos);
 
     // 중앙 버블 주변 버블들이 작아지도록 조정
     if (centerBubblePos) {
@@ -1004,11 +2583,56 @@ class Bubble {
     }
   }
 
+  _calculateSizeFactor(displayX, displayY, normalizedDist, screenCenterX, screenCenterY, screenX, screenY, centerBubblePos) {
+    // 화면 경계에서의 거리 계산 (화면 바깥으로 나갈수록 작아지도록)
+    const distToLeftEdge = displayX;
+    const distToRightEdge = width - displayX;
+    const distToTopEdge = displayY;
+    const distToBottomEdge = height - displayY;
+
+    // 가장 가까운 경계까지의 거리
+    const distToNearestEdge = min(
+      distToLeftEdge,
+      distToRightEdge,
+      distToTopEdge,
+      distToBottomEdge
+    );
+
+    // 화면 경계에서의 거리를 정규화 (화면 크기의 절반을 기준으로)
+    const maxEdgeDist = min(width, height) / 2;
+    const normalizedEdgeDist = min(distToNearestEdge / maxEdgeDist, 1);
+
+    // 화면 바깥으로 나가면 음수 거리 (더 작아지도록)
+    // 화면 경계에서 멀어질수록 더 작아지도록 강한 감쇠 적용
+    let edgeFactor;
+    if (distToNearestEdge < 0) {
+      // 화면 밖: 거리가 멀수록 더 작아짐
+      edgeFactor = max(0, 1 + (distToNearestEdge / maxEdgeDist) * 2); // 음수일수록 작아짐
+    } else {
+      // 화면 안: 경계에 가까울수록 작아짐
+      edgeFactor = normalizedEdgeDist;
+    }
+
+    // 기본 크기 팩터 (중심 거리 + 화면 경계 거리)
+    // 중심에서 멀수록 작아지고, 화면 경계에서 멀수록 더 작아짐
+    // edgeFactor 감쇠를 줄여서 최소 크기가 너무 작아지지 않도록
+    let sizeFactor =
+      (1 - normalizedDist * 0.5) * (0.4 + edgeFactor * 0.6); // 0.16 ~ 1.0 (최소값 증가)
+
+    return sizeFactor;
+  }
+
   // 팡 애니메이션 메서드 (캡슐화)
   startPop(now) {
     this.isPopping = true;
     this.popStartTime = now;
     this.popProgress = 0;
+  }
+
+  stopPop() {
+    this.isPopping = false;
+    this.popProgress = 0;
+    this.alpha = 1.0;
   }
 
   updatePop(now, duration = null) {
@@ -1062,16 +2686,16 @@ class Bubble {
           this.drawAt(copyPos.x, copyPos.y);
         }
       });
-    }
   }
 }
 
-function bubbleColor(seed) {
+  static generateColor(seed) {
   const h = (seed * 137.5) % 360;
   return {
     outer: `hsl(${h} 70% 55% / 0.95)`,
     inner: `hsl(${(h + 20) % 360} 80% 35% / 0.75)`,
   };
+  }
 }
 
 // 이미지 로더 클래스 (이미지 로딩 로직 통합)
@@ -1088,7 +2712,7 @@ class ImageLoader {
     this.images = [];
   }
 
-  request(index, imageFiles, onLoaded = null) {
+  request(index, imageFiles, onLoaded = null, onError = null) {
     if (index === null || index >= imageFiles.length) return;
     if (this.loading.has(index) || this.loaded.has(index)) return;
     if (this.queueSet.has(index)) return;
@@ -1102,10 +2726,10 @@ class ImageLoader {
     
     this.queue.push(index);
     this.queueSet.add(index);
-    this.processQueue(imageFiles, onLoaded);
+    this.processQueue(imageFiles, onLoaded, onError);
   }
 
-  processQueue(imageFiles, onLoaded = null) {
+  processQueue(imageFiles, onLoaded = null, onError = null) {
   while (
       this.activeLoads < this.maxConcurrent &&
       this.queue.length > 0
@@ -1113,11 +2737,11 @@ class ImageLoader {
       const nextIndex = this.queue.shift();
     if (nextIndex === undefined) continue;
       this.queueSet.delete(nextIndex);
-      this.startLoad(nextIndex, imageFiles, onLoaded);
+      this.startLoad(nextIndex, imageFiles, onLoaded, onError);
     }
   }
 
-  startLoad(imageIndex, imageFiles, onLoaded = null) {
+  startLoad(imageIndex, imageFiles, onLoaded = null, onError = null) {
     if (imageIndex === null || imageIndex >= imageFiles.length) return;
     if (this.loading.has(imageIndex) || this.loaded.has(imageIndex)) return;
     
@@ -1131,7 +2755,7 @@ class ImageLoader {
       this.loading.delete(imageIndex);
       this.activeLoads = Math.max(0, this.activeLoads - 1);
       if (onLoaded) onLoaded(imageIndex, cached);
-      this.processQueue(imageFiles, onLoaded);
+      this.processQueue(imageFiles, onLoaded, onError);
       return;
     }
 
@@ -1145,13 +2769,14 @@ class ImageLoader {
         this.loading.delete(imageIndex);
         this.activeLoads = Math.max(0, this.activeLoads - 1);
         if (onLoaded) onLoaded(imageIndex, img);
-        this.processQueue(imageFiles, onLoaded);
+        this.processQueue(imageFiles, onLoaded, onError);
       },
-      () => {
+      (e) => {
         // 로드 실패
         this.loading.delete(imageIndex);
         this.activeLoads = Math.max(0, this.activeLoads - 1);
-        this.processQueue(imageFiles, onLoaded);
+        if (onError) onError(imageIndex, e);
+        this.processQueue(imageFiles, onLoaded, onError);
       }
     );
   }
@@ -1174,7 +2799,10 @@ let bubbleImageLoader = null;
 
 function requestBubbleImage(imageIndex) {
   if (!bubbleImageLoader) return;
-  bubbleImageLoader.request(imageIndex, imageFiles, (idx, img) => {
+  bubbleImageLoader.request(
+    imageIndex, 
+    imageFiles, 
+    (idx, img) => {
     // 이미지 로드 완료 후 해당 이미지를 사용하는 버블들을 페이드인
     if (bubbleManager && bubbleManager.bubbles) {
       bubbleManager.bubbles.forEach((b) => {
@@ -1182,8 +2810,35 @@ function requestBubbleImage(imageIndex) {
           b.alpha = 0.01;
         }
       });
+      }
+      // bubbleImages 배열에도 저장 (하위 호환성)
+      if (bubbleImages) {
+        bubbleImages[idx] = img;
+      }
+    },
+    (idx, e) => {
+      // 로드 실패 처리
+      logError(
+        `[Explorer] bubbleImage[${idx}] (${imageFiles[idx]}) 로딩 실패:`,
+        e
+      );
+      // bubbleImages 배열에 null 저장 (하위 호환성)
+      if (bubbleImages) {
+        bubbleImages[idx] = null;
+      }
+      // 이 이미지를 쓰던 버블들은 색 버블로 전환
+      if (bubbleManager && bubbleManager.bubbles) {
+        bubbleManager.bubbles.forEach((b) => {
+          if (b.imageIndex === idx) {
+            b.imageIndex = null; // 앞으로는 이미지 없는 버블로 처리
+            if (b.alpha < 0.01) {
+              b.alpha = 1.0; // 컬러 버블은 바로 보이게
+            }
+          }
+        });
+      }
     }
-  });
+  );
 }
 
 function processImageQueue() {
@@ -1192,34 +2847,22 @@ function processImageQueue() {
 }
 
 function queueVisibleBubbleImages() {
-  if (!bubbleManager || !bubbleManager.bubbles) return;
-  const now = millis();
-  if (now - lastVisibleImageCheck < IMAGE_CHECK_INTERVAL) return;
-  lastVisibleImageCheck = now;
-  const LOAD_MARGIN = 200;
-  bubbleManager.bubbles.forEach((b) => {
-    // 이미지 인덱스가 없으면 스킵
-    if (b.imageIndex === null || b.imageIndex === undefined) return;
-    // 이미 로딩 중이거나 완료된 이미지는 스킵
-    if (!bubbleImageLoader || bubbleImageLoader.isLoading(b.imageIndex) || bubbleImageLoader.isLoaded(b.imageIndex)) return;
-    
-    const effectiveR =
-      b.isPopping && b.popProgress < 1.0
-        ? b.r * (1.0 + b.popProgress * 1.5)
-        : b.r;
-    
-    // 화면 안(또는 살짝 밖)에 들어온 버블이라면,
-    // 알파값과 관계없이 이미지 로딩을 요청
-    const isOnScreen =
-      b.pos.x + effectiveR > -LOAD_MARGIN &&
-      b.pos.x - effectiveR < width + LOAD_MARGIN &&
-      b.pos.y + effectiveR > -LOAD_MARGIN &&
-      b.pos.y - effectiveR < height + LOAD_MARGIN;
-    
-    if (isOnScreen) {
-      requestBubbleImage(b.imageIndex);
-    }
-  });
+  if (!bubbleManager || !bubbleImageLoader) return;
+  bubbleManager.checkAndLoadVisibleImages(bubbleImageLoader, imageFiles);
+}
+
+function _checkFilterCache(state) {
+  const signature = [
+    state.bubbleManagerVersion ?? 0,
+    state.selectedTag ?? "__NONE__",
+    state.selectedGroup ?? "__NONE__",
+    state.selectedToggles.length > 0 ? state.selectedToggles.join(",") : "__ALL__",
+  ].join("|");
+
+  if (signature === filterCacheSignature) {
+    return filterCacheResult;
+  }
+  return null;
 }
 
 function ensureFilteredBubblesState() {
@@ -1230,16 +2873,38 @@ function ensureFilteredBubblesState() {
   const previousSelectedToggles = uiStateManager?.previousSelectedToggles ?? [];
   const showGroupView = uiStateManager?.showGroupView ?? false;
 
+  const state = {
+    bubbleManagerVersion: bubbleManager?.version ?? 0,
+    selectedTag,
+    selectedGroup,
+    selectedToggles,
+    previousSelectedToggles,
+    showGroupView,
+  };
+
+  const cached = _checkFilterCache(state);
+  if (cached !== null) {
+    return cached;
+  }
+
+  const filterResult = _calculateFilteredBubbles(bubbles, state);
+  _applyFilterEffects(bubbleManager, filterResult, bubbles, state);
+
   const signature = [
-    bubbleManager?.version ?? 0,
-    selectedTag ?? "__NONE__",
-    selectedGroup ?? "__NONE__",
-    selectedToggles.length > 0 ? selectedToggles.join(",") : "__ALL__",
+    state.bubbleManagerVersion ?? 0,
+    state.selectedTag ?? "__NONE__",
+    state.selectedGroup ?? "__NONE__",
+    state.selectedToggles.length > 0 ? state.selectedToggles.join(",") : "__ALL__",
   ].join("|");
 
-  if (signature === filterCacheSignature) {
+  filterCacheSignature = signature;
+  filterCacheResult = filterResult;
+
     return filterCacheResult;
   }
+
+function _calculateFilteredBubbles(bubbles, state) {
+  const { selectedTag, selectedGroup, selectedToggles, previousSelectedToggles } = state;
 
   let filteredBubbles = bubbles;
   let hasTagFilter = false;
@@ -1255,12 +2920,6 @@ function ensureFilteredBubblesState() {
       }
       return true;
     });
-    if (bubbleManager) {
-      bubbleManager.currentFilteredBubbles = filteredBubbles;
-      if (!showGroupView) {
-        bubbleManager.startPoppingBubbles(bubbles, filteredBubbles);
-      }
-    }
     hasTagFilter = true;
   } else if (selectedToggles.length > 0) {
     filteredBubbles = bubbles.filter((b) => {
@@ -1269,7 +2928,29 @@ function ensureFilteredBubblesState() {
         b.attributes.some((attr) => selectedToggles.includes(attr))
       );
     });
+  }
 
+  return {
+    filteredBubbles,
+    hasTagFilter,
+    selectedTag,
+    selectedGroup,
+  };
+}
+
+function _applyFilterEffects(manager, filterResult, bubbles, state) {
+  if (!manager) return;
+
+  const { filteredBubbles, hasTagFilter, selectedTag } = filterResult;
+  const { selectedToggles, previousSelectedToggles, showGroupView } = state;
+
+  manager.currentFilteredBubbles = filteredBubbles;
+
+  if (selectedTag) {
+    if (!showGroupView) {
+      manager.startPoppingBubbles(bubbles, filteredBubbles);
+    }
+  } else if (selectedToggles.length > 0) {
     let previousFilteredBubbles = [];
     if (previousSelectedToggles.length > 0) {
       previousFilteredBubbles = bubbles.filter((b) => {
@@ -1282,31 +2963,10 @@ function ensureFilteredBubblesState() {
     const commonBubbles = filteredBubbles.filter((b) =>
       previousFilteredBubbles.includes(b)
     );
-
-    if (bubbleManager) {
-      bubbleManager.currentFilteredBubbles = filteredBubbles;
-      bubbleManager.startPoppingBubbles(
-        bubbles,
-        filteredBubbles,
-        commonBubbles
-      );
-    }
+    manager.startPoppingBubbles(bubbles, filteredBubbles, commonBubbles);
   } else {
-    if (bubbleManager) {
-      bubbleManager.currentFilteredBubbles = bubbles;
-      bubbleManager.stopAllPopping(bubbles);
-    }
+    manager.stopAllPopping(bubbles);
   }
-
-  filterCacheSignature = signature;
-  filterCacheResult = {
-    filteredBubbles,
-    hasTagFilter,
-    selectedTag,
-    selectedGroup,
-  };
-
-  return filterCacheResult;
 }
 
 // 모든 버블에서 사용되는 이미지들을 한 번에 미리 로드
@@ -1328,74 +2988,6 @@ function preloadInitialImages(count = 12) {
   uniqueIndexes.forEach((idx) => requestBubbleImage(idx));
 }
 
-// 개별 버블 이미지 로드 함수
-function startBubbleImageLoad(imageIndex) {
-  if (imageIndex === null || imageIndex >= imageFiles.length) return;
-  if (imageLoading.has(imageIndex) || imageLoaded.has(imageIndex)) return;
-  activeImageLoads++;
-
-  const imagePath = `../public/assets/bubble-imgs/${imageFiles[imageIndex]}`;
-  const cached = getCachedImage(imagePath);
-  if (cached) {
-    bubbleImages[imageIndex] = cached;
-    imageLoaded.add(imageIndex);
-    imageLoading.delete(imageIndex);
-    activeImageLoads = Math.max(0, activeImageLoads - 1);
-    processImageQueue();
-    return;
-  }
-
-  imageLoading.add(imageIndex);
-
-  loadImage(
-    imagePath,
-    (img) => {
-      // 로드 성공
-      bubbleImages[imageIndex] = img;
-      cacheImage(imagePath, img);
-      imageLoaded.add(imageIndex);
-      imageLoading.delete(imageIndex);
-      activeImageLoads = Math.max(0, activeImageLoads - 1);
-      processImageQueue();
-
-      // 이미지 로드 완료 후 해당 이미지를 사용하는 버블들을 페이드인
-      if (bubbleManager && bubbleManager.bubbles) {
-        bubbleManager.bubbles.forEach((b) => {
-          if (b.imageIndex === imageIndex && b.alpha < 0.01) {
-            // 이미지가 로드되면 부드럽게 페이드인 (깜빡거림 방지)
-            b.alpha = 0.01; // 0이 아닌 작은 값으로 시작하여 페이드인 시작
-          }
-        });
-      }
-
-    },
-    (e) => {
-      // 로드 실패
-      logError(
-        `[Explorer] bubbleImage[${imageIndex}] (${imageFiles[imageIndex]}) 로딩 실패:`,
-        e
-      );
-      // 로드 실패한 이미지는 null로 유지하고 실패로 표시
-      bubbleImages[imageIndex] = null;
-      imageLoaded.add(imageIndex); // 실패한 이미지도 "시도 완료"로 표시
-      imageLoading.delete(imageIndex);
-      activeImageLoads = Math.max(0, activeImageLoads - 1);
-      processImageQueue();
-
-      // 이 이미지를 쓰던 버블들은 색 버블로 전환
-      if (bubbleManager && bubbleManager.bubbles) {
-        bubbleManager.bubbles.forEach((b) => {
-          if (b.imageIndex === imageIndex) {
-            b.imageIndex = null; // 앞으로는 이미지 없는 버블로 처리
-            if (b.alpha < 0.01) {
-              b.alpha = 1.0; // 컬러 버블은 바로 보이게
-            }
-          }
-        });
-      }
-    }
-  );
-}
 
 // 월드 메트릭스 재계산 (윈도우 리사이즈 시)
 function rebuildWorldMetrics() {
@@ -1406,6 +2998,30 @@ function rebuildWorldMetrics() {
 }
 
 // 배경 버퍼 재생성 (깜빡임 방지)
+function _calculateCoverDimensions(imgW, imgH, screenW, screenH) {
+  const imgRatio = imgW / imgH;
+  const screenRatio = screenW / screenH;
+
+  let w, h, x, y;
+
+  // 화면을 완전히 꽉 채우도록 cover 방식 적용 (비율 유지, 확대하여 화면 채움)
+  if (imgRatio > screenRatio) {
+    // 이미지가 더 넓음 → 높이에 맞춰 확대 (좌우가 잘림)
+    h = screenH;
+    w = imgRatio * h;
+    x = (screenW - w) / 2; // 중앙 정렬
+    y = 0;
+  } else {
+    // 이미지가 더 높음 → 너비에 맞춰 확대 (상하가 잘림)
+    w = screenW;
+    h = w / imgRatio;
+    x = 0;
+    y = (screenH - h) / 2; // 중앙 정렬
+  }
+
+  return { x, y, w, h };
+}
+
 function redrawBackgroundBuffer() {
   // 배경 버퍼가 없거나 크기가 변경되었을 때만 재생성
   if (!bgBuffer || bgBuffer.width !== width || bgBuffer.height !== height) {
@@ -1422,25 +3038,7 @@ function redrawBackgroundBuffer() {
     !isNaN(bgImage.width) &&
     !isNaN(bgImage.height)
   ) {
-    const imgRatio = bgImage.width / bgImage.height;
-    const screenRatio = width / height;
-
-    let drawW, drawH, bgOffsetX, bgOffsetY;
-
-    // 화면을 완전히 꽉 채우도록 cover 방식 적용 (비율 유지, 확대하여 화면 채움)
-    if (imgRatio > screenRatio) {
-      // 이미지가 더 넓음 → 높이에 맞춰 확대 (좌우가 잘림)
-      drawH = height;
-      drawW = imgRatio * drawH;
-      bgOffsetX = (width - drawW) / 2; // 중앙 정렬
-      bgOffsetY = 0;
-    } else {
-      // 이미지가 더 높음 → 너비에 맞춰 확대 (상하가 잘림)
-      drawW = width;
-      drawH = drawW / imgRatio;
-      bgOffsetX = 0;
-      bgOffsetY = (height - drawH) / 2; // 중앙 정렬
-    }
+    const { x, y, w, h } = _calculateCoverDimensions(bgImage.width, bgImage.height, width, height);
 
     // 넘치는 부분을 잘라내기 위해 클리핑 먼저 적용
     bgBuffer.drawingContext.save();
@@ -1450,7 +3048,7 @@ function redrawBackgroundBuffer() {
 
     // 화면 전체를 채우도록 이미지 확대하여 그리기
     bgBuffer.imageMode(CORNER);
-    bgBuffer.image(bgImage, bgOffsetX, bgOffsetY, drawW, drawH);
+    bgBuffer.image(bgImage, x, y, w, h);
 
     bgBuffer.drawingContext.restore();
   } else {
@@ -1471,366 +3069,50 @@ function stopAnim() {
   }
 }
 
-function drawBubbleVisual(
-  bubble,
-  x,
-  y,
-  r,
-  { isMain = false, alphaOverride = null } = {}
-) {
-  if (!bubble) return;
-
-  const effectiveAlpha =
-    alphaOverride !== null && alphaOverride !== undefined
-      ? alphaOverride
-      : bubble.alpha;
-  if (effectiveAlpha < 0.01) return;
-
-  const diameter = r * 2;
-  const hasImage =
-    bubble.imageIndex !== null &&
-    bubbleImages[bubble.imageIndex] &&
-    bubbleImages[bubble.imageIndex].width > 0;
-  
-  // 이미지가 필요한 버블인데 이미지가 아직 로드되지 않았으면 로드 시도
-  if (bubble.imageIndex !== null && !hasImage && !imageLoading.has(bubble.imageIndex) && !imageLoaded.has(bubble.imageIndex)) {
-    requestBubbleImage(bubble.imageIndex);
-  }
-
-  // 메인 버블 백글로우
-  if (isMain) {
-    push();
-    drawingContext.save();
-    drawingContext.globalAlpha = effectiveAlpha * 0.85;
-    const glowRadius = r * 1.7;
-    const glowGradient = drawingContext.createRadialGradient(
-      x,
-      y,
-      r * 0.4,
-      x,
-      y,
-      glowRadius
-    );
-    glowGradient.addColorStop(0, "rgba(255,255,255,0.7)");
-    glowGradient.addColorStop(0.5, "rgba(255, 243, 156, 0.18)");
-    glowGradient.addColorStop(1, "rgba(255, 255, 217, 0)");
-    drawingContext.fillStyle = glowGradient;
-    drawingContext.beginPath();
-    drawingContext.arc(x, y, glowRadius, 0, Math.PI * 2);
-    drawingContext.fill();
-    drawingContext.restore();
-    pop();
-  }
-
-  push();
-  drawingContext.save();
-  drawingContext.globalAlpha = effectiveAlpha;
-  drawingContext.imageSmoothingEnabled = true;
-  drawingContext.imageSmoothingQuality = "high";
-
-  drawingContext.beginPath();
-  drawingContext.arc(x, y, r, 0, Math.PI * 2);
-  drawingContext.clip();
-
-  if (hasImage) {
-    imageMode(CENTER);
-    const img = bubbleImages[bubble.imageIndex];
-    const imgRatio = img.width / img.height;
-
-    let drawW, drawH;
-    if (imgRatio > 1) {
-      drawH = diameter;
-      drawW = imgRatio * drawH;
-    } else {
-      drawW = diameter;
-      drawH = drawW / imgRatio;
-    }
-
-    image(img, x, y, drawW, drawH);
-  } else {
-    const base = bubbleColor(bubble.hueSeed);
-    const outer = base.outer;
-    const inner = base.inner;
-
-    drawingContext.shadowBlur = 24;
-    drawingContext.shadowColor = "rgba(0,0,0,0.35)";
-    fill(outer);
-    circle(x, y, diameter);
-
-    if (BUBBLE_GLOSS) {
-      const grd = drawingContext.createRadialGradient(
-        x - r * 0.35,
-        y - r * 0.35,
-        r * 0.1,
-        x,
-        y,
-        r
-      );
-      grd.addColorStop(0, "rgba(255,255,255,0.45)");
-      grd.addColorStop(0.25, "rgba(255,255,255,0.20)");
-      grd.addColorStop(1, inner);
-      drawingContext.fillStyle = grd;
-      circle(x, y, diameter);
-    }
-  }
-
-  drawingContext.restore();
-  pop();
-
-  if (!isMain && bubbleCap && bubbleCap.width > 0) {
-    push();
-    drawingContext.save();
-    drawingContext.globalAlpha = effectiveAlpha;
-    imageMode(CENTER);
-    image(bubbleCap, x, y, diameter, diameter);
-    drawingContext.restore();
-    pop();
-  }
-
-  push();
-  drawingContext.save();
-  drawingContext.globalAlpha = effectiveAlpha;
-  if (isMain) {
-    // 메인 버블은 추가 링 없이 부드러운 발광만 유지
-  } else {
-    noStroke();
-    fill(255, 25);
-    ellipse(x, y, diameter, diameter);
-  }
-  drawingContext.restore();
-  pop();
+// 전역 함수 래퍼 (하위 호환성 유지)
+function drawBubbleVisual(bubble, x, y, r, options = {}) {
+  BubbleRenderer.drawVisual(bubble, x, y, r, options);
 }
 
 // 중앙 버블 이미지/색상만 그리기 (캡 없이)
 function drawCenterBubbleImage(bubble) {
-  drawBubbleVisual(bubble, bubble.pos.x, bubble.pos.y, bubble.r, {
-    isMain: true,
-  });
+  BubbleRenderer.drawCenterImage(bubble);
 }
 
 // 중앙 버블에 빛 효과 그리기 (캡과 사진 사이)
 function drawBubbleLightEffect(bubble) {
-  push();
-  drawingContext.save();
-
-  // 버블 중심과 반지름
-  const x = bubble.pos.x;
-  const y = bubble.pos.y;
-  const r = bubble.r;
-
-  // 시간에 따라 빛이 왼쪽 위에서 오른쪽 위로 이동 (0~1 사이 값)
-  const time = (millis() / 3000) % 1; // 3초 주기
-
-  // 각도 범위: 왼쪽 위(-135도)에서 오른쪽 위(-45도)로, 약 20픽셀 아래로 이동
-  // -135도 = -3π/4, -45도 = -π/4
-  // 20픽셀 아래로 이동하기 위해 각도를 약간 조정
-  const offsetPixels = 20; // 아래로 이동할 픽셀 수
-  const angleOffset = Math.asin(offsetPixels / r); // 반지름 대비 각도 오프셋
-
-  const startAngle = (-Math.PI * 3) / 4 + angleOffset; // 왼쪽 위에서 약간 아래
-  const endAngle = -Math.PI / 4 + angleOffset; // 오른쪽 위에서 약간 아래
-  const angleRange = endAngle - startAngle;
-  const lightAngle = startAngle + time * angleRange; // 왼쪽 위에서 오른쪽 위로 이동
-
-  // 빛의 위치 (원 둘레를 거꾸로 따라 이동 - 원의 바깥쪽 경로)
-  // 반지름을 반전시켜서 원의 바깥쪽 경로를 따라 이동
-  const innerRadius = r * 0.7; // 안쪽 반지름
-  const outerRadius = r * 0.95; // 바깥쪽 반지름
-  const lightRadius = outerRadius - time * (outerRadius - innerRadius); // 시간에 따라 바깥에서 안으로
-  const lightX = x + Math.cos(lightAngle) * lightRadius;
-  let lightY = y + Math.sin(lightAngle) * lightRadius;
-
-  // 사라질 때(끝 부분) 10픽셀 위로 이동
-  const fadeOutDurationForY = 0.15; // 끝 부분 15% 구간
-  if (time > 1 - fadeOutDurationForY) {
-    const fadeOutProgress =
-      (time - (1 - fadeOutDurationForY)) / fadeOutDurationForY; // 0~1
-    lightY -= 10 * fadeOutProgress; // 점진적으로 위로 이동
-  }
-
-  // 클리핑 마스크로 원형으로 자르기
-  drawingContext.beginPath();
-  drawingContext.arc(x, y, r, 0, Math.PI * 2);
-  drawingContext.clip();
-
-  // 빛의 크기: 중간(-90도 + 오프셋)에서 가장 크고, 양 끝에서 작게
-  const centerAngle = -Math.PI / 2 + angleOffset; // 위쪽 중앙 (-90도)에서 약간 아래
-  const angleDiff = Math.abs(lightAngle - centerAngle); // 중앙으로부터의 각도 차이
-  const maxAngleDiff = Math.PI / 4; // 최대 각도 차이 (45도)
-  const sizeFactor = 1 - (angleDiff / maxAngleDiff) * 0.5; // 중간에서 1.0, 양 끝에서 0.5
-  const baseLightSize = r * 0.6 * 1.5; // 기본 빛 크기 (1.5배 증가)
-  const lightSize = baseLightSize * sizeFactor;
-
-  // 시작과 끝 부분에서 페이드 인/아웃 효과 (부드러운 전환)
-  const fadeInDuration = 0.15; // 시작 부분 15% 구간에서 페이드 인
-  const fadeOutDuration = 0.15; // 끝 부분 15% 구간에서 페이드 아웃
-  let fadeFactor = 1.0;
-
-  if (time < fadeInDuration) {
-    // 시작 부분: 페이드 인
-    fadeFactor = time / fadeInDuration;
-  } else if (time > 1 - fadeOutDuration) {
-    // 끝 부분: 페이드 아웃
-    fadeFactor = (1 - time) / fadeOutDuration;
-  }
-
-  // 빛 효과 그리기 (자연스러운 노출값 집중 효과)
-  // 중심부가 매우 밝고 강렬한 빛
-  const coreGradient = drawingContext.createRadialGradient(
-    lightX,
-    lightY,
-    0,
-    lightX,
-    lightY,
-    lightSize * 0.3
-  );
-
-  // 빛의 강도가 시간에 따라 변하도록 (펄스 효과)
-  const pulse = (Math.sin(millis() / 800) + 1) / 2; // 0~1 사이 값
-  const baseOpacity = 0.7 + pulse * 0.25; // 0.7~0.95 사이 (외곽 빛용)
-  const lightOpacity = baseOpacity * fadeFactor; // 페이드 효과 적용
-
-  // 안쪽 빛(중심부)만 희미하게
-  const innerLightOpacity = baseOpacity * 0.4 * fadeFactor; // 안쪽 빛은 40%만
-
-  // 중심부: 매우 밝은 흰색 (노출값 과다 느낌, 희미하게)
-  coreGradient.addColorStop(0, `rgba(255, 255, 255, ${innerLightOpacity})`);
-  coreGradient.addColorStop(
-    0.3,
-    `rgba(255, 255, 240, ${innerLightOpacity * 0.9})`
-  );
-  coreGradient.addColorStop(
-    0.6,
-    `rgba(255, 250, 200, ${innerLightOpacity * 0.6})`
-  );
-  coreGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-
-  drawingContext.fillStyle = coreGradient;
-  drawingContext.fillRect(x - r, y - r, r * 2, r * 2);
-
-  // 색수차 효과 (무지개색 스펙트럼) - 빛 번짐
-  const chromaticGradient = drawingContext.createRadialGradient(
-    lightX,
-    lightY,
-    lightSize * 0.2,
-    lightX,
-    lightY,
-    lightSize * 1.2
-  );
-
-  // 색수차 색상 (무지개 스펙트럼)
-  const chromaticOpacity = lightOpacity * 0.4 * fadeFactor; // 원래대로
-  chromaticGradient.addColorStop(
-    0,
-    `rgba(255, 200, 150, ${chromaticOpacity * 0.3})`
-  ); // 주황
-  chromaticGradient.addColorStop(
-    0.2,
-    `rgba(255, 150, 200, ${chromaticOpacity * 0.4})`
-  ); // 분홍
-  chromaticGradient.addColorStop(
-    0.4,
-    `rgba(200, 150, 255, ${chromaticOpacity * 0.5})`
-  ); // 보라
-  chromaticGradient.addColorStop(
-    0.6,
-    `rgba(150, 200, 255, ${chromaticOpacity * 0.4})`
-  ); // 파랑
-  chromaticGradient.addColorStop(
-    0.8,
-    `rgba(150, 255, 200, ${chromaticOpacity * 0.3})`
-  ); // 청록
-  chromaticGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-
-  drawingContext.fillStyle = chromaticGradient;
-  drawingContext.fillRect(x - r, y - r, r * 2, r * 2);
-
-  // 외곽 빛 번짐 (더 넓은 범위)
-  const bloomGradient = drawingContext.createRadialGradient(
-    lightX,
-    lightY,
-    lightSize * 0.5,
-    lightX,
-    lightY,
-    lightSize * 1.5
-  );
-
-  const bloomOpacity = lightOpacity * 0.2 * fadeFactor; // 원래대로
-  bloomGradient.addColorStop(0, `rgba(255, 255, 255, ${bloomOpacity})`);
-  bloomGradient.addColorStop(0.5, `rgba(255, 255, 240, ${bloomOpacity * 0.5})`);
-  bloomGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-
-  drawingContext.fillStyle = bloomGradient;
-  drawingContext.fillRect(x - r, y - r, r * 2, r * 2);
-
-  drawingContext.restore();
-  pop();
+  BubbleRenderer.drawLightEffect(bubble);
 }
 
 // 중앙 버블 캡 그리기
 function drawCenterBubbleCap(bubble) {
-  if (!bubbleCap || bubbleCap.width <= 0) return;
-  if (bubble.alpha < 0.01) return;
-
-  const x = bubble.pos.x;
-  const y = bubble.pos.y;
-  const r = bubble.r;
-  const size = r * 2;
-
-  push();
-  imageMode(CENTER);
-  drawingContext.save();
-  drawingContext.globalAlpha = bubble.alpha;
-  image(bubbleCap, x, y, size, size);
-  drawingContext.restore();
-  pop();
+  BubbleRenderer.drawCenterCap(bubble);
 }
 
 // 버블 정보 가져오기 헬퍼 함수
 function getBubbleInfo(bubble) {
-  if (bubble.imageIndex !== null && bubbleData?.[bubble.imageIndex]) {
-    const data = bubbleData[bubble.imageIndex];
-    return {
-      name: data.title || "",
-      visualTags: data.visualTags || [],
-      emotionalTags: data.emotionalTags || []
-    };
-  }
-  return {
-    name: bubble.name || "",
-    visualTags: bubble.visualTags || [],
-    emotionalTags: bubble.emotionalTags || []
-  };
+  return BubbleRenderer._getBubbleInfo(bubble);
 }
 
 // 버블 정보 표시 통합 함수 (센터/오빗 공통)
 function drawBubbleInfoAt(bubble, x, y, alpha = 1.0, options = {}) {
-  const { name, visualTags, emotionalTags } = getBubbleInfo(bubble);
-  if (!name) return;
-  
-  const comp = new BubbleInfoComponent(name, visualTags, emotionalTags);
-  comp.draw(x, y, alpha, options.titleSize ?? 18, options.tagSize ?? 14);
+  BubbleRenderer.drawInfoAt(bubble, x, y, alpha, options);
 }
 
 // 센터 버블 정보 표시
 function drawCenterBubbleInfo(bubble) {
-  if (!bubble) return;
-  const infoY = bubble.pos.y + bubble.r + 40;
-  drawBubbleInfoAt(bubble, bubble.pos.x, infoY, 1.0, { titleSize: 18, tagSize: 14 });
+  BubbleRenderer.drawCenterInfo(bubble);
 }
 
 // 오빗 버블 정보 표시
 function drawOrbitBubbleInfo(bubble, bubbleX, bubbleY, bubbleRadius = null) {
-  if (orbitInfoAlpha < 0.01) return;
-  
-  const r = bubbleRadius !== null ? bubbleRadius : (bubble.r || 50);
-  const infoY = bubbleY + r + 30;
-  drawBubbleInfoAt(bubble, bubbleX, infoY, orbitInfoAlpha, { titleSize: 16, tagSize: 13 });
+  BubbleRenderer.drawOrbitInfo(bubble, bubbleX, bubbleY, bubbleRadius, orbitInfoAlpha);
 }
 
-// ---------- 집단별 언어 데이터 ----------
-// 각 집단의 시각적 언어와 감정적 언어 정의
-const groupLanguages = {
+// 버블 데이터 관리자 클래스
+class BubbleDataManager {
+  // 집단별 언어 데이터 (정적 프로퍼티)
+  static groupLanguages = {
   1: {
     // 여행자 (traveler)
     visual: [
@@ -1900,8 +3182,8 @@ const groupLanguages = {
   },
 };
 
-// 버블 데이터에 언어를 자동 할당하는 함수
-function assignLanguagesToBubbles() {
+  // 버블 데이터에 언어를 자동 할당하는 정적 메서드
+  static assignLanguages(bubbleData) {
   for (let i = 0; i < bubbleData.length; i++) {
     const bubble = bubbleData[i];
     if (!bubble.attributes || bubble.attributes.length === 0) {
@@ -1915,7 +3197,7 @@ function assignLanguagesToBubbles() {
 
     // 각 속성에 대해 언어 선택 (랜덤하게 선택)
     bubble.attributes.forEach((attr) => {
-      const lang = groupLanguages[attr];
+        const lang = BubbleDataManager.groupLanguages[attr];
       if (lang) {
         // 시각적 언어 2-3개 선택
         const visualCount = Math.floor(Math.random() * 2) + 2; // 2-3개
@@ -1944,7 +3226,14 @@ function assignLanguagesToBubbles() {
     // 중복 제거
     bubble.visualTags = [...new Set(visualTags)];
     bubble.emotionalTags = [...new Set(emotionalTags)];
+    }
   }
+}
+
+// 하위 호환성을 위한 전역 변수 및 함수 (래퍼)
+const groupLanguages = BubbleDataManager.groupLanguages;
+function assignLanguagesToBubbles() {
+  BubbleDataManager.assignLanguages(bubbleData);
 }
 
 // ---------- p5 LIFECYCLE ----------
@@ -1970,97 +3259,151 @@ function preload() {
 
 }
 
-// 공용 버블 데이터 JSON 비동기 로드 함수
+// 공용 버블 데이터 JSON 비동기 로드 함수 (하위 호환성 래퍼)
 async function loadBubbleDataFromJSON() {
-  try {
-    const response = await fetch("../public/assets/data/bubbles.json");
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    const bubblesJson = await response.json();
-    
-    log("[Explorer] JSON 로드 성공:", bubblesJson);
-    
-    // 버블 이미지 데이터 정의 (JSON에서 로드)
-    if (bubblesJson && bubblesJson.imageFiles && Array.isArray(bubblesJson.imageFiles)) {
-      imageFiles = bubblesJson.imageFiles;
-      log(`[Explorer] JSON에서 ${imageFiles.length}개의 이미지 파일 로드됨`);
+  if (resourceManager) {
+    return await resourceManager.loadBubbleData();
+  }
+  // 레거시 동작 (ResourceManager가 없을 때)
+  logError("[Explorer] ResourceManager가 초기화되지 않았습니다");
+  return false;
+}
+
+// 생명주기 관리자 클래스
+class LifecycleManager {
+  // 디바이스 설정 클래스
+  static DeviceConfig = {
+    // 태블릿/모바일 감지
+    isMobileOrTablet() {
+      const ua = navigator.userAgent.toLowerCase();
+      const isMobile =
+        /android|webos|iphone|ipod|blackberry|iemobile|opera mini/i.test(ua);
+      const isTabletUA =
+        /ipad|tablet/.test(ua) ||
+        (/macintosh/.test(ua) && navigator.maxTouchPoints > 0);
+      const isTouchDevice = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+      const isWindowsDesktop = /windows nt/i.test(ua);
+
+      return isMobile || isTabletUA || (isTouchDevice && !isWindowsDesktop);
+    },
+
+    // 디바이스별 설정 적용
+    applyDeviceSettings(isMobile) {
+      if (isMobile) {
+        pixelDensity(1);
+        frameRate(24);
+        MAX_DRAW = 20;
+        MAX_BUBBLE_RADIUS = 70;
+        ANIMATION_CONFIG.enableBreathAnim = false;
+        ANIMATION_CONFIG.lightEffectInterval = 4;
+        ANIMATION_CONFIG.enableLightEffect = false;
+        ANIMATION_CONFIG.enableMicGlow = false;
+        ANIMATION_CONFIG.enableCenterPulse = false;
+        ANIMATION_CONFIG.allowIdlePause = true;
+        MAX_CONCURRENT_IMAGE_LOADS = 4;
+        return 10; // queueSize
     } else {
-      logError("[Explorer] JSON에서 imageFiles를 로드할 수 없습니다", bubblesJson);
-    }
-    
-    // 버블 데이터 (JSON에서 로드)
-    if (bubblesJson && bubblesJson.bubbles && Array.isArray(bubblesJson.bubbles)) {
-      bubbleData = bubblesJson.bubbles.map(bubble => ({
-        title: bubble.title,
-        tags: bubble.tags,
-        attributes: bubble.attributes,
-        visualTags: [], // assignLanguagesToBubbles에서 채워짐
-        emotionalTags: [] // assignLanguagesToBubbles에서 채워짐
-      }));
-      log(`[Explorer] JSON에서 ${bubbleData.length}개의 버블 데이터 로드됨`);
-      
-      // 버블 이미지 배열 초기화 (지연 로딩을 위해 null로 초기화)
-      if (bubbleImageLoader) {
-      for (let i = 0; i < imageFiles.length; i++) {
-          bubbleImageLoader.images.push(null);
-        }
-        bubbleImages = bubbleImageLoader.images; // 참조 업데이트
+        pixelDensity(1.5);
+        frameRate(30);
+        MAX_DRAW = 80;
+        MAX_BUBBLE_RADIUS = 120;
+        ANIMATION_CONFIG.enableBreathAnim = true;
+        ANIMATION_CONFIG.lightEffectInterval = 1;
+        ANIMATION_CONFIG.enableLightEffect = false;
+        ANIMATION_CONFIG.enableMicGlow = false;
+        ANIMATION_CONFIG.enableCenterPulse = true;
+        ANIMATION_CONFIG.allowIdlePause = true;
+        MAX_CONCURRENT_IMAGE_LOADS = 6;
+        return MAX_IMAGE_QUEUE_LENGTH; // queueSize
       }
-      
-      // 버블 데이터에 언어 할당 (visualTags, emotionalTags 생성)
-      assignLanguagesToBubbles();
-      log(`[Explorer] 버블 데이터에 언어 할당 완료`);
-      
-      // 버블 재생성 (JSON 데이터가 로드된 후)
+    }
+  };
+
+  // 소프트 리셋 (불필요한 재생성 방지)
+  static softReset() {
+    if (resetInProgress) return;
+    resetInProgress = true;
+
+    // 배경 버퍼 재생성 (깜빡임 방지)
+    if (bgBuffer && resourceManager) {
+      bgBuffer = resourceManager.getOrUpdateBuffer('bg', width, height);
+      redrawBackgroundBuffer();
+    } else if (bgBuffer) {
+      redrawBackgroundBuffer();
+    }
+
+    // 애니메이션 상태 초기화
+    if (panController) {
+      panController.panVelocityX = 0;
+      panController.panVelocityY = 0;
+      panController.snapTargetX = null;
+      panController.snapTargetY = null;
+      panController.snapCompleted = true;
+    }
+
+    RotationController.state.angularVelocity = 0;
+
+    // 버블 매니저는 데이터가 같다면 재생성하지 않고 위치만 초기화
       if (bubbleManager) {
+      // 버전 체크로 불필요한 재생성 방지
+      const currentVersion = bubbleManager.version;
         bubbleManager.build();
-        log(`[Explorer] 버블 재생성 완료`);
-
-        // 초기 오프셋 설정 (버블이 화면에 보이도록)
-        // 중앙 버블이 화면 중앙에 오도록 초기 오프셋 계산
-        const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
-        const centerGridX = Math.floor(gridSize / 2);
-        const centerGridY = Math.floor(gridSize / 2);
-        const centerHexX = centerGridX * HEX_SPACING * 1.5;
-        const centerHexY =
-          centerGridY * HEX_SPACING * sqrt(3) +
-          ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
-
-        if (panController) {
-          panController.offsetX = width * CENTER_X_RATIO - centerHexX;
-          panController.offsetY = height * CENTER_Y_RATIO - centerHexY;
-          // 초기 스냅 완료 상태로 설정하여 자동 스냅이 실행되도록
-          panController.snapCompleted = false;
-        }
-        log(`[Explorer] 초기 버블 위치 설정 완료`);
-
-        // 🔧 기기별로 첫 로딩 이미지 개수 다르게 (태블릿도 빠른 로딩)
-        const firstLoadCount = IS_MOBILE ? 10 : 12;
-        preloadInitialImages(firstLoadCount);
-      }
-    } else {
-      logError("[Explorer] JSON에서 bubbles를 로드할 수 없습니다", bubblesJson);
+      // 버전이 같다면 위치만 초기화하는 로직 추가 가능
     }
-  } catch (error) {
-    logError("[Explorer] JSON 로드 중 오류 발생:", error);
-    bubbleData = [];
-    imageFiles = [];
+
+    if (uiStateManager) {
+      uiStateManager.backToMainView?.();
+      uiStateManager.showToggles = false;
+      uiStateManager.selectedTag = null;
+      uiStateManager.selectedGroup = null;
+    }
+
+    startAnim();
+    if (typeof loop === "function") {
+      loop();
+    }
+
+    resetInProgress = false;
+  }
+
+  // 메모리 정리 (태블릿 최적화)
+  static gc() {
+    // 그라디언트 캐시 정리
+    if (gradientCache) {
+      gradientCache.clear();
+    }
+
+    // 입력 관리자 정리
+    if (inputManager) {
+      inputManager.cleanupStalePointers();
+    }
+
+    // 성능 메모리 API 사용 (크롬/안드로이드)
+    if (performance.memory) {
+      const usedMB = performance.memory.usedJSHeapSize / 1048576;
+      const limitMB = performance.memory.jsHeapSizeLimit / 1048576;
+      const usagePercent = (usedMB / limitMB) * 100;
+
+      // 메모리 사용률이 80% 이상이면 경고
+      if (usagePercent > 80) {
+        logWarn(`[LifecycleManager] 메모리 사용률 높음: ${usagePercent.toFixed(1)}%`);
+        // 필요시 softReset 호출
+        if (usagePercent > 90) {
+          logWarn(`[LifecycleManager] 메모리 위험 수준, 소프트 리셋 실행`);
+          LifecycleManager.softReset();
+        }
+      }
+    }
   }
 }
 
-// 태블릿/모바일 감지 및 성능 최적화
+// 하위 호환성을 위한 함수 래퍼
 function isMobileOrTablet() {
-  const ua = navigator.userAgent.toLowerCase();
-  const isMobile =
-    /android|webos|iphone|ipod|blackberry|iemobile|opera mini/i.test(ua);
-  const isTabletUA =
-    /ipad|tablet/.test(ua) ||
-    (/macintosh/.test(ua) && navigator.maxTouchPoints > 0);
-  const isTouchDevice = "ontouchstart" in window || navigator.maxTouchPoints > 0;
-  const isWindowsDesktop = /windows nt/i.test(ua);
+  return LifecycleManager.DeviceConfig.isMobileOrTablet();
+}
 
-  return isMobile || isTabletUA || (isTouchDevice && !isWindowsDesktop);
+function softReset() {
+  LifecycleManager.softReset();
 }
 
 function setup() {
@@ -2069,40 +3412,19 @@ function setup() {
   panController = new PanController();
   uiStateManager = new UIStateManager();
   bubbleManager = new BubbleManager();
+  resourceManager = new ResourceManager();
+  inputManager = new InputManager();
+  graphicsManager = new GraphicsManager();
+  uiRenderer = new UIRenderer();
+  
+  // 하위 호환성을 위한 전역 변수 초기화
+  bubbleRotationState = RotationController.state;
+  toggleButtons = ToggleManager.buttons;
 
   // 태블릿/모바일 최적화
-  IS_MOBILE = isMobileOrTablet();
+  IS_MOBILE = LifecycleManager.DeviceConfig.isMobileOrTablet();
   const isMobile = IS_MOBILE;
-  
-  if (isMobile) {
-    // 🔧 태블릿 최적화: CPU/GPU 부담 대폭 감소
-    pixelDensity(1);        // 해상도 부담 감소
-    frameRate(15);          // 24 → 15 (프레임 부담 대폭 감소)
-    MAX_DRAW = 25;          // 35 → 25 (한 프레임에 그릴 버블 수 감소)
-    MAX_BUBBLE_RADIUS = 70; // 80 → 70 (버블 최대 크기 감소)
-    ANIMATION_CONFIG.enableBreathAnim = false;
-    ANIMATION_CONFIG.lightEffectInterval = 4;
-    ANIMATION_CONFIG.enableLightEffect = false;
-    ANIMATION_CONFIG.enableMicGlow = false;
-    ANIMATION_CONFIG.enableCenterPulse = false;
-    ANIMATION_CONFIG.allowIdlePause = true; // 유휴 시 애니메이션 정지로 CPU/GPU 절약
-  } else {
-    pixelDensity(1.5); // 데스크톱은 적당한 밀도로 유지
-    frameRate(30); // 데스크톱은 30fps로 제한
-    MAX_DRAW = 80;
-    MAX_BUBBLE_RADIUS = 120;
-    ANIMATION_CONFIG.enableBreathAnim = true;
-    ANIMATION_CONFIG.lightEffectInterval = 1;
-    ANIMATION_CONFIG.enableLightEffect = false;
-    ANIMATION_CONFIG.enableMicGlow = false;
-    ANIMATION_CONFIG.enableCenterPulse = true;
-    ANIMATION_CONFIG.allowIdlePause = true;
-  }
-  // 🔧 태블릿에서 이미지 동시 로드 수 조정 (너무 적으면 로딩 느림)
-  MAX_CONCURRENT_IMAGE_LOADS = isMobile ? 4 : 6;
-  
-  // 🔧 태블릿에서는 큐 길이도 줄여서 한 번에 폭주 방지
-  const queueSize = isMobile ? 10 : MAX_IMAGE_QUEUE_LENGTH;
+  const queueSize = LifecycleManager.DeviceConfig.applyDeviceSettings(isMobile);
   
   // ImageLoader 초기화
   bubbleImageLoader = new ImageLoader(
@@ -2143,38 +3465,63 @@ function setup() {
 
   rebuildWorldMetrics(); // 월드 메트릭스 초기화
   
-  // 초기 배경 버퍼 생성 (깜빡임 방지)
-  bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
+  // LayoutManager 메트릭 초기 계산
+  LayoutManager.calculateMetrics();
+  
+  // 초기 배경 버퍼 생성 (ResourceManager 사용)
+  bgBuffer = resourceManager.getOrUpdateBuffer('bg', width, height);
   bgBuffer.background(BG_COLOR);
   
   // 🔧 태블릿은 무거운 작업을 살짝 뒤로 미뤄서 첫 화면이 먼저 뜨도록
   if (isMobile) {
-    // 태블릿은 0.1초 뒤에 무거운 작업 시작 (깜빡임 최소화하면서 빠른 로딩)
     setTimeout(() => {
-  loadBubbleDataFromJSON();
+      resourceManager.loadBubbleData().then((success) => {
+        if (success && bubbleManager) {
+          bubbleManager.build();
+          // 초기 오프셋 설정
+          const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
+          const centerGridX = Math.floor(gridSize / 2);
+          const centerGridY = Math.floor(gridSize / 2);
+          const centerHexX = centerGridX * HEX_SPACING * 1.5;
+          const centerHexY = centerGridY * HEX_SPACING * sqrt(3) + ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
+          if (panController) {
+            panController.offsetX = width * CENTER_X_RATIO - centerHexX;
+            panController.offsetY = height * CENTER_Y_RATIO - centerHexY;
+            panController.snapCompleted = false;
+          }
+          const firstLoadCount = IS_MOBILE ? 10 : 12;
+          preloadInitialImages(firstLoadCount);
+        }
+      });
     }, 100);
   } else {
-    // 데스크탑은 바로
-    loadBubbleDataFromJSON();
+    resourceManager.loadBubbleData().then((success) => {
+      if (success && bubbleManager) {
+        bubbleManager.build();
+        const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
+        const centerGridX = Math.floor(gridSize / 2);
+        const centerGridY = Math.floor(gridSize / 2);
+        const centerHexX = centerGridX * HEX_SPACING * 1.5;
+        const centerHexY = centerGridY * HEX_SPACING * sqrt(3) + ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
+        if (panController) {
+          panController.offsetX = width * CENTER_X_RATIO - centerHexX;
+          panController.offsetY = height * CENTER_Y_RATIO - centerHexY;
+          panController.snapCompleted = false;
+        }
+        const firstLoadCount = IS_MOBILE ? 10 : 12;
+        preloadInitialImages(firstLoadCount);
+      }
+    });
   }
 
-  // 자산 로딩 확인 및 에러 체크 (헬퍼 함수로 간소화)
-  const checkAsset = (asset, name, onSuccess = null) => {
-    const isValid = asset && (!asset.width || asset.width > 0);
-    if (!isValid) {
-      logError(`${name} 로딩 실패`);
-    } else if (onSuccess) {
-      onSuccess();
-    }
-  };
-
-  checkAsset(mikeIcon, "mikeIcon");
-  checkAsset(captureButton, "captureButton");
-  checkAsset(workroomButton, "workroomButton");
-  checkAsset(navigationBar, "navigationBar");
-  checkAsset(bubbleCap, "bubbleCap");
-  checkAsset(pretendardFont, "pretendardFont");
-  checkAsset(bgImage, "bgImage", redrawBackgroundBuffer);
+  // 자산 로딩 확인 및 에러 체크 (ResourceManager 사용)
+  resourceManager.checkAsset(mikeIcon, "mikeIcon");
+  resourceManager.checkAsset(captureButton, "captureButton");
+  resourceManager.checkAsset(workroomButton, "workroomButton");
+  resourceManager.checkAsset(navigationBar, "navigationBar");
+  resourceManager.checkAsset(bubbleCap, "bubbleCap");
+  resourceManager.checkAsset(pretendardFont, "pretendardFont");
+  resourceManager.checkAsset(bgImage, "bgImage", redrawBackgroundBuffer);
 
   // 집단 이미지 로드 확인
   for (let i = 1; i <= 5; i++) {
@@ -2186,20 +3533,13 @@ function setup() {
     }
   }
 
-  // 네비게이션 바 고해상도 버퍼 생성 (한 번만 생성)
-  // windowResized에서 재생성하므로 여기서는 기본 크기로 생성
+  // 네비게이션 바 고해상도 버퍼 생성 (ResourceManager 사용)
   if (navigationBar) {
-    // 반응형 스케일 계산 (헬퍼 함수 사용)
     const responsiveScale = getResponsiveScale();
-
     const NAV_W = navigationBar.width * 0.455 * responsiveScale;
     const NAV_H = navigationBar.height * 0.455 * responsiveScale;
     const scaleFactor = 2;
-    navBarBuffer = recreateGraphicsBuffer(
-      navBarBuffer,
-      NAV_W * scaleFactor,
-      NAV_H * scaleFactor
-    );
+    navBarBuffer = resourceManager.getOrUpdateBuffer('navBar', NAV_W * scaleFactor, NAV_H * scaleFactor);
     navBarBuffer.imageMode(CORNER);
     navBarBuffer.image(
       navigationBar,
@@ -2212,8 +3552,12 @@ function setup() {
 
   queueVisibleBubbleImages();
 
-  // 포인터 이벤트 설정 (모든 입력 통합)
-  setupPointerBridges();
+  // 포인터 이벤트 설정 (InputManager 사용)
+  if (inputManager && canvasElement) {
+    inputManager.init(canvasElement);
+  } else {
+    setupPointerBridges(); // 레거시 fallback
+  }
   
   // 토글 버튼 초기화
   initToggleButtons();
@@ -2235,7 +3579,9 @@ function setup() {
           bubbleRotationState.angularVelocity = 0;
         }
       } else {
-        softReset();
+        LifecycleManager.softReset();
+        // 메모리 정리
+        LifecycleManager.gc();
       }
     };
     
@@ -2252,21 +3598,159 @@ function setup() {
   }
 }
 
-// 포인터 이벤트 핸들러 저장 (중복 등록 방지)
+// 입력 관리자 클래스 (이벤트 리스너 누수 방지)
+class InputManager {
+  constructor() {
+    this.handlers = {
+      down: null,
+      move: null,
+      up: null,
+      cancel: null
+    };
+    this.activePointers = new Map(); // 활성 포인터 추적 (pointerId -> {x, y})
+    this.canvasElement = null;
+  }
+
+  // 초기화
+  init(canvasElement) {
+    this.canvasElement = canvasElement;
+    this.destroy(); // 기존 리스너 제거 (중복 방지)
+    this.activePointers.clear();
+
+    // 포인터 다운 이벤트
+    this.handlers.down = (e) => {
+      const canvas = this.canvasElement;
+      if (!canvas || !canvas.contains(e.target)) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      this.activePointers.set(e.pointerId, { x, y });
+
+      const handled = handlePointerDown(x, y, e.pointerId);
+
+      if (e.pointerType !== "mouse" && handled) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("pointerdown", this.handlers.down, { passive: false });
+
+    // 포인터 이동 이벤트
+    this.handlers.move = (e) => {
+      if (!this.activePointers.has(e.pointerId)) return;
+
+      const canvas = this.canvasElement;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      this.activePointers.set(e.pointerId, { x, y });
+
+      handlePointerMove(x, y, e.pointerId);
+
+      if (panController && panController.isDragging && e.pointerType !== "mouse") {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("pointermove", this.handlers.move, { passive: false });
+
+    // 포인터 업 이벤트
+    this.handlers.up = (e) => {
+      if (!this.activePointers.has(e.pointerId)) return;
+
+      const canvas = this.canvasElement;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      handlePointerUp(x, y, e.pointerId);
+      this.activePointers.delete(e.pointerId);
+
+      if (e.pointerType !== "mouse") {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("pointerup", this.handlers.up, { passive: false });
+
+    // 포인터 취소 이벤트 (태블릿 안전장치)
+    this.handlers.cancel = (e) => {
+      if (!this.activePointers.has(e.pointerId)) return;
+
+      const canvas = this.canvasElement;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      handlePointerUp(x, y, e.pointerId);
+      this.activePointers.delete(e.pointerId);
+
+      if (e.pointerType !== "mouse") {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("pointercancel", this.handlers.cancel, { passive: false });
+  }
+
+  // 정리 (메모리 누수 방지 핵심)
+  destroy() {
+    if (this.handlers.down) {
+      window.removeEventListener("pointerdown", this.handlers.down);
+    }
+    if (this.handlers.move) {
+      window.removeEventListener("pointermove", this.handlers.move);
+    }
+    if (this.handlers.up) {
+      window.removeEventListener("pointerup", this.handlers.up);
+    }
+    if (this.handlers.cancel) {
+      window.removeEventListener("pointercancel", this.handlers.cancel);
+    }
+
+    this.handlers = {
+      down: null,
+      move: null,
+      up: null,
+      cancel: null
+    };
+    this.activePointers.clear();
+  }
+
+  // 비정상적으로 많은 포인터가 남아있을 때 강제 정리 (태블릿 안전장치)
+  cleanupStalePointers() {
+    if (this.activePointers.size > 10) {
+      this.activePointers.clear();
+    }
+  }
+}
+
+// 전역 입력 관리자 인스턴스
+let inputManager = null;
+
+// 하위 호환성을 위한 전역 변수 및 함수
 let pointerEventHandlers = {
   down: null,
   move: null,
   up: null,
   cancel: null
 };
-let activePointers = new Map(); // 활성 포인터 추적 (pointerId -> {x, y})
-let lastMemoryCleanup = 0; // 마지막 메모리 정리 시간
-const MEMORY_CLEANUP_INTERVAL = 30000; // 30초마다 메모리 정리 (태블릿 성능 개선)
-let isPageVisible = true; // 페이지 가시성 상태
+let activePointers = new Map();
+let lastMemoryCleanup = 0;
+const MEMORY_CLEANUP_INTERVAL = 30000;
+let isPageVisible = true;
 
-// 포인터 이벤트 설정 (모든 입력 통합 처리)
+// 하위 호환성을 위한 함수 래퍼
 function setupPointerBridges() {
-  // 이미 등록된 이벤트 리스너 제거 (중복 방지)
+  if (inputManager && canvasElement) {
+    inputManager.init(canvasElement);
+  } else {
+    // 레거시 동작 (InputManager가 없을 때)
   if (pointerEventHandlers.down) {
     window.removeEventListener("pointerdown", pointerEventHandlers.down);
     window.removeEventListener("pointermove", pointerEventHandlers.move);
@@ -2274,7 +3758,6 @@ function setupPointerBridges() {
     window.removeEventListener("pointercancel", pointerEventHandlers.cancel);
   }
   
-  // activePointers 초기화
   activePointers.clear();
 
   // 포인터 다운 이벤트
@@ -2368,7 +3851,12 @@ function setupPointerBridges() {
   };
   window.addEventListener("pointercancel", pointerEventHandlers.cancel, { passive: false });
 
+    // 레거시 cleanup 등록
   explorerRuntime.registerCleanup("pointer-events", () => {
+      if (inputManager) {
+        inputManager.destroy();
+      } else {
+        // 레거시 정리
     if (pointerEventHandlers.down) {
       window.removeEventListener("pointerdown", pointerEventHandlers.down);
     }
@@ -2388,7 +3876,9 @@ function setupPointerBridges() {
       cancel: null,
     };
     activePointers.clear();
+      }
   });
+  }
 }
 
 
@@ -2426,6 +3916,375 @@ function softReset() {
   resetInProgress = false;
 }
 
+// 상태 업데이트 함수 (데이터 변경만 수행)
+function updateState() {
+  const now = millis();
+
+  // 리셋 체크
+  if (!resetInProgress && now - lastResetTime > RESET_INTERVAL_MS) {
+    LifecycleManager.softReset();
+    lastResetTime = now;
+  }
+
+  // 주기적 메모리 정리 (30초마다)
+  if (now - lastMemoryCleanup > MEMORY_CLEANUP_INTERVAL) {
+    if (inputManager) {
+      inputManager.cleanupStalePointers();
+    } else if (activePointers.size > 10) {
+      activePointers.clear();
+    }
+    LifecycleManager.gc();
+    lastMemoryCleanup = now;
+  }
+  
+  // 상태 변수 추출
+  const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
+  const selectedGroup = uiStateManager ? uiStateManager.selectedGroup : null;
+  const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
+  const bubbles = bubbleManager?.bubbles ?? [];
+  const filterState = ensureFilteredBubblesState();
+  const hasTagFilter = filterState.hasTagFilter;
+  const filteredBubbles = filterState.filteredBubbles;
+
+  // 오빗 모드 상태 확인
+  const orbitModeActive = !!showGroupView;
+  if (!orbitModeActive) {
+    resetOrbitBubbleState();
+  }
+
+  // 버블 회전 각도 업데이트
+  if (hasTagFilter || showGroupView) {
+    if (!RotationController.state.isDragging) {
+      RotationController.state.rotationAngle += RotationController.state.autoSpeed;
+      RotationController.state.rotationAngle += RotationController.state.angularVelocity;
+      RotationController.state.angularVelocity *= 0.92;
+      if (Math.abs(RotationController.state.angularVelocity) < 0.0001) {
+        RotationController.state.angularVelocity = 0;
+      }
+    }
+    const TWO_PI = Math.PI * 2;
+    RotationController.state.rotationAngle = ((RotationController.state.rotationAngle % TWO_PI) + TWO_PI) % TWO_PI;
+  } else {
+    RotationController.state.rotationAngle = 0;
+    RotationController.state.angularVelocity = 0;
+    RotationController.state.isDragging = false;
+    RotationController.state.didDrag = false;
+  }
+
+  // 패닝 애니메이션 업데이트
+  if (panController) {
+    if (!showGroupView && !hasTagFilter) {
+      panController.update();
+      if (
+        !panController.isDragging &&
+        abs(panController.panVelocityX) < 0.1 &&
+        abs(panController.panVelocityY) < 0.1
+      ) {
+        panController.panVelocityX = 0;
+        panController.panVelocityY = 0;
+        if (
+          panController.snapTargetX === null &&
+          panController.snapTargetY === null &&
+          !panController.snapCompleted
+        ) {
+          snapToCenterBubble();
+        }
+      }
+    } else if (showGroupView || hasTagFilter) {
+      panController.update();
+    }
+  }
+
+  // 상태 변수 추출
+  const offsetX = panController?.offsetX ?? 0;
+  const offsetY = panController?.offsetY ?? 0;
+  const { centerX, centerY } = getBubbleAreaCenter();
+  const alignAfterPopStartTime = bubbleManager?.alignAfterPopStartTime ?? null;
+
+  // 팡 터지는 애니메이션 업데이트
+  const popNow = millis();
+  bubbles.filter(b => b.isPopping).forEach((b) => {
+    b.updatePop(popNow);
+  });
+
+  // 팡 애니메이션 정렬 처리
+  if (alignAfterPopStartTime !== null) {
+    const elapsedSinceStart = millis() - alignAfterPopStartTime;
+    const POP_START_DELAY = 200;
+    if (elapsedSinceStart >= POP_START_DELAY) {
+      if (filteredBubbles.length > 0) {
+        const filteredCount = filteredBubbles.length;
+        const gridSize = Math.ceil(Math.sqrt(filteredCount));
+        filteredBubbles.forEach((b, index) => {
+          b.gridX = index % gridSize;
+          b.gridY = Math.floor(index / gridSize);
+        });
+        const centerGridX = Math.floor(gridSize / 2);
+        const centerGridY = Math.floor((filteredCount - 1) / gridSize / 2);
+        const centerHexX = centerGridX * HEX_SPACING * 1.5;
+        const centerHexY = centerGridY * HEX_SPACING * sqrt(3) + ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
+        if (panController) {
+          panController.snapTargetX = centerX - centerHexX;
+          panController.snapTargetY = centerY - centerHexY;
+          panController.snapCompleted = false;
+        }
+        startAnim();
+        bubbleManager.alignAfterPopStartTime = null;
+      }
+    }
+  }
+
+  // 버블 업데이트 (일반 보기)
+  if (!selectedGroup) {
+    const shouldUpdateBubbles = !IS_MOBILE || frameCount % 3 === 0;
+    
+    if (shouldUpdateBubbles) {
+      filteredBubbles.forEach((b) => {
+        if (!b.isPopping) {
+          if (b.imageIndex !== null) {
+            const hasImage = bubbleImages[b.imageIndex] && bubbleImages[b.imageIndex].width > 0;
+            if (hasImage) {
+              if (b.alpha < 0.01) b.alpha = 0.01;
+            } else {
+              if (bubbleImageLoader && 
+                  !bubbleImageLoader.isLoading(b.imageIndex) && !bubbleImageLoader.isLoaded(b.imageIndex)) {
+                requestBubbleImage(b.imageIndex);
+                if (b.alpha < 0.01) b.alpha = 0.01;
+              } else if (bubbleImageLoader && bubbleImageLoader.isLoaded(b.imageIndex)) {
+                if (b.alpha < 0.5) b.alpha = 0.5;
+              }
+            }
+          } else {
+            if (b.alpha < 0.01) b.alpha = 1.0;
+          }
+        }
+        b._isFiltered = true;
+        b.update(centerX, centerY, offsetX, offsetY, null);
+        b._isFiltered = false;
+      });
+    }
+
+    if (shouldUpdateBubbles) {
+      bubbles.filter(b => b.isPopping && b.alpha > 0.01).forEach((b) => {
+        b.update(centerX, centerY, offsetX, offsetY, null);
+      });
+    }
+
+    // 중앙 버블 찾기
+    let centerBubble = null;
+    if (shouldUpdateBubbles || !centerBubble) {
+      centerBubble = filteredBubbles.reduce((closest, b) => {
+        const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
+        const closestDist = closest ? dist(closest.pos.x, closest.pos.y, centerX, centerY) : Infinity;
+        return distToCenter < closestDist ? b : closest;
+      }, null);
+    }
+
+    // 중앙 버블 상호작용 스케일 및 투명도 조정
+    if (centerBubble) {
+      const targetInteractionScale = 1.05;
+      const interactionEase = 0.08;
+      centerBubble.interactionScale = lerp(centerBubble.interactionScale, targetInteractionScale, interactionEase);
+      
+      if (shouldUpdateBubbles) {
+        const centerBubbleX = centerBubble.pos.x;
+        const centerBubbleY = centerBubble.pos.y;
+        
+        filteredBubbles.forEach((b) => {
+          if (b === centerBubble || b.isPopping) return;
+          if (b.imageIndex !== null) {
+            const hasImage = bubbleImages[b.imageIndex] && bubbleImages[b.imageIndex].width > 0;
+            if (!hasImage) return;
+          }
+          
+          const distToCenter = dist(b.pos.x, b.pos.y, centerBubbleX, centerBubbleY);
+          let targetAlpha;
+          if (distToCenter <= CENTER_INFLUENCE_RADIUS) {
+            targetAlpha = 1.0;
+          } else if (distToCenter >= ALPHA_FADE_RADIUS) {
+            targetAlpha = MIN_ALPHA;
+          } else {
+            const fadeRange = ALPHA_FADE_RADIUS - CENTER_INFLUENCE_RADIUS;
+            const fadeProgress = (distToCenter - CENTER_INFLUENCE_RADIUS) / fadeRange;
+            targetAlpha = lerp(1.0, MIN_ALPHA, fadeProgress);
+          }
+          b.alpha = lerp(b.alpha, targetAlpha, 0.12);
+        });
+      }
+      centerBubble.alpha = 1.0;
+    }
+  }
+
+  // orbitInfoAlpha 업데이트
+  const shouldShowInfo = selectedOrbitBubble && hasTagFilter && !isOrbitInfoFadingOut;
+  if (shouldShowInfo) {
+    orbitInfoAlpha = lerp(orbitInfoAlpha, 1.0, 0.15);
+  } else if (selectedOrbitBubble) {
+    orbitInfoAlpha = lerp(orbitInfoAlpha, 0.0, 0.15);
+    if (orbitInfoAlpha < 0.01) {
+      selectedOrbitBubble = null;
+      orbitInfoAlpha = 0.0;
+      isOrbitInfoFadingOut = false;
+    }
+  } else {
+    orbitInfoAlpha = lerp(orbitInfoAlpha, 0.0, 0.15);
+    isOrbitInfoFadingOut = false;
+  }
+}
+
+// 렌더링 함수 (그리기만 수행)
+function renderScene() {
+  // 배경 그리기
+  if (graphicsManager) {
+    graphicsManager.drawBackground();
+  } else {
+  if (!bgBuffer) {
+      if (resourceManager) {
+        bgBuffer = resourceManager.getOrUpdateBuffer('bg', width, height);
+      } else {
+    bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
+      }
+    bgBuffer.background(BG_COLOR);
+  }
+  image(bgBuffer, 0, 0);
+  }
+
+  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 4 === 0;
+  
+  // 상태 변수 추출
+  const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
+  const selectedGroup = uiStateManager ? uiStateManager.selectedGroup : null;
+  const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
+  const bubbles = bubbleManager?.bubbles ?? [];
+  const filterState = ensureFilteredBubblesState();
+  const hasTagFilter = filterState.hasTagFilter;
+  const filteredBubbles = filterState.filteredBubbles;
+  const { centerX, centerY } = getBubbleAreaCenter();
+  const offsetX = panController?.offsetX ?? 0;
+  const offsetY = panController?.offsetY ?? 0;
+  const isDragging = panController?.isDragging ?? false;
+  const snapTargetX = panController?.snapTargetX ?? null;
+  const snapTargetY = panController?.snapTargetY ?? null;
+  const panVelocityX = panController?.panVelocityX ?? 0;
+  const panVelocityY = panController?.panVelocityY ?? 0;
+  const showToggles = uiStateManager?.showToggles ?? false;
+
+  // 중앙 버블 찾기 (렌더링용)
+  let centerBubble = null;
+  if (!selectedGroup) {
+    centerBubble = filteredBubbles.reduce((closest, b) => {
+      const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
+      const closestDist = closest ? dist(closest.pos.x, closest.pos.y, centerX, centerY) : Infinity;
+      return distToCenter < closestDist ? b : closest;
+    }, null);
+  }
+
+  // 버블 그리기 (일반 보기)
+  if (!selectedGroup) {
+    // 가시 영역 버블 가져오기 (최적화)
+    const visible = bubbleManager ? bubbleManager.getVisibleBubbles(centerX, centerY, centerBubble) : [];
+    visible.forEach(b => b.draw());
+
+    // 중앙 버블 그리기
+    if (centerBubble) {
+      const originalRadius = centerBubble.r;
+      let centerPulseScale = 1.0;
+      if (!ANIMATION_CONFIG.enableBreathAnim && ANIMATION_CONFIG.enableCenterPulse) {
+        const t = millis() * 0.001;
+        centerPulseScale = 1 + 0.03 * Math.sin(t * 1.5);
+        centerBubble.r = originalRadius * centerPulseScale;
+      }
+      drawCenterBubbleImage(centerBubble);
+      if (
+        ANIMATION_CONFIG.enableLightEffect &&
+        centerBubble.r > 60 &&
+        frameCount % ANIMATION_CONFIG.lightEffectInterval === 0
+      ) {
+        drawBubbleLightEffect(centerBubble);
+      }
+      drawCenterBubbleCap(centerBubble);
+      centerBubble.r = originalRadius;
+      startAnim();
+    } else {
+      const showModal = uiStateManager ? uiStateManager.showModal : false;
+      if (
+        ANIMATION_CONFIG.allowIdlePause &&
+        snapTargetX === null &&
+        snapTargetY === null &&
+        abs(panVelocityX) < 0.1 &&
+        abs(panVelocityY) < 0.1 &&
+        !isDragging &&
+        !showModal
+      ) {
+        stopAnim();
+      } else if (showModal || !ANIMATION_CONFIG.allowIdlePause) {
+        startAnim();
+      }
+    }
+  }
+
+  // 태그 필터링된 상태나 중간 단계 화면일 때는 애니메이션 계속 실행
+  if (hasTagFilter || showGroupView) {
+    startAnim();
+  }
+
+  // 이미지 로딩 체크 (무거운 작업)
+  if (shouldRunHeavyPass) {
+    queueVisibleBubbleImages();
+  }
+
+  // 비네팅 효과 (캐시 사용)
+  if (shouldRunHeavyPass) {
+    if (graphicsManager) {
+      graphicsManager.drawVignette();
+    } else {
+      vignette(); // 레거시 fallback
+    }
+  }
+
+  // 오빗 버블 정보 표시
+  if (selectedOrbitBubble && orbitInfoAlpha > 0.01) {
+    const bubblePos = orbitBubblePositions.find(p => p.bubble === selectedOrbitBubble);
+    if (bubblePos) {
+      drawOrbitBubbleInfo(selectedOrbitBubble, bubblePos.x, bubblePos.y, bubblePos.r);
+    } else if (selectedOrbitBubble.pos) {
+      drawOrbitBubbleInfo(selectedOrbitBubble, selectedOrbitBubble.pos.x, selectedOrbitBubble.pos.y, selectedOrbitBubble.r);
+    }
+  }
+
+  // 중간 단계 화면 표시
+  let bubblesAbove = [];
+  if (selectedGroup) {
+    if (hasTagFilter) {
+      bubblesAbove = drawTagFilteredBubbles(selectedTag, selectedGroup) || [];
+    }
+    drawGroupView(selectedGroup);
+    bubblesAbove.forEach(({ bubble, x, y }) => {
+      bubble.drawAt(x, y);
+    });
+  }
+
+  // 토글 오버레이
+  if (showToggles) {
+    push();
+    fill(0, 0, 0, 180);
+    noStroke();
+    rect(0, 0, width, height);
+    pop();
+  }
+
+  // UI 그리기
+  drawNavBar();
+  drawSearchBar();
+  if (showToggles) {
+    drawToggles();
+  }
+
+  if (centerBubble && !showGroupView && !showToggles) {
+    drawCenterBubbleInfo(centerBubble);
+  }
+}
+
 function draw() {
   // 페이지가 보이지 않으면 렌더링 중단
   if (!isPageVisible) {
@@ -2434,36 +4293,14 @@ function draw() {
     return;
   }
 
-  const now = millis();
+  // 1. 상태 업데이트 (데이터 변경)
+  updateState();
 
-  if (!resetInProgress && now - lastResetTime > RESET_INTERVAL_MS) {
-    softReset();
-    lastResetTime = now;
-  }
+  // 2. 렌더링 (그리기)
+  renderScene();
 
-  const isMobile = IS_MOBILE;
-  
-  // 주기적 메모리 정리 (60초마다)
-  if (now - lastMemoryCleanup > MEMORY_CLEANUP_INTERVAL) {
-    // activePointers 정리 (오래된 항목 제거)
-    if (activePointers.size > 10) {
-      activePointers.clear(); // 비정상적으로 많은 경우 초기화
-    }
-    
-    lastMemoryCleanup = now;
-  }
-  
-  // 배경 그리기 (배경 버퍼가 항상 존재하도록 보장하여 깜빡임 방지)
-  if (!bgBuffer) {
-    // 배경 버퍼가 없으면 즉시 생성 (한 번만)
-    bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
-    bgBuffer.background(BG_COLOR);
-  }
-  // 배경 버퍼를 사용하여 깜빡임 없이 렌더링
-  image(bgBuffer, 0, 0);
-
-  // 태블릿에서는 더 많은 프레임 스킵으로 CPU/GPU 부담 감소
-  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 3 === 0;
+  // 태블릿에서는 더 많은 프레임 스킵으로 CPU/GPU 부담 감소 (프레임레이트는 유지)
+  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 4 === 0;
 
   // 중간 단계 화면 상태 확인 (먼저 선언)
   const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
@@ -2481,27 +4318,27 @@ function draw() {
 
   // 버블 회전 각도 업데이트 (태그 필터링 또는 그룹 뷰가 활성화된 경우)
   if (hasTagFilter || showGroupView) {
-    if (!bubbleRotationState.isDragging) {
+    if (!RotationController.state.isDragging) {
       // 자동 회전
-      bubbleRotationState.rotationAngle += bubbleRotationState.autoSpeed;
+      RotationController.state.rotationAngle += RotationController.state.autoSpeed;
       
       // 관성 회전
-      bubbleRotationState.rotationAngle += bubbleRotationState.angularVelocity;
-      bubbleRotationState.angularVelocity *= 0.92;
-      if (Math.abs(bubbleRotationState.angularVelocity) < 0.0001) {
-        bubbleRotationState.angularVelocity = 0;
+      RotationController.state.rotationAngle += RotationController.state.angularVelocity;
+      RotationController.state.angularVelocity *= 0.92;
+      if (Math.abs(RotationController.state.angularVelocity) < 0.0001) {
+        RotationController.state.angularVelocity = 0;
       }
     }
     
     // 각도 정규화 (오버플로우 방지) - 2π로 모듈로 연산하여 0~2π 범위로 유지
     const TWO_PI = Math.PI * 2;
-    bubbleRotationState.rotationAngle = ((bubbleRotationState.rotationAngle % TWO_PI) + TWO_PI) % TWO_PI;
+    RotationController.state.rotationAngle = ((RotationController.state.rotationAngle % TWO_PI) + TWO_PI) % TWO_PI;
   } else {
     // 태그/그룹 뷰가 아닐 때는 회전 상태 초기화
-    bubbleRotationState.rotationAngle = 0;
-    bubbleRotationState.angularVelocity = 0;
-    bubbleRotationState.isDragging = false;
-    bubbleRotationState.didDrag = false;
+    RotationController.state.rotationAngle = 0;
+    RotationController.state.angularVelocity = 0;
+    RotationController.state.isDragging = false;
+    RotationController.state.didDrag = false;
   }
 
   // 패닝 애니메이션 업데이트 (클래스 사용) - 중간 단계에서도 활성화
@@ -2628,8 +4465,8 @@ function draw() {
   } else {
     // 일반 버블 그리기 (전체보기)
     // 버블 업데이트 및 그리기 (화면에 보이는 것만)
-    // 태블릿에서는 업데이트 빈도를 줄여서 CPU/GPU 부담 감소
-    const shouldUpdateBubbles = !IS_MOBILE || frameCount % 2 === 0;
+    // 태블릿에서는 업데이트 빈도를 더 줄여서 CPU/GPU 부담 감소 (프레임레이트는 유지)
+    const shouldUpdateBubbles = !IS_MOBILE || frameCount % 3 === 0;
     
     if (shouldUpdateBubbles) {
       // 먼저 모든 버블 업데이트하여 중앙 버블 찾기 (1차 업데이트)
@@ -2644,14 +4481,14 @@ function draw() {
               // 거리 기반 투명도는 중앙 버블 찾은 후 적용되므로 여기서는 최소값만 설정
             } else {
               // 아직 로딩 시도조차 안 했으면 로딩 시도
-              if (!imageLoading.has(b.imageIndex) && !imageLoaded.has(b.imageIndex)) {
+              if (bubbleImageLoader && 
+                  !bubbleImageLoader.isLoading(b.imageIndex) && !bubbleImageLoader.isLoaded(b.imageIndex)) {
                 requestBubbleImage(b.imageIndex);
                 // 로딩 중인 버블도 최소한 살짝 보이게 (완전 투명 X)
                 if (b.alpha < 0.01) b.alpha = 0.01;
               }
-              // 이미 imageLoaded에 있다 = 실패했거나, 더 이상 시도 안 할 상태
-              // (실패한 경우는 error 콜백에서 imageIndex를 null로 바꿔주므로 여기 올 일이 거의 없음)
-              else if (imageLoaded.has(b.imageIndex)) {
+              // 이미 로드 완료된 이미지인 경우 (실패한 경우는 error 콜백에서 imageIndex를 null로 바꿔주므로 여기 올 일이 거의 없음)
+              else if (bubbleImageLoader && bubbleImageLoader.isLoaded(b.imageIndex)) {
                 // 방어적으로 alpha를 올려줌 (실패한 버블은 이미 imageIndex=null로 바뀌었을 것)
                 if (b.alpha < 0.5) b.alpha = 0.5;
               }
@@ -2899,8 +4736,12 @@ function draw() {
   }
 
   // 검색창과 네비게이션 바를 가장 위에 그리기 (버블 위에 표시)
-  drawNavBar();
-  drawSearchBar();
+  UIRenderer.drawNavBar();
+  if (uiRenderer) {
+    uiRenderer.drawSearchBar();
+  } else {
+    drawSearchBar(); // 레거시 fallback
+  }
 
   // 토글 표시
   if (showToggles) {
@@ -2914,25 +4755,59 @@ function draw() {
 }
 
 function windowResized() {
-  resizeCanvas(windowWidth, windowHeight);
+  const currentW = windowWidth;
+  const currentH = windowHeight;
+  
+  // 미세 리사이즈 무시 (모바일 주소창 등으로 인한 빈번한 리사이즈 방지)
+  const widthDiff = Math.abs(currentW - lastWindowSize.w);
+  const heightDiff = Math.abs(currentH - lastWindowSize.h);
+  
+  if (widthDiff < MIN_RESIZE_THRESHOLD && heightDiff < MIN_RESIZE_THRESHOLD && lastWindowSize.w > 0) {
+    // 미세한 변화는 무시하고 캔버스만 조정
+    resizeCanvas(currentW, currentH);
+    return;
+  }
+  
+  lastWindowSize = { w: currentW, h: currentH };
+  
+  resizeCanvas(currentW, currentH);
   rebuildWorldMetrics(); // 월드 메트릭스 재계산
-  redrawBackgroundBuffer(); // 배경 버퍼 재생성
+  
+  // LayoutManager 메트릭 재계산 (반응형 수치 캐싱)
+  LayoutManager.calculateMetrics();
+  
+  // ResourceManager를 사용하여 버퍼 재생성 (메모리 누수 방지)
+  if (resourceManager) {
+    bgBuffer = resourceManager.getOrUpdateBuffer('bg', width, height);
+    redrawBackgroundBuffer();
+  } else {
+    redrawBackgroundBuffer(); // 레거시 fallback
+  }
+  
+  // GraphicsManager 비네팅 버퍼 무효화 (재생성 필요)
+  if (graphicsManager) {
+    graphicsManager.lastVignetteSize = { w: 0, h: 0 };
+  }
+  
+  // TagRenderer 캐시 무효화 (태그 크기가 변경될 수 있음)
+  TagRenderer.invalidateCache();
+  
   buildBubbles(); // 버블 재생성
   initToggleButtons(); // 토글 버튼 재초기화
 
-  // 네비게이션 바 고해상도 버퍼 재생성 (화면 크기 변경 시)
+  // 네비게이션 바 고해상도 버퍼 재생성 (ResourceManager 사용)
   if (navigationBar) {
-    // 반응형 스케일 계산 (헬퍼 함수 사용)
-    const responsiveScale = getResponsiveScale();
-
+    const responsiveScale = LayoutManager.getScale();
     const NAV_W = navigationBar.width * 0.455 * responsiveScale;
     const NAV_H = navigationBar.height * 0.455 * responsiveScale;
     const scaleFactor = 2;
-    navBarBuffer = recreateGraphicsBuffer(
-      navBarBuffer,
-      NAV_W * scaleFactor,
-      NAV_H * scaleFactor
-    );
+    
+    if (resourceManager) {
+      navBarBuffer = resourceManager.getOrUpdateBuffer('navBar', NAV_W * scaleFactor, NAV_H * scaleFactor);
+    } else {
+      navBarBuffer = recreateGraphicsBuffer(navBarBuffer, NAV_W * scaleFactor, NAV_H * scaleFactor);
+    }
+    
     navBarBuffer.imageMode(CORNER);
     navBarBuffer.image(
       navigationBar,
@@ -2942,76 +4817,40 @@ function windowResized() {
       NAV_H * scaleFactor
     );
   }
-
 }
 
 // ---------- UTILS ----------
-// 반응형 스케일 계산 헬퍼 함수
+// 하위 호환성을 위한 함수 래퍼
 function getResponsiveScale() {
-  const baseWidth = 1920;
-  const baseHeight = 1080;
-  const scaleX = width / baseWidth;
-  const scaleY = height / baseHeight;
-  const scale = Math.min(scaleX, scaleY);
-  const minScale = 0.5;
-  const maxScale = 1.5;
-  return Math.max(minScale, Math.min(maxScale, scale));
+  return LayoutManager.getScale();
 }
 
-// 검색창 메트릭 헬퍼 함수
 function getSearchMetrics() {
-  const responsiveScale = getResponsiveScale();
-  const NAV_Y = 20;
-  const NAV_H = navigationBar ? navigationBar.height * 0.315 * responsiveScale : 64;
-  const NAV_BOTTOM = NAV_Y + NAV_H;
-  const W = width * SEARCH_WIDTH_RATIO * responsiveScale * 1.3;
-  const H = 75 * SEARCH_SCALE * responsiveScale * 1.3;
-  const X = (width - W) / 2;
-  const Y = NAV_BOTTOM + SEARCH_NAV_GAP * responsiveScale;
-  return { W, H, X, Y, bottom: Y + H };
+  return LayoutManager.getSearchMetrics();
 }
 
-// 버블 영역 중심 계산 헬퍼 (중복 제거)
 function getBubbleAreaCenter(offsetY = -70) {
-  const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
-  const BUBBLE_AREA_TOP = SEARCH_BOTTOM + 10;
-  const BUBBLE_AREA_BOTTOM = height - 10;
-  const BUBBLE_AREA_CENTER = BUBBLE_AREA_TOP + (BUBBLE_AREA_BOTTOM - BUBBLE_AREA_TOP) * 0.5;
-  return {
-    centerX: width * CENTER_X_RATIO,
-    centerY: BUBBLE_AREA_CENTER + offsetY,
-    BUBBLE_AREA_CENTER,
-  };
+  return LayoutManager.getBubbleAreaCenter(offsetY);
 }
 
-// 마이크 아이콘 위치/크기 계산 헬퍼 (중복 제거)
 function getMicIconRect() {
-  const responsiveScale = getResponsiveScale();
-  const { W, H, X, Y } = getSearchMetrics();
-
-  const iconSize = 40 * SEARCH_SCALE * responsiveScale * 1.5 * 1.3 * 4 * 0.7;
-  const iconX = X + (W - iconSize) / 2;
-  const iconY = Y + (H - iconSize) / 2 + 20;
-  const iconCenterX = iconX + iconSize / 2;
-  const iconCenterY = iconY + iconSize / 2;
-  const iconRadius = iconSize / 2;
-
-  return { iconX, iconY, iconSize, iconCenterX, iconCenterY, iconRadius };
+  return LayoutManager.getMicIconRect();
 }
 
-// 태그 필터링된 버블 클릭 감지 함수
-function checkOrbitBubbleClick(x, y) {
+// 상호작용 관리자 클래스 (클릭 감지 최적화)
+class InteractionManager {
+  // 디버그 모드 (전시 환경에서는 false)
+  static DEBUG_MODE = false;
+
+  // 태그 필터링된 버블 클릭 감지
+  static checkOrbitBubbleClick(x, y) {
   if (orbitBubblePositions.length === 0) return null;
   
-  // 클릭 위치에서 가장 가까운 버블 찾기
   let clickedBubble = null;
   let minDist = Infinity;
   
   orbitBubblePositions.forEach(({ bubble, x: bubbleX, y: bubbleY, r }) => {
-    // 클릭 위치와 버블 중심 사이의 거리
     const distToBubble = dist(x, y, bubbleX, bubbleY);
-    
-    // 버블 반지름 내에 클릭이 있는지 확인
     if (distToBubble <= r && distToBubble < minDist) {
       minDist = distToBubble;
       clickedBubble = bubble;
@@ -3021,8 +4860,8 @@ function checkOrbitBubbleClick(x, y) {
   return clickedBubble;
 }
 
-// 버블 클릭 감지 함수
-function checkBubbleClick(x, y) {
+  // 버블 클릭 감지 (최적화: b.update() 호출 제거)
+  static checkBubbleClick(x, y) {
   if (!bubbleManager) return;
   
   const bubbles = bubbleManager.bubbles;
@@ -3036,18 +4875,8 @@ function checkBubbleClick(x, y) {
   // 중간 단계 화면이나 태그 필터링된 상태에서는 버블 클릭 감지 안 함
   if (showGroupView || selectedTag) return;
   
-  // 중심 위치 계산 (snapToCenterBubble과 동일)
-  const { centerX, centerY } = getBubbleAreaCenter();
-  
-  const offsetX = panController ? panController.offsetX : 0;
-  const offsetY = panController ? panController.offsetY : 0;
-  
-  // 모든 버블 업데이트하여 현재 화면 위치 계산
-  bubblesToCheck.forEach((b) => {
-    b.update(centerX, centerY, offsetX, offsetY, null);
-  });
-  
   // 클릭 위치에서 가장 가까운 버블 찾기
+    // 주의: b.update()를 호출하지 않고, 이미 계산된 b.pos를 사용
   let clickedBubble = null;
   let minDist = Infinity;
   
@@ -3055,7 +4884,7 @@ function checkBubbleClick(x, y) {
     // 버블이 화면에 보이는지 확인
     if (b.alpha < 0.01) return;
     
-    // 클릭 위치와 버블 중심 사이의 거리
+      // 클릭 위치와 버블 중심 사이의 거리 (이미 계산된 pos 사용)
     const distToBubble = dist(x, y, b.pos.x, b.pos.y);
     
     // 버블 반지름 내에 클릭이 있는지 확인
@@ -3065,34 +4894,26 @@ function checkBubbleClick(x, y) {
     }
   });
   
-  // 클릭된 버블 정보 출력
-  if (clickedBubble) {
+    // 디버그 모드일 때만 로그 출력 (메모리 누수 방지)
+    if (clickedBubble && this.DEBUG_MODE) {
     const bubbleInfo = clickedBubble.imageIndex !== null && bubbleData && bubbleData[clickedBubble.imageIndex]
       ? bubbleData[clickedBubble.imageIndex]
       : null;
     
     log("=== 버블 클릭 감지 ===");
     log("버블 인덱스:", clickedBubble.imageIndex);
-    log("버블 위치:", { x: clickedBubble.pos.x, y: clickedBubble.pos.y });
-    log("버블 반지름:", clickedBubble.r);
-    log("클릭 위치:", { x, y });
-    log("클릭 거리:", minDist);
     if (bubbleInfo) {
       log("버블 제목:", bubbleInfo.title);
-      log("버블 태그:", bubbleInfo.tags);
-      log("버블 속성:", bubbleInfo.attributes);
-    } else {
-      log("버블 데이터: 없음 (imageIndex:", clickedBubble.imageIndex, ")");
     }
     log("====================");
   }
 }
 
-// 중앙 버블을 화면 중앙에 고정하는 함수 (타겟만 설정)
-function snapToCenterBubble() {
-  const { centerX, centerY } = getBubbleAreaCenter();
+  // 중앙 버블을 화면 중앙에 고정 (타겟만 설정)
+  static snapToCenterBubble() {
+    const { centerX, centerY } = LayoutManager.getBubbleAreaCenter();
 
-  // 필터링된 버블만 사용 (없으면 모든 버블 사용)
+    // 필터링된 버블만 사용
   const currentFilteredBubbles = bubbleManager
     ? bubbleManager.currentFilteredBubbles
     : [];
@@ -3107,7 +4928,7 @@ function snapToCenterBubble() {
     b.update(centerX, centerY, offsetX, offsetY, null);
   });
 
-  // 중앙에 가장 가까운 버블 찾기 (필터링된 버블 중에서)
+    // 중앙에 가장 가까운 버블 찾기
   let centerBubble = null;
   let minDistToCenter = Infinity;
   bubblesToUse.forEach((b) => {
@@ -3120,19 +4941,16 @@ function snapToCenterBubble() {
 
   // 중앙 버블이 있으면 그 버블이 화면 중앙에 오도록 타겟 오프셋 계산
   if (centerBubble) {
-    // 피시아이 효과를 고려하여 반복적으로 정확한 오프셋 계산
     let hexX = centerBubble.gridX * HEX_SPACING * 1.5;
     let hexY =
       centerBubble.gridY * HEX_SPACING * sqrt(3) +
       ((centerBubble.gridX % 2) * HEX_SPACING * sqrt(3)) / 2;
 
-    // 현재 오프셋을 기준으로 타겟 오프셋 계산
     let targetOffsetX = offsetX;
     let targetOffsetY = offsetY;
 
     // 반복적으로 조정하여 정확한 위치 찾기 (최대 5회)
     for (let iter = 0; iter < 5; iter++) {
-      // 타겟 오프셋으로 버블 위치 계산
       const worldWidth = WORLD_W;
       const worldHeight = WORLD_H;
       let worldX = hexX + targetOffsetX;
@@ -3180,40 +4998,300 @@ function snapToCenterBubble() {
       targetOffsetY += reverseScreenY;
     }
 
-    // 타겟 오프셋 설정 (부드럽게 이동하도록)
+      // 타겟 오프셋 설정
     if (panController) {
       panController.snapTargetX = targetOffsetX;
       panController.snapTargetY = targetOffsetY;
+        // 애니메이션이 필요할 때만 시작
+        if (panController.snapTargetX !== offsetX || panController.snapTargetY !== offsetY) {
+          startAnim();
+        }
+      }
     }
-
-    // 애니메이션 시작
-    startAnim();
   }
 }
 
+// 하위 호환성을 위한 함수 래퍼
+function checkOrbitBubbleClick(x, y) {
+  return InteractionManager.checkOrbitBubbleClick(x, y);
+}
+
+function checkBubbleClick(x, y) {
+  InteractionManager.checkBubbleClick(x, y);
+}
+
+function snapToCenterBubble() {
+  InteractionManager.snapToCenterBubble();
+}
+
+// 하위 호환성을 위한 함수 래퍼
 function buildBubbles() {
   if (bubbleManager) {
-    bubbleManager.build();
+    bubbleManager.rebuild();
+  }
+}
 
-    // 초기 오프셋을 중앙 버블이 화면 중앙에 오도록 설정
-    const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
-    const centerGridX = Math.floor(gridSize / 2);
-    const centerGridY = Math.floor(gridSize / 2);
-    const centerHexX = centerGridX * HEX_SPACING * 1.5;
-    const centerHexY =
-      centerGridY * HEX_SPACING * sqrt(3) +
-      ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
+// 입력 컨트롤러 클래스 (포인터 이벤트 핸들러 통합)
+class InputController {
+  static longPressState = {
+    pressedBubble: null,
+    pressStartTime: null,
+    isPressing: false
+  };
 
+  static lastInteractionTime = 0;
+  static IDLE_TIMEOUT = 300000; // 5분 (밀리초)
+
+  // UI 상호작용 처리
+  static _handleUIInteraction(x, y) {
+    // 검색창 클릭 확인 (캐시된 메트릭 사용)
+    const isSearchBarClick = this.checkSearchBarClick(x, y);
+    
+    if (isSearchBarClick) {
+      if (uiStateManager && uiStateManager.selectedToggles.length > 0) {
+        toggleSelect(0);
+      }
+      if (uiStateManager) {
+        uiStateManager.showToggles = true;
+        if (uiStateManager.showGroupView) {
+          uiStateManager.backToMainView();
+        }
+      }
+      this.lastInteractionTime = millis();
+      return true;
+    }
+
+    // 중간 단계 화면 클릭 처리
+    if (uiStateManager && uiStateManager.showGroupView && uiStateManager.selectedGroup) {
+      const clickedTag = checkTagClick(x, y, uiStateManager.selectedGroup);
+      if (clickedTag) {
+        const isSameTag = uiStateManager.selectedTag === clickedTag;
+        if (isSameTag) {
+          uiStateManager.selectedTag = null;
+          resetOrbitBubbleInfo();
+        } else {
+          uiStateManager.selectTag(clickedTag);
+          uiStateManager.selectedToggles = [uiStateManager.selectedGroup];
+        }
+        this.lastInteractionTime = millis();
+        return true;
+      }
+      if (!uiStateManager.selectedTag) {
+        return true;
+      }
+    }
+
+    // 토글 클릭 확인
+    if (uiStateManager && uiStateManager.showToggles) {
+      const clickedToggle = this.checkToggleClick(x, y);
+      if (clickedToggle !== null) {
+        toggleSelect(clickedToggle);
+        this.lastInteractionTime = millis();
+        return true;
+      }
+      if (!isSearchBarClick) {
+        uiStateManager.showToggles = false;
+      }
+    }
+
+    return false;
+  }
+
+  // 버블 상호작용 처리
+  static _handleBubbleInteraction(x, y) {
+    const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
+    const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
+    
+    if (showGroupView || selectedTag) {
+      if (handleRotationStart(x, y)) {
+        return false; // 회전 제어 시작
+      }
+      
+      const hoveredBubble = checkOrbitBubbleClick(x, y);
+      if (hoveredBubble) {
+        this.longPressState.pressedBubble = hoveredBubble;
+        this.longPressState.pressStartTime = millis();
+        this.longPressState.isPressing = false;
+      }
+    }
+    
+    return true;
+  }
+
+  // 포인터 다운 처리
+  static handlePointerDown(x, y, pointerId) {
+    // UI 상호작용 처리
+    if (this._handleUIInteraction(x, y)) {
+      startAnim();
+      return true;
+    }
+
+    // 버블 상호작용 처리
+    const canPan = this._handleBubbleInteraction(x, y);
+    if (!canPan) {
+      return false;
+    }
+
+    // 패닝 시작
     if (panController) {
-      panController.offsetX = width * CENTER_X_RATIO - centerHexX;
-      panController.offsetY = height * CENTER_Y_RATIO - centerHexY;
+      panController.startDrag(x, y);
+    }
+
+    this.lastInteractionTime = millis();
+    return false;
+  }
+
+  // 포인터 이동 처리
+  static handlePointerMove(x, y, pointerId) {
+    const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
+    const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
+    
+    // 버블 회전 제어
+    if (RotationController.state.isDragging) {
+      handleRotationDrag(x, y);
+      this.lastInteractionTime = millis();
+      return;
+    }
+    
+    // 패닝 업데이트
+    if (panController && panController.isDragging) {
+      panController.updateDrag(x, y);
+      this.lastInteractionTime = millis();
+    }
+    
+    // 길게 누르기 상태 업데이트
+    if (this.longPressState.pressedBubble && this.longPressState.pressStartTime) {
+      const elapsed = millis() - this.longPressState.pressStartTime;
+      if (elapsed > 300 && !this.longPressState.isPressing) {
+        this.longPressState.isPressing = true;
+      }
     }
   }
+
+  // 포인터 업 처리
+  static handlePointerUp(x, y, pointerId) {
+    // 버블 회전 제어 종료
+    if (RotationController.state.isDragging) {
+      const didRotationDrag = RotationController.state.didDrag;
+      handleRotationEnd();
+      if (didRotationDrag) {
+        this.lastInteractionTime = millis();
+        return;
+      }
+    }
+    
+    // 카테고리/태그 선택 시 버블 클릭 감지
+    const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
+    const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
+    const selectedGroup = uiStateManager ? uiStateManager.selectedGroup : null;
+    
+    if (showGroupView || selectedTag) {
+      const clickedBubble = checkOrbitBubbleClick(x, y);
+      if (clickedBubble) {
+        if (selectedOrbitBubble === clickedBubble) {
+          isOrbitInfoFadingOut = true;
+        } else {
+          selectedOrbitBubble = clickedBubble;
+          orbitInfoAlpha = 0.0;
+          isOrbitInfoFadingOut = false;
+        }
+        this.lastInteractionTime = millis();
+        return;
+      }
+    }
+    
+    // 버블 클릭 감지
+    checkBubbleClick(x, y);
+    
+    if (!panController || !panController.isDragging) {
+      this.lastInteractionTime = millis();
+      return;
+    }
+
+    panController.endDrag();
+    snapToCenterBubble();
+    this.lastInteractionTime = millis();
+  }
+
+  // 유휴 모드 체크 (5분 이상 입력 없음)
+  static checkIdleMode() {
+    const now = millis();
+    const timeSinceLastInteraction = now - this.lastInteractionTime;
+    
+    if (timeSinceLastInteraction > this.IDLE_TIMEOUT && this.lastInteractionTime > 0) {
+      // 유휴 모드: 애니메이션 정지
+      if (ANIMATION_CONFIG.allowIdlePause) {
+        stopAnim();
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // 검색창 클릭 확인 (마이크 이미지 영역만) - 캐시된 메트릭 사용
+  static checkSearchBarClick(x, y) {
+    const micIcon = LayoutManager.getMicIconRect();
+    if (!micIcon) return false;
+
+    const { iconX, iconY, iconSize } = micIcon;
+
+    // 클릭 영역을 실제 이미지보다 약간 작게 설정 (오클릭 방지)
+    const clickPadding = iconSize * 0.1; // 10% 여백 제거
+    const clickSize = iconSize - clickPadding * 2;
+    const clickX = iconX + clickPadding;
+    const clickY = iconY + clickPadding;
+
+    // 마이크 이미지 영역만 클릭 가능하도록 제한 (조정된 크기)
+    return (
+      x >= clickX && x <= clickX + clickSize && y >= clickY && y <= clickY + clickSize
+    );
+  }
+
+  // 토글 클릭 확인
+  static checkToggleClick(x, y) {
+    if (!uiStateManager) return null;
+    
+    const showToggles = uiStateManager.showToggles;
+    if (!showToggles) return null;
+    
+    // 버튼이 초기화되지 않았으면 초기화
+    if (ToggleManager.buttons.length === 0) {
+      ToggleManager.init();
+    }
+    
+    // 토글 클릭 확인
+    for (let i = 0; i < ToggleManager.buttons.length; i++) {
+      const button = ToggleManager.buttons[i];
+      if (i === 0) {
+        // 전체보기는 높이를 40px로 제한
+        if (x >= button.x && x <= button.x + button.width &&
+            y >= button.y && y <= button.y + 40) {
+          return i;
+        }
+      } else if (button.contains(x, y)) {
+        return i;
+      }
+    }
+    return null;
+  }
+}
+
+// 하위 호환성을 위한 함수 래퍼
+function handlePointerDown(x, y, pointerId) {
+  return InputController.handlePointerDown(x, y, pointerId);
+}
+
+function handlePointerMove(x, y, pointerId) {
+  InputController.handlePointerMove(x, y, pointerId);
+}
+
+function handlePointerUp(x, y, pointerId) {
+  InputController.handlePointerUp(x, y, pointerId);
 }
 
 // ---------- POINTER EVENTS (통합 입력 처리) ----------
-// 포인터 이벤트 핸들러 (마우스, 터치, 펜 모두 지원)
-function handlePointerDown(x, y, pointerId) {
+// 레거시 함수 (하위 호환성)
+function handlePointerDownLegacy(x, y, pointerId) {
   // 검색창 클릭 확인 (모든 씬에서 항상 먼저 확인 - mike 버튼은 항상 작동)
   const isSearchBarClick = checkSearchBarClick(x, y);
   
@@ -3292,9 +5370,9 @@ function handlePointerDown(x, y, pointerId) {
     const hoveredBubble = checkOrbitBubbleClick(x, y);
     if (hoveredBubble) {
       // 버블을 길게 누르기 시작
-      longPressState.pressedBubble = hoveredBubble;
-      longPressState.pressStartTime = millis();
-      longPressState.isPressing = false;
+        InputController.longPressState.pressedBubble = hoveredBubble;
+        InputController.longPressState.pressStartTime = millis();
+        InputController.longPressState.isPressing = false;
     }
   }
   
@@ -3310,7 +5388,7 @@ function handlePointerMove(x, y, pointerId) {
   const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
   
   // 버블 회전 제어가 활성화되어 있으면 회전 처리
-  if (bubbleRotationState.isDragging) {
+  if (RotationController.state.isDragging) {
     startAnim(); // 애니메이션 시작
     handleRotationDrag(x, y);
     return; // 회전 제어 중이면 패닝은 처리하지 않음
@@ -3323,19 +5401,19 @@ function handlePointerMove(x, y, pointerId) {
   }
   
   // 길게 누르기 상태 업데이트
-  if (longPressState.pressedBubble && longPressState.pressStartTime) {
-    const elapsed = millis() - longPressState.pressStartTime;
-    if (elapsed > 300 && !longPressState.isPressing) {
+  if (InputController.longPressState.pressedBubble && InputController.longPressState.pressStartTime) {
+    const elapsed = millis() - InputController.longPressState.pressStartTime;
+    if (elapsed > 300 && !InputController.longPressState.isPressing) {
       // 300ms 이상 누르고 있으면 정보 표시
-      longPressState.isPressing = true;
+      InputController.longPressState.isPressing = true;
     }
   }
 }
 
 function handlePointerUp(x, y, pointerId) {
   // 버블 회전 제어 종료
-  if (bubbleRotationState.isDragging) {
-    const didRotationDrag = bubbleRotationState.didDrag;
+  if (RotationController.state.isDragging) {
+    const didRotationDrag = RotationController.state.didDrag;
     handleRotationEnd();
     if (didRotationDrag) {
       return; // 실제 드래그가 있었다면 클릭 처리 중단
@@ -3380,54 +5458,19 @@ function handlePointerUp(x, y, pointerId) {
   // 관성은 draw()에서 처리됨
 }
 
-// ---------- UI helpers ----------
+// 하위 호환성을 위한 함수 래퍼
 function drawNavBar() {
-  const metrics = getNavMetrics();
-  if (!metrics) return;
-
-  const { BUTTON_W, BUTTON_H, NAV_W, NAV_H, Y, navBarX } = metrics;
-
-  // 캡쳐 버튼 - 왼쪽 끝
-  imageMode(CORNER);
-  image(captureButton, 0, Y, BUTTON_W, BUTTON_H);
-
-  // 워크룸 버튼 - 오른쪽 끝
-  image(workroomButton, width - BUTTON_W, Y, BUTTON_W, BUTTON_H);
-
-  // 네비게이션 바 - 중앙에 배치 (두 버튼 사이)
-  // 화질 개선: 고해상도 버퍼 사용 (setup에서 미리 생성)
-  push();
-  drawingContext.imageSmoothingEnabled = true;
-  drawingContext.imageSmoothingQuality = "high";
-  imageMode(CORNER);
-  if (navBarBuffer) {
-    // 고해상도 버퍼를 원래 크기로 축소하여 그리기
-    image(navBarBuffer, navBarX, Y, NAV_W, NAV_H);
-  } else {
-    // 버퍼가 없으면 일반 렌더링 (폴백)
-    image(navigationBar, navBarX, Y, NAV_W, NAV_H);
-  }
-  pop();
+  UIRenderer.drawNavBar();
 }
 
-// 네비게이션 바 메트릭 헬퍼 (중복 제거)
+// 하위 호환성을 위한 함수 래퍼
 function getNavMetrics() {
-  if (!captureButton || !workroomButton || !navigationBar) return null;
-  
-  const responsiveScale = getResponsiveScale();
-  const BUTTON_W = captureButton.width * 0.56 * responsiveScale;
-  const BUTTON_H = captureButton.height * 0.56 * responsiveScale;
-  const NAV_W = navigationBar.width * 0.455 * responsiveScale;
-  const NAV_H = navigationBar.height * 0.455 * responsiveScale;
-  const Y = 20;
-  const navBarX = (width - NAV_W) / 2;
-  
-  return { BUTTON_W, BUTTON_H, NAV_W, NAV_H, Y, navBarX };
+  return LayoutManager.getNavMetrics();
 }
 
 // 네비게이션 바 클릭 확인 (실제 네비게이션 바 이미지 영역만)
 function checkNavBarClick(x, y) {
-  const metrics = getNavMetrics();
+  const metrics = LayoutManager.getNavMetrics();
   if (!metrics) return false;
 
   const { BUTTON_W, BUTTON_H, NAV_W, NAV_H, Y, navBarX } = metrics;
@@ -3452,481 +5495,63 @@ function checkNavBarClick(x, y) {
   return isInNavBarArea && !isInLeftButton && !isInRightButton;
 }
 
-// 글래스모피즘 스타일 모달 그리기
+// 하위 호환성을 위한 함수 래퍼
 function drawSearchBar() {
-  const responsiveScale = getResponsiveScale();
-  const { W, H, X, Y } = getSearchMetrics();
-
-  // UI 상태 가져오기
-  const showToggles = uiStateManager ? uiStateManager.showToggles : false;
-  const selectedToggles = uiStateManager ? uiStateManager.selectedToggles : [];
-
-  // 마이크 아이콘 - 중앙에 배치 (크기 3배 * 2배 = 6배, 화질 개선)
-  if (mikeIcon) {
-    const { iconX, iconY, iconSize, iconCenterX, iconCenterY, iconRadius } = getMicIconRect();
-    imageMode(CORNER);
-
-    if (ANIMATION_CONFIG.enableMicGlow) {
-    // 마이크 아이콘 뒤에 깜빡이는 빛 효과 (펄스 효과)
-    push();
-    drawingContext.save();
-    
-    // 시간에 따른 펄스 효과 (1.5초 주기)
-    const pulseTime = (millis() / 1500) % 1; // 0~1 사이 값
-    // 부드러운 펄스: sin 함수 사용 (0~1 사이 값)
-    const pulseValue = (Math.sin(pulseTime * Math.PI * 2) + 1) / 2; // 0~1 사이 값
-    
-    // 최소 밝기와 최대 밝기 설정 (0.3 ~ 0.9)
-    const minBrightness = 0.3;
-    const maxBrightness = 0.9;
-    const pulseBrightness = lerp(minBrightness, maxBrightness, pulseValue);
-    
-    // 빛 효과 그리기 (아이콘 뒤에) - 더 좁고 하얀 빛
-    drawingContext.globalAlpha = pulseBrightness;
-    const glowRadius = iconRadius * 1.2; // 더 좁게 (1.8 -> 1.2)
-    const glowGradient = drawingContext.createRadialGradient(
-      iconCenterX,
-      iconCenterY,
-      iconRadius * 0.2,
-      iconCenterX,
-      iconCenterY,
-      glowRadius
-    );
-    // 하얀 빛으로 변경
-    glowGradient.addColorStop(0, "rgba(255, 255, 255, 1.0)");
-    glowGradient.addColorStop(0.3, "rgba(255, 255, 255, 0.6)");
-    glowGradient.addColorStop(0.6, "rgba(255, 255, 255, 0.3)");
-    glowGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-    drawingContext.fillStyle = glowGradient;
-    drawingContext.beginPath();
-    drawingContext.arc(iconCenterX, iconCenterY, glowRadius, 0, Math.PI * 2);
-    drawingContext.fill();
-    
-    drawingContext.restore();
-    pop();
-    }
-
-    // 화질 개선 설정
-    push();
-    drawingContext.save();
-    drawingContext.imageSmoothingEnabled = true;
-    drawingContext.imageSmoothingQuality = "high";
-
-    tint(255, 255, 255, 200); // rgba(255,255,255,0.78) 효과
-    image(mikeIcon, iconX, iconY, iconSize, iconSize);
-    noTint(); // tint 효과 제거
-
-    drawingContext.restore();
-    pop();
-  }
-
-  // 선택된 토글이 있으면 마이크 아래에 텍스트 표시
-  if (!showToggles) {
-    push();
-    drawingContext.save();
-    
-    // 텍스트 렌더링 품질 개선
-    drawingContext.textBaseline = "top";
-    drawingContext.textAlign = "center";
-    drawingContext.imageSmoothingEnabled = true;
-    drawingContext.imageSmoothingQuality = "high";
-    
-    noStroke();
-    textAlign(CENTER, TOP); // 가로 중앙, 세로 상단 정렬
-
-    if (pretendardFont) {
-      textFont(pretendardFont);
-    }
-
-    // 마이크 아래 텍스트 제거 (카테고리 선택 후 표시되던 텍스트 완전히 제거)
+  if (uiRenderer) {
+    uiRenderer.drawSearchBar();
   }
 }
 
-// 검색창 클릭 확인 (마이크 이미지 영역만)
+// 하위 호환성을 위한 함수 래퍼
 function checkSearchBarClick(x, y) {
-  const { iconX, iconY, iconSize } = getMicIconRect();
-
-  // 클릭 영역을 실제 이미지보다 약간 작게 설정 (오클릭 방지)
-  const clickPadding = iconSize * 0.1; // 10% 여백 제거
-  const clickSize = iconSize - clickPadding * 2;
-  const clickX = iconX + clickPadding;
-  const clickY = iconY + clickPadding;
-
-  // 마이크 이미지 영역만 클릭 가능하도록 제한 (조정된 크기)
-  return (
-    x >= clickX && x <= clickX + clickSize && y >= clickY && y <= clickY + clickSize
-  );
+  return InteractionManager.checkSearchBarClick(x, y);
 }
 
-// 토글 클릭 확인
 function checkToggleClick(x, y) {
-  const showToggles = uiStateManager ? uiStateManager.showToggles : false;
-  if (!showToggles) return null;
-  
-  // 버튼이 초기화되지 않았으면 초기화
-  if (toggleButtons.length === 0) {
-    initToggleButtons();
-  }
-  
-  // 토글 클릭 확인
-  for (let i = 0; i < toggleButtons.length; i++) {
-    const button = toggleButtons[i];
-    if (i === 0) {
-      // 전체보기는 높이를 40px로 제한
-      if (x >= button.x && x <= button.x + button.width &&
-          y >= button.y && y <= button.y + 40) {
-        return i;
-      }
-    } else if (button.contains(x, y)) {
-      return i;
-    }
-  }
-  return null;
+  return InteractionManager.checkToggleClick(x, y);
 }
 
-// 토글 선택/해제 (한 번에 하나만 선택 가능)
+// 하위 호환성을 위한 함수 래퍼
 function toggleSelect(toggleIndex) {
-  if (!uiStateManager || !bubbleManager || !panController) return;
-
-  const bubbles = bubbleManager.bubbles;
-  const selectedToggles = uiStateManager.selectedToggles;
-  const previousSelectedToggles = uiStateManager.previousSelectedToggles;
-
-  // toggleIndex: 0 = 전체 보기, 1~5 = 각 카테고리
-  if (toggleIndex === 0) {
-    // 전체 보기 선택
-    uiStateManager.previousSelectedToggles = [...selectedToggles]; // 이전 선택 저장
-    uiStateManager.selectedToggles = [];
-    // 중간 단계 화면 닫기
-    uiStateManager.backToMainView();
-    // 모든 버블 복구 및 원래 그리드 위치로 복원
-    const gridSize = Math.ceil(Math.sqrt(TOTAL_BUBBLES));
-    bubbles.forEach((b, index) => {
-      if (b.isPopping || b.alpha < 0.5) {
-        b.isPopping = false;
-        b.popProgress = 0;
-        b.alpha = 1.0;
-      }
-      // 원래 그리드 위치로 복원
-      b.gridX = index % gridSize;
-      b.gridY = Math.floor(index / gridSize);
-    });
-    bubbleManager.currentFilteredBubbles = bubbles;
-
-    // 원래 그리드의 중심으로 정렬
-    const centerGridX = Math.floor(gridSize / 2);
-    const centerGridY = Math.floor(gridSize / 2);
-    const centerHexX = centerGridX * HEX_SPACING * 1.5;
-    const centerHexY =
-      centerGridY * HEX_SPACING * sqrt(3) +
-      ((centerGridX % 2) * HEX_SPACING * sqrt(3)) / 2;
-
-    const { centerX, centerY } = getBubbleAreaCenter(-20);
-
-    panController.snapTargetX = centerX - centerHexX;
-    panController.snapTargetY = centerY - centerHexY;
-    panController.snapCompleted = false;
-  } else {
-    // 카테고리 선택 (1~5를 1~5로 매핑)
-    const categoryIndex = toggleIndex; // 1~5
-
-    // 같은 카테고리를 다시 클릭하면 선택 해제 (전체보기로 돌아가기)
-    if (uiStateManager.selectedGroup === categoryIndex && !uiStateManager.selectedTag) {
-      // 전체보기로 전환
-      toggleSelect(0);
-      return;
-    }
-
-    // 중간 단계 화면으로 이동
-    uiStateManager.showGroupSelection(categoryIndex);
-    startAnim();
-    return; // 여기서 종료하여 버블 필터링하지 않음
-
-    // 필터링된 버블 찾기 및 복구
-    const filteredBubbles = bubbles.filter((b) => {
-      return (
-        b.attributes &&
-        b.attributes.some((attr) => selectedToggles.includes(attr))
-      );
-    });
-
-    // 이전 카테고리와 새 카테고리 모두에 포함되는 버블 찾기 (유지되는 버블)
-    let previousFilteredBubbles = [];
-    if (previousSelectedToggles.length > 0) {
-      previousFilteredBubbles = bubbles.filter((b) => {
-        return (
-          b.attributes &&
-          b.attributes.some((attr) => previousSelectedToggles.includes(attr))
-        );
-      });
-    }
-
-    // 공통 버블 (이전과 새 카테고리 모두에 포함되는 버블)
-    const commonBubbles = filteredBubbles.filter((b) =>
-      previousFilteredBubbles.includes(b)
-    );
-
-    // 필터링된 버블 복구 (alpha 및 팡 터짐 상태 초기화)
-    // 단, 공통 버블은 이미 보이는 상태이므로 alpha만 확인
-    filteredBubbles.forEach((b) => {
-      if (!commonBubbles.includes(b)) {
-        // 공통 버블이 아닌 새로 나타나는 버블만 복구
-        b.isPopping = false;
-        b.popProgress = 0;
-        b.alpha = 1.0; // 바로 보이도록 설정
-      } else {
-        // 공통 버블은 팡 터지는 상태만 해제
-        if (b.isPopping) {
-          b.isPopping = false;
-          b.popProgress = 0;
-        }
-        b.alpha = 1.0; // alpha는 유지
-      }
-    });
-
-    currentFilteredBubbles = filteredBubbles;
-
-    // 팡 터지는 애니메이션이 완료된 후 0.3초 뒤에 정렬 시작하도록 설정
-    // 팡 터지는 버블이 있는지 확인
-    const hasPoppingBubbles = bubbles.some((b) => b.isPopping);
-    if (hasPoppingBubbles) {
-      // 팡 터지는 버블이 있으면 팡 터짐 완료 후 정렬 시작 시간 설정
-      alignAfterPopStartTime = millis();
-    } else {
-      // 팡 터지는 버블이 없으면 바로 정렬
-      alignAfterPopStartTime = millis() - 1000; // 이미 지난 시간으로 설정하여 바로 실행
-    }
+  if (uiStateManager) {
+    uiStateManager.selectToggle(toggleIndex);
+    startAnim(); // 애니메이션 시작
   }
-
-  // 토글 닫기
-  showToggles = false;
-
-  // 버블 정렬 (버블이 이동하면서 정렬되도록)
-  startAnim(); // 필터링 업데이트를 위해 애니메이션 시작
 }
 
-// 토글 버튼 초기화
-// 토글 버튼 상수
-const TOGGLE_LABELS = [
-    "전체 보기",
-    "여행자의 취향만 모아보고 싶어",
-    "20대 여성의 취향만 모아보고 싶어",
-    "50대 남성의 취향만 모아보고 싶어",
-    "주부들의 취향만 모아보고 싶어",
-    "10대 여성의 취향만 모아보고 싶어",
-  ];
-  
-// 토글 레이아웃 계산 헬퍼 (중복 제거)
-function getToggleLayout() {
-  const toggleWidth = 300;
-  const toggleHeight = 50;
-  const toggleX = (width - toggleWidth) / 2;
-  const startY = 220;
-  const spacing = 60;
-  const radius = 16;
-  return { toggleWidth, toggleHeight, toggleX, startY, spacing, radius };
-}
-  
+// 하위 호환성을 위한 함수 래퍼
 function initToggleButtons() {
-  const { toggleWidth, toggleHeight, toggleX, startY, spacing, radius } = getToggleLayout();
-  
-  toggleButtons = TOGGLE_LABELS.map((label, i) => {
-    const toggleY = startY + i * spacing;
-    return new ToggleButton(label, i, toggleX, toggleY, toggleWidth, toggleHeight, radius);
-  });
+  ToggleManager.init();
+  // 전역 변수 동기화
+  toggleButtons = ToggleManager.buttons;
 }
 
-// 토글 UI 그리기
 function drawToggles() {
-  const showToggles = uiStateManager ? uiStateManager.showToggles : false;
-  const selectedToggles = uiStateManager ? uiStateManager.selectedToggles : [];
-  if (!showToggles) return;
-  
-  // 버튼이 초기화되지 않았으면 초기화
-  if (toggleButtons.length === 0) {
-    initToggleButtons();
-  }
-  
-  push();
-  drawingContext.save();
-  
-  // 배경 오버레이는 draw()에서 이미 그려지므로 여기서는 제거
-  
-  // 버튼 그리기
-  toggleButtons.forEach(button => button.draw(selectedToggles));
-  
-  drawingContext.restore();
-  pop();
+  ToggleManager.draw();
 }
 
+function getToggleLayout() {
+  if (!ToggleManager.layout) {
+    ToggleManager.calculateLayout();
+  }
+  return ToggleManager.layout;
+}
+
+// 하위 호환성을 위한 함수 래퍼
 function resetOrbitBubbleState() {
-  if (!bubbleManager || !bubbleManager.bubbles) return;
-  bubbleManager.bubbles.forEach((bubble) => {
-    if (bubble.isInOrbit) {
-      bubble.isInOrbit = false;
-      bubble.orbitContextKey = null;
-    }
-  });
+  OrbitSystem.resetOrbitBubbleState();
 }
 
 function ensureOrbitBubbleReady(bubble, targetBaseR, orbitContextKey) {
-  if (!bubble) return false;
-  const contextChanged = bubble.orbitContextKey !== orbitContextKey;
-  if (!bubble.isInOrbit || contextChanged) {
-    bubble.baseRadius = targetBaseR;
-    bubble.r = targetBaseR;
-    bubble.interactionScale = 1.0;
-    bubble.isInOrbit = true;
-    bubble.orbitContextKey = orbitContextKey;
-    return true;
-  }
-  return false;
+  return OrbitSystem.ensureOrbitBubbleReady(bubble, targetBaseR, orbitContextKey);
 }
 
-// 오비트 버블 그리기 공통 함수 (drawTagFilteredBubbles와 drawGroupViewBubbles 통합)
+// 하위 호환성을 위한 함수 래퍼 (OrbitSystem 사용)
 function drawOrbitBubbles({ bubbles, orbitContextKey, filterFn }) {
-  if (!bubbles || bubbles.length === 0) return [];
-  
-  const targetBubbles = bubbles.filter(filterFn);
-  if (targetBubbles.length === 0) return [];
-  
-  const { imageX, imageY, imageSize } = getOrbitCenterMetrics();
-  const centerRadius = imageSize / 2;
-  const minOrbitRadius = centerRadius + 100;
-  const maxOrbitRadius = min(width, height) * 0.45;
-  const baseTime = bubbleRotationState.rotationAngle;
-  const tiltAngle = Math.PI / 5;
-  const orbitTilt = Math.cos(tiltAngle) * 0.85;
-  const orbitStretch = 1.3;
-  
-  const totalBubbles = targetBubbles.length;
-  const isMobile = IS_MOBILE;
-  const maxVisibleBubbles = isMobile ? 30 : totalBubbles;
-  const visibleCount = Math.min(totalBubbles, maxVisibleBubbles);
-  const angleStep = totalBubbles > 0 ? (Math.PI * 2) / totalBubbles : 0;
-  
-  const bubblesBelow = [];
-  const bubblesAbove = [];
-  orbitBubblePositions = [];
-  
-  for (let i = 0; i < visibleCount; i++) {
-    const bubble = targetBubbles[i];
-    const angleOffset = i * angleStep;
-    const currentAngle = baseTime + angleOffset;
-    const radiusVariation = 0.4 + (i % 3) * 0.15;
-    const orbitRadius = minOrbitRadius + (maxOrbitRadius - minOrbitRadius) * radiusVariation;
-    const zDepth = Math.sin(currentAngle);
-    const smoothZ = zDepth * zDepth * (3 - 2 * zDepth);
-    const depthAlpha = 0.7 + (smoothZ + 1) * 0.15;
-    const bubbleX = imageX + Math.cos(currentAngle) * orbitRadius * orbitStretch;
-    const bubbleY = imageY + Math.sin(currentAngle) * orbitRadius * orbitTilt;
-    const zOffsetY = smoothZ * 20;
-    const finalY = bubbleY + zOffsetY;
-    const frontFactor = (Math.sin(currentAngle) + 1) / 2;
-    const MIN_R = 50;
-    const MAX_R = 85;
-    const targetBaseR = lerp(MIN_R, MAX_R, frontFactor);
-    
-    const justSynced = ensureOrbitBubbleReady(bubble, targetBaseR, orbitContextKey);
-    const baseEase = justSynced ? 1.0 : 0.15;
-    bubble.baseRadius = lerp(bubble.baseRadius, targetBaseR, baseEase);
-    
-    const t = millis() * 0.001;
-    const breathSpeed = 0.5 + (bubble.hueSeed % 7) * 0.1;
-    const breath = sin(t * breathSpeed + (bubble.pulseOffset || 0));
-    const breathFactor = map(breath, -1, 1, 0.95, 1.05);
-    const noiseOffset = bubble.noiseOffset || (bubble.hueSeed * 100);
-    const n = noise(noiseOffset + t * 0.2);
-    const noiseFactor = map(n, 0, 1, 0.97, 1.03);
-    
-    if (!bubble.interactionScale) bubble.interactionScale = 1.0;
-    bubble.r = bubble.baseRadius * breathFactor * noiseFactor * bubble.interactionScale;
-    bubble.pos.set(bubbleX, finalY);
-    bubble.alpha = depthAlpha;
-    
-    orbitBubblePositions.push({ bubble, x: bubbleX, y: finalY, r: bubble.r });
-    
-    if (finalY < imageY) {
-      bubblesBelow.push({ bubble, x: bubbleX, y: finalY });
-    } else {
-      bubblesAbove.push({ bubble, x: bubbleX, y: finalY });
-    }
-  }
-  
-  bubblesBelow.forEach(({ bubble, x, y }) => bubble.drawAt(x, y));
-  return bubblesAbove;
-}
-
-// 태그 필터링된 상태에서 중심 이미지 주변에 관련 버블 그리기
-function drawOrbitBubbles({ bubbles, filterFn, orbitContextKey }) {
-  if (!bubbles || bubbles.length === 0) return;
-
-  const targetBubbles = typeof filterFn === "function" ? bubbles.filter(filterFn) : bubbles;
-  if (targetBubbles.length === 0) return;
-
-  const { centerX, centerY, imageX, imageY, imageSize } = getOrbitCenterMetrics();
-  const centerRadius = imageSize / 2;
-  const minOrbitRadius = centerRadius + 100;
-  const maxOrbitRadius = min(width, height) * 0.45;
-  const baseTime = bubbleRotationState.rotationAngle;
-  const tiltAngle = Math.PI / 5;
-  const orbitTilt = Math.cos(tiltAngle) * 0.85;
-  const orbitStretch = 1.3;
-  const totalBubbles = targetBubbles.length;
-  const isMobile = IS_MOBILE;
-  const maxVisibleBubbles = isMobile ? 30 : totalBubbles;
-  const visibleCount = Math.min(totalBubbles, maxVisibleBubbles);
-  const angleStep = totalBubbles > 0 ? (Math.PI * 2) / totalBubbles : 0;
-  
-  const bubblesBelow = [];
-  const bubblesAbove = [];
-  orbitBubblePositions = [];
-  
-  for (let i = 0; i < visibleCount; i++) {
-    const bubble = targetBubbles[i];
-    const currentAngle = baseTime + i * angleStep;
-
-    const radiusVariation = 0.4 + (i % 3) * 0.15;
-    const orbitRadius = minOrbitRadius + (maxOrbitRadius - minOrbitRadius) * radiusVariation;
-    const zDepth = Math.sin(currentAngle);
-    const smoothZ = zDepth * zDepth * (3 - 2 * zDepth);
-    const depthAlpha = 0.7 + (smoothZ + 1) * 0.15;
-    const bubbleX = imageX + Math.cos(currentAngle) * orbitRadius * orbitStretch;
-    const bubbleY = imageY + Math.sin(currentAngle) * orbitRadius * orbitTilt;
-    const finalY = bubbleY + smoothZ * 20;
-
-    const frontFactor = (Math.sin(currentAngle) + 1) / 2;
-    const MIN_R = 50;
-    const MAX_R = 85;
-    const targetBaseR = lerp(MIN_R, MAX_R, frontFactor);
-    const justSynced = ensureOrbitBubbleReady(bubble, targetBaseR, orbitContextKey);
-    const baseEase = justSynced ? 1.0 : 0.15;
-    bubble.baseRadius = lerp(bubble.baseRadius, targetBaseR, baseEase);
-    
-    const t = millis() * 0.001;
-    const breathSpeed = 0.5 + (bubble.hueSeed % 7) * 0.1;
-    const breath = sin(t * breathSpeed + (bubble.pulseOffset || 0));
-    const breathFactor = map(breath, -1, 1, 0.95, 1.05);
-    const noiseOffset = bubble.noiseOffset || bubble.hueSeed * 100;
-    const n = noise(noiseOffset + t * 0.2);
-    const noiseFactor = map(n, 0, 1, 0.97, 1.03);
-    
-    if (!bubble.interactionScale) bubble.interactionScale = 1.0;
-    bubble.r = bubble.baseRadius * breathFactor * noiseFactor * bubble.interactionScale;
-    bubble.pos.set(bubbleX, finalY);
-    bubble.alpha = depthAlpha;
-
-    orbitBubblePositions.push({ bubble, x: bubbleX, y: finalY, r: bubble.r });
-
-    if (finalY < imageY) {
-      bubblesBelow.push({ bubble, x: bubbleX, y: finalY });
-    } else {
-      bubblesAbove.push({ bubble, x: bubbleX, y: finalY });
-    }
-  }
-  
-  bubblesBelow.forEach(({ bubble, x, y }) => bubble.drawAt(x, y));
-  return bubblesAbove;
+  // 위치 업데이트 (수학 계산)
+  const updatedBubbles = OrbitSystem.updateOrbitPositions(bubbles, filterFn, orbitContextKey);
+  // 렌더링 (그리기)
+  return OrbitSystem.render(updatedBubbles);
 }
 
 function drawTagFilteredBubbles(selectedTag, groupIndex) {
@@ -3973,353 +5598,27 @@ function getOrbitCenterMetrics() {
   return { centerX, centerY, imageX, imageY, imageSize };
 }
 
-// 태그 레이아웃 반복 헬퍼 (중복 제거)
+// 하위 호환성을 위한 함수 래퍼 (캐시된 레이아웃 사용)
 function forEachGroupTag(groupIndex, cb) {
-  const groupLang = groupLanguages[groupIndex];
-  if (!groupLang) return;
-  
-  const responsiveScale = getResponsiveScale();
-  const { imageX, imageY, imageSize } = getOrbitCenterMetrics();
-  const imageRadius = imageSize / 2;
-  
-  // 태그를 4개로 제한 (visual 2개, emotional 2개)
-  const visualTags = groupLang.visual.slice(0, 2);
-  const emotionalTags = groupLang.emotional.slice(0, 2);
-  const selectedTags = [...visualTags, ...emotionalTags];
-  
-  const TAG_FONT_SCALE = 1.4;
-  const fontSize = 16 * TAG_FONT_SCALE * responsiveScale;
-  const padding = 28 * responsiveScale;
-  const tagHeight = 56 * responsiveScale;
-  
-  push();
-  if (pretendardFont) textFont(pretendardFont);
-  textSize(fontSize);
-  
-  // 먼저 모든 태그의 크기를 계산
-  const tagSizes = selectedTags.map(tag => ({
-    tag,
-    width: textWidth(tag) + padding * 2,
-    height: tagHeight
-  }));
-  
-  // 대표사진의 위아래 20% 영역 계산
-  const topExcludeZone = imageY - imageRadius; // 상단 경계
-  const topExcludeEnd = imageY - imageRadius * 0.8; // 상단 20% 끝
-  const bottomExcludeStart = imageY + imageRadius * 0.8; // 하단 20% 시작
-  const bottomExcludeZone = imageY + imageRadius; // 하단 경계
-  
-  // 위아래 20% 영역 체크 함수
-  function isInExcludeZone(tagY, tagHeight) {
-    const tagTop = tagY - tagHeight / 2;
-    const tagBottom = tagY + tagHeight / 2;
-    
-    // 태그가 상단 20% 영역과 겹치는지 확인
-    if (tagBottom > topExcludeZone && tagTop < topExcludeEnd) {
-      return true;
-    }
-    
-    // 태그가 하단 20% 영역과 겹치는지 확인
-    if (tagTop < bottomExcludeZone && tagBottom > bottomExcludeStart) {
-      return true;
-    }
-    
-    return false;
+  // GroupViewRenderer의 캐시된 레이아웃 사용
+  if (!GroupViewRenderer.cachedTagLayouts[groupIndex]) {
+    GroupViewRenderer._calculateTagLayout(groupIndex);
   }
-  
-  // 충돌 감지 함수
-  function checkCollision(newBox, existingBoxes) {
-    // 위아래 20% 제외 영역 체크
-    if (isInExcludeZone(newBox.y, newBox.h)) {
-      return true;
-    }
-    
-    // 다른 태그와의 충돌 체크
-    for (const existing of existingBoxes) {
-      const margin = 10; // 태그 간 최소 간격
-      if (
-        newBox.x - newBox.w/2 < existing.x + existing.w/2 + margin &&
-        newBox.x + newBox.w/2 > existing.x - existing.w/2 - margin &&
-        newBox.y - newBox.h/2 < existing.y + existing.h/2 + margin &&
-        newBox.y + newBox.h/2 > existing.y - existing.h/2 - margin
-      ) {
-        return true;
-      }
-    }
-    return false;
-  }
-  
-  // 연령별 태그 위치 설정 (픽셀 조정 포함)
-  // 픽셀 값을 imageRadius 비율로 변환하여 offset에 반영
-  const pixelToOffsetRatio = 1.0 / imageRadius;
-  
-  const groupTagPositions = {
-    1: [ // 여행자 (왼쪽 태그들 위로 20픽셀)
-      { offsetX: -0.7, offsetY: -0.1 - 20 * pixelToOffsetRatio }, // 왼쪽 위
-      { offsetX: 0.7, offsetY: -0.3 },  // 오른쪽 위
-      { offsetX: 0.7, offsetY: 0.3 },   // 오른쪽 아래
-      { offsetX: -0.7, offsetY: 0.5 - 20 * pixelToOffsetRatio },  // 왼쪽 아래
-    ],
-    2: [ // 20대 여성
-      { offsetX: -0.6, offsetY: -0.4 }, // 왼쪽 위
-      { offsetX: 0.6, offsetY: -0.3 },  // 오른쪽 위
-      { offsetX: 0.6, offsetY: 0.5 },   // 오른쪽 아래
-      { offsetX: -0.6, offsetY: 0.4 },  // 왼쪽 아래
-    ],
-    3: [ // 50대 남성
-      { offsetX: -0.5, offsetY: -0.5 }, // 왼쪽 위
-      { offsetX: 0.5, offsetY: -0.5 },  // 오른쪽 위
-      { offsetX: 0.5, offsetY: 0.5 },   // 오른쪽 아래
-      { offsetX: -0.5, offsetY: 0.5 },  // 왼쪽 아래
-    ],
-    4: [ // 주부 (오른쪽 태그들 위로 25픽셀)
-      { offsetX: -0.65, offsetY: -0.35 }, // 왼쪽 위
-      { offsetX: 0.65, offsetY: -0.35 - 25 * pixelToOffsetRatio },  // 오른쪽 위
-      { offsetX: 0.65, offsetY: 0.35 - 25 * pixelToOffsetRatio },   // 오른쪽 아래
-      { offsetX: -0.65, offsetY: 0.35 },  // 왼쪽 아래
-    ],
-    5: [ // 10대 여성 (왼쪽 태그들 왼쪽으로 100픽셀, 아래 왼쪽 위로 100픽셀)
-      { offsetX: -0.55 - 100 * pixelToOffsetRatio, offsetY: -0.45 }, // 왼쪽 위
-      { offsetX: 0.55, offsetY: -0.45 },  // 오른쪽 위
-      { offsetX: 0.55, offsetY: 0.45 },   // 오른쪽 아래
-      { offsetX: -0.55 - 100 * pixelToOffsetRatio, offsetY: 0.45 - 100 * pixelToOffsetRatio },  // 왼쪽 아래
-    ],
-  };
-  
-  // 현재 그룹에 맞는 위치 설정 (기본값은 3번)
-  const basePositions = groupTagPositions[groupIndex] || groupTagPositions[3];
-  
-  const placedTags = [];
-  
-  selectedTags.forEach((tag, index) => {
-    if (index >= 4) return; // 최대 4개만
-    
-    const tagSize = tagSizes[index];
-    const basePos = basePositions[index];
-    
-    // 태그 박스의 중심이 대표이미지의 경계에 위치하도록 설정
-    // 태그 박스가 반 정도는 안쪽, 반 정도는 바깥쪽에 있게 함
-    const angle = Math.atan2(basePos.offsetY, basePos.offsetX);
-    
-    // 기본 위치: 태그 박스의 중심이 대표이미지의 경계(반경)에 위치
-    const baseTagX = imageX + Math.cos(angle) * imageRadius;
-    const baseTagY = imageY + Math.sin(angle) * imageRadius;
-    
-    // 특정 태그만 추가 조정
-    let adjustY = 0;
-    let adjustX = 0;
-    if (tag === "핑크-옐로우") {
-      adjustY = -5;
-    } else if (tag === "사랑스러움") {
-      adjustY = -25;
-    } else if (tag === "안정된 구형") {
-      adjustY = 10; // 아래로 10픽셀
-    } else if (tag === "책임감") {
-      adjustY = -60; // 위로 10픽셀 더 올림 (기존 -50에서 -60)
-      adjustX = -20; // 왼쪽으로 20픽셀
-    } else if (tag === "보호") {
-      adjustY = -50;
-      adjustX = 20; // 오른쪽으로 20픽셀
-    } else if (tag === "자기취향 강도") {
-      adjustY = 30; // 아래로 30픽셀
-      adjustX = -10; // 왼쪽으로 10픽셀
-    } else if (tag === "네온 핑크") {
-      adjustY = -30; // 위로 30픽셀
-      adjustX = 10; // 오른쪽으로 10픽셀
-    } else if (tag === "흥미") {
-      adjustX = 10; // 오른쪽으로 10픽셀
-    }
-    
-    // 최종 위치 계산 (한 번에)
-    const finalTagX = baseTagX + adjustX;
-    const finalTagY = baseTagY + adjustY;
-    
-    const finalBox = {
-      x: finalTagX,
-      y: finalTagY,
-      w: tagSize.width,
-      h: tagSize.height
-    };
-    
-    placedTags.push(finalBox);
-    
-    cb({
-      tag,
-      x: finalTagX,
-      y: finalTagY,
-      w: tagSize.width,
-      h: tagSize.height,
-      fontSize,
+  const tagLayout = GroupViewRenderer.cachedTagLayouts[groupIndex];
+  if (tagLayout) {
+    tagLayout.forEach(({ tag, x, y, w, h, fontSize }) => {
+      cb({ tag, x, y, w, h, fontSize });
     });
-  });
-  
-  pop();
+  }
 }
 
-// 중간 단계 화면 그리기 (집단 이미지 + 버블캡 + 태그)
+// 하위 호환성을 위한 함수 래퍼
 function drawGroupView(groupIndex) {
   push();
   drawingContext.save();
 
-  // 배경 오버레이 제거 (배경이 어두워지지 않도록)
-  // fill(0, 0, 0, 150);
-  // noStroke();
-  // rect(0, 0, width, height);
-
-  // 집단 이미지 가져오기
-  const groupImg = groupImages[groupIndex];
-  if (!groupImg) {
-    logError(`집단 이미지 로드 실패: groupIndex=${groupIndex}`);
-    drawingContext.restore();
-    pop();
-    return;
-  }
-  if (!groupImg.width || groupImg.width === 0) {
-    logWarn(`집단 이미지 크기 0: groupIndex=${groupIndex}, width=${groupImg.width}`);
-    drawingContext.restore();
-    pop();
-    return;
-  }
-
-  // 집단 이미지 크기 및 위치 계산
-  const { centerX, centerY, imageX, imageY, imageSize } = getOrbitCenterMetrics();
-  const responsiveScale = getResponsiveScale();
-  const imageRadius = imageSize / 2;
-
-  // 주인공 버블처럼 백글로우 효과 추가
-  push();
-  drawingContext.save();
-  drawingContext.globalAlpha = 0.85;
-  const glowRadius = imageRadius * 1.7;
-  const glowGradient = drawingContext.createRadialGradient(
-    imageX,
-    imageY,
-    imageRadius * 0.4,
-    imageX,
-    imageY,
-    glowRadius
-  );
-  glowGradient.addColorStop(0, "rgba(255,255,255,0.7)");
-  glowGradient.addColorStop(0.5, "rgba(255, 243, 156, 0.18)");
-  glowGradient.addColorStop(1, "rgba(255, 255, 217, 0)");
-  drawingContext.fillStyle = glowGradient;
-  drawingContext.beginPath();
-  drawingContext.arc(imageX, imageY, glowRadius, 0, Math.PI * 2);
-  drawingContext.fill();
-  drawingContext.restore();
-  pop();
-
-  // 집단 이미지 그리기 (원형으로 클리핑)
-  push();
-  drawingContext.save();
-  
-  // 이미지 렌더링 품질 개선
-  drawingContext.imageSmoothingEnabled = true;
-  drawingContext.imageSmoothingQuality = "high";
-  
-  drawingContext.beginPath();
-  drawingContext.arc(imageX, imageY, imageRadius, 0, Math.PI * 2);
-  drawingContext.clip();
-
-  imageMode(CENTER);
-  const imgRatio = groupImg.width / groupImg.height;
-  let drawW, drawH;
-  if (imgRatio > 1) {
-    drawH = imageSize;
-    drawW = imgRatio * drawH;
-  } else {
-    drawW = imageSize;
-    drawH = drawW / imgRatio;
-  }
-  
-  // 10대 여성(groupIndex 5)의 경우 안쪽 이미지만 1.5배 크게
-  if (groupIndex === 5) {
-    drawW *= 1.5;
-    drawH *= 1.5;
-  }
-  
-  // 20대 여성(groupIndex 2)의 경우 안쪽 이미지만 1.4배 크게
-  if (groupIndex === 2) {
-    drawW *= 1.4;
-    drawH *= 1.4;
-  }
-  
-  image(groupImg, imageX, imageY, drawW, drawH);
-  drawingContext.restore();
-  pop();
-
-  // 빛 효과 그리기 (버블캡 아래, 이미지 위)
-  // 버블 객체를 임시로 생성하여 빛 효과 함수 사용
-  const tempBubble = {
-    pos: { x: imageX, y: imageY },
-    r: imageRadius,
-    alpha: 1.0
-  };
-  if (
-    ANIMATION_CONFIG.enableLightEffect &&
-    frameCount % ANIMATION_CONFIG.lightEffectInterval === 0
-  ) {
-  drawBubbleLightEffect(tempBubble);
-  }
-
-  // 버블캡 그리기
-  if (bubbleCap && bubbleCap.width > 0) {
-    push();
-    imageMode(CENTER);
-    drawingContext.save();
-    
-    // 이미지 렌더링 품질 개선
-    drawingContext.imageSmoothingEnabled = true;
-    drawingContext.imageSmoothingQuality = "high";
-    
-    image(bubbleCap, imageX, imageY, imageSize, imageSize);
-    drawingContext.restore();
-    pop();
-  }
-
-  // 집단 이름 텍스트 (화면 정 중앙에 흰색 글자로, 가장 앞 레이어)
-  const groupNames = {
-    1: "여행자",
-    2: "20대 여성",
-    3: "50대 남성",
-    4: "주부",
-    5: "10대 여성"
-  };
-  
-  const groupName = groupNames[groupIndex];
-  if (groupName) {
-    push();
-    drawingContext.save();
-    drawingContext.textBaseline = "middle";
-    drawingContext.textAlign = "center";
-    drawingContext.imageSmoothingEnabled = true;
-    drawingContext.imageSmoothingQuality = "high";
-    
-    if (pretendardFont) {
-      textFont(pretendardFont);
-    }
-    
-    // 화면 정 중앙에 위치 (imageY가 아닌 화면 중앙)
-    const screenCenterY = centerY;
-    
-    // 흰색 글자로 표시
-    const textSizeValue = 32 * responsiveScale;
-    textSize(textSizeValue);
-    textStyle(BOLD);
-    
-    // 텍스트 그림자 효과 (가독성 향상)
-    drawingContext.shadowBlur = 8;
-    drawingContext.shadowColor = "rgba(0,0,0,0.5)";
-    drawingContext.shadowOffsetX = 0;
-    drawingContext.shadowOffsetY = 2;
-    
-    fill(255, 255, 255, 255); // 흰색
-    // 텍스트 화질 개선: 정수 반올림 제거
-    text(groupName, centerX, screenCenterY);
-    
-    drawingContext.restore();
-    pop();
-  }
+  // GroupViewRenderer로 백글로우, 이미지, 빛 효과, 버블캡, 집단 이름 그리기
+  GroupViewRenderer.draw(groupIndex);
 
   // 태그 표시 (집단 이미지 주변에 원형으로 배치)
   const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
@@ -4335,6 +5634,7 @@ function drawGroupView(groupIndex) {
       textFont(pretendardFont);
     }
 
+  // 캐시된 태그 레이아웃 사용
   forEachGroupTag(groupIndex, ({ tag, x: tagX, y: tagY, w: tagWidth, h: tagHeight, fontSize: tagFontSize }) => {
     const tagRadiusRect = tagHeight / 2;
       const isSelected = selectedTag === tag;
@@ -4409,94 +5709,175 @@ function checkTagClick(x, y, groupIndex) {
   return clicked;
 }
 
-// 글래스 태그 그리기 (circle-to-capture 스타일 참고)
-function drawGlassTag(x, y, w, h, r, isSelected = false, isHovered = false) {
-  const ctx = drawingContext;
-
-  // 1) 아웃샤도우 (태그 외곽 글로우, hover 시 더 강하게)
-  ctx.save();
-  // hover 시 약간 위로 올라가는 효과 (transform 대신 그림자 오프셋으로)
-  const shadowOffsetY = isHovered ? -2 : 0;
-  roundRectPath(ctx, x, y + shadowOffsetY, w, h, r);
-  ctx.shadowBlur = isHovered ? 24 : 18; // hover 시 더 강한 그림자
-  ctx.shadowColor = isHovered ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.25)";
-  ctx.shadowOffsetY = shadowOffsetY;
-  ctx.fillStyle = "rgba(0,0,0,0.001)"; // 내용 영향 없이 그림자만
-  ctx.fill();
-  ctx.restore();
-
-  // 2) 클립 후, 배경을 다시 그리면서 필터 적용 → 백드롭 블러 효과
-  ctx.save();
-  roundRectPath(ctx, x, y, w, h, r);
-  ctx.clip();
-  ctx.globalAlpha = 0.5;
-  // 백드롭 블러 효과 (태그 뒤 배경이 블러로 보이게)
-  if (bgBuffer) {
-    // 유리감: 강한 블러 효과로 배경이 블러로 보이게
-    ctx.filter = "blur(5px) saturate(120%) brightness(80%)";
-    const src = bgBuffer.canvas || bgBuffer.elt;
-    ctx.drawImage(src, 0, 0);
-    ctx.filter = "none";
-  } else if (bgImage && bgImage.width > 0) {
-    // 배경 이미지가 있으면 사용
-    ctx.filter = "blur(5px) saturate(120%) brightness(80%)";
-    const src = bgImage.canvas || bgImage.elt;
-    ctx.drawImage(src, 0, 0, width, height);
-    ctx.filter = "none";
-  } else {
-    // 배경 이미지가 없으면 단색 배경
-    ctx.fillStyle = BG_COLOR;
-    ctx.fillRect(x, y, w, h);
-  }
-
-  // 반투명 효과 적용 (투명도 0.5)
-  ctx.globalAlpha = 0.5;
-
-  // 3) 글래스모피즘 그라디언트 배경 (180deg, rgba(0,0,0,0.08) → rgba(0,0,0,0.10))
-  const glassGradient = ctx.createLinearGradient(x, y, x, y + h);
-  glassGradient.addColorStop(0, "rgba(0, 0, 0, 0.08)");
-  glassGradient.addColorStop(1, "rgba(0, 0, 0, 0.10)");
-  ctx.fillStyle = glassGradient;
-  ctx.fillRect(x, y, w, h);
-
-  // 4) 내부 하이라이트 그라디언트 (글래스모피즘 효과 강화)
-  const innerHighlight = ctx.createLinearGradient(x, y, x, y + h * 0.5);
-  innerHighlight.addColorStop(0, "rgba(255, 255, 255, 0.15)");
-  innerHighlight.addColorStop(0.5, "rgba(255, 255, 255, 0.08)");
-  innerHighlight.addColorStop(1, "rgba(255, 255, 255, 0)");
-  ctx.fillStyle = innerHighlight;
-  ctx.fillRect(x, y, w, h * 0.5);
+// 태그 렌더러 클래스 (글래스모피즘 최적화 및 그라디언트 캐싱)
+class TagRenderer {
+  // 그라디언트 캐시 (크기별로 캐싱)
+  static gradientCache = {
+    glass: null,        // 글래스 배경 그라디언트
+    highlight: null,   // 하이라이트 그라디언트
+    edgeNormal: null,  // 일반 테두리 그라디언트
+    edgeHovered: null, // hover 테두리 그라디언트
+    edgeSelected: null // 선택된 테두리 그라디언트
+  };
   
-  // globalAlpha 복원
-  ctx.globalAlpha = 1.0;
+  static lastTagSize = { w: 0, h: 0 };
+  static LOW_QUALITY_MODE = false; // 태블릿 성능 모드 (블러 비활성화)
 
-  // 5) 유리 테두리(대각선 그라디언트 하이라이트)
-  // 선택된 태그는 더 진한 스트로크, hover 시도 더 밝게
-  const edge = ctx.createLinearGradient(x, y, x + w, y + h);
-  if (isSelected) {
-    // 선택된 태그: 더 진한 테두리
-    edge.addColorStop(0, "rgba(255,255,255,0.95)");
-    edge.addColorStop(0.5, "rgba(255,255,255,0.8)");
-    edge.addColorStop(1, "rgba(255,255,255,0.3)");
-    ctx.strokeStyle = edge;
-    ctx.lineWidth = 3; // 더 두꺼운 테두리
-  } else if (isHovered) {
-    // hover 상태: 더 밝은 테두리
-    edge.addColorStop(0, "rgba(255,255,255,0.7)");
-    edge.addColorStop(0.5, "rgba(255,255,255,0.5)");
-    edge.addColorStop(1, "rgba(255,255,255,0.2)");
-    ctx.strokeStyle = edge;
-    ctx.lineWidth = 2.5; // 약간 더 두꺼운 테두리
-  } else {
-    edge.addColorStop(0, "rgba(255,255,255,0.75)");
-    edge.addColorStop(1, "rgba(255,255,255,0.05)");
-    ctx.strokeStyle = edge;
-    ctx.lineWidth = 1.5;
+  // 그라디언트 생성 및 캐싱
+  static _getGradient(type, w, h, x = 0, y = 0) {
+    const needsUpdate = this.lastTagSize.w !== w || this.lastTagSize.h !== h;
+    
+    if (needsUpdate) {
+      // 기존 그라디언트 캐시 초기화
+      this.gradientCache = {
+        glass: null,
+        highlight: null,
+        edgeNormal: null,
+        edgeHovered: null,
+        edgeSelected: null
+      };
+      this.lastTagSize = { w, h };
+    }
+
+    // 캐시된 그라디언트가 있으면 반환
+    if (this.gradientCache[type]) {
+      return this.gradientCache[type];
+    }
+
+    // 새 그라디언트 생성 및 캐싱
+    const ctx = drawingContext;
+    let gradient;
+    
+    switch (type) {
+      case 'glass':
+        gradient = ctx.createLinearGradient(x, y, x, y + h);
+        gradient.addColorStop(0, "rgba(0, 0, 0, 0.08)");
+        gradient.addColorStop(1, "rgba(0, 0, 0, 0.10)");
+        break;
+      case 'highlight':
+        gradient = ctx.createLinearGradient(x, y, x, y + h * 0.5);
+        gradient.addColorStop(0, "rgba(255, 255, 255, 0.15)");
+        gradient.addColorStop(0.5, "rgba(255, 255, 255, 0.08)");
+        gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+        break;
+      case 'edgeNormal':
+        gradient = ctx.createLinearGradient(x, y, x + w, y + h);
+        gradient.addColorStop(0, "rgba(255,255,255,0.75)");
+        gradient.addColorStop(1, "rgba(255,255,255,0.05)");
+        break;
+      case 'edgeHovered':
+        gradient = ctx.createLinearGradient(x, y, x + w, y + h);
+        gradient.addColorStop(0, "rgba(255,255,255,0.7)");
+        gradient.addColorStop(0.5, "rgba(255,255,255,0.5)");
+        gradient.addColorStop(1, "rgba(255,255,255,0.2)");
+        break;
+      case 'edgeSelected':
+        gradient = ctx.createLinearGradient(x, y, x + w, y + h);
+        gradient.addColorStop(0, "rgba(255,255,255,0.95)");
+        gradient.addColorStop(0.5, "rgba(255,255,255,0.8)");
+        gradient.addColorStop(1, "rgba(255,255,255,0.3)");
+        break;
+      default:
+        return null;
+    }
+    
+    this.gradientCache[type] = gradient;
+    return gradient;
   }
-  roundRectPath(ctx, x, y, w, h, r);
-  ctx.stroke();
 
-  ctx.restore();
+  // 글래스 태그 그리기 (최적화된 버전)
+  static draw(x, y, w, h, r, isSelected = false, isHovered = false) {
+    const ctx = drawingContext;
+
+    // 1) 아웃샤도우 (태그 외곽 글로우, hover 시 더 강하게)
+    ctx.save();
+    const shadowOffsetY = isHovered ? -2 : 0;
+    roundRectPath(ctx, x, y + shadowOffsetY, w, h, r);
+    ctx.shadowBlur = isHovered ? 24 : 18;
+    ctx.shadowColor = isHovered ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.25)";
+    ctx.shadowOffsetY = shadowOffsetY;
+    ctx.fillStyle = "rgba(0,0,0,0.001)";
+    ctx.fill();
+    ctx.restore();
+
+    // 2) 클립 후, 배경을 다시 그리면서 필터 적용 → 백드롭 블러 효과
+    ctx.save();
+    roundRectPath(ctx, x, y, w, h, r);
+    ctx.clip();
+    ctx.globalAlpha = 0.5;
+    
+    // 백드롭 블러 효과 (성능 모드에 따라 조건부 실행)
+    if (!this.LOW_QUALITY_MODE) {
+      if (bgBuffer) {
+        ctx.filter = "blur(5px) saturate(120%) brightness(80%)";
+        const src = bgBuffer.canvas || bgBuffer.elt;
+        ctx.drawImage(src, 0, 0);
+        ctx.filter = "none";
+      } else if (bgImage && bgImage.width > 0) {
+        ctx.filter = "blur(5px) saturate(120%) brightness(80%)";
+        const src = bgImage.canvas || bgImage.elt;
+        ctx.drawImage(src, 0, 0, width, height);
+        ctx.filter = "none";
+      } else {
+        ctx.fillStyle = BG_COLOR;
+        ctx.fillRect(x, y, w, h);
+      }
+    } else {
+      // 저품질 모드: 단순 투명도 조절로 대체
+      ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
+      ctx.fillRect(x, y, w, h);
+    }
+
+    // 3) 글래스모피즘 그라디언트 배경 (캐시된 그라디언트 사용)
+    const glassGradient = this._getGradient('glass', w, h, x, y);
+    ctx.fillStyle = glassGradient;
+    ctx.fillRect(x, y, w, h);
+
+    // 4) 내부 하이라이트 그라디언트 (캐시된 그라디언트 사용)
+    const innerHighlight = this._getGradient('highlight', w, h, x, y);
+    ctx.fillStyle = innerHighlight;
+    ctx.fillRect(x, y, w, h * 0.5);
+    
+    ctx.globalAlpha = 1.0;
+
+    // 5) 유리 테두리 (캐시된 그라디언트 사용)
+    let edgeGradient;
+    let lineWidth;
+    if (isSelected) {
+      edgeGradient = this._getGradient('edgeSelected', w, h, x, y);
+      lineWidth = 3;
+    } else if (isHovered) {
+      edgeGradient = this._getGradient('edgeHovered', w, h, x, y);
+      lineWidth = 2.5;
+    } else {
+      edgeGradient = this._getGradient('edgeNormal', w, h, x, y);
+      lineWidth = 1.5;
+    }
+    
+    ctx.strokeStyle = edgeGradient;
+    ctx.lineWidth = lineWidth;
+    roundRectPath(ctx, x, y, w, h, r);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // 캐시 무효화 (리사이즈 시)
+  static invalidateCache() {
+    this.gradientCache = {
+      glass: null,
+      highlight: null,
+      edgeNormal: null,
+      edgeHovered: null,
+      edgeSelected: null
+    };
+    this.lastTagSize = { w: 0, h: 0 };
+  }
+}
+
+// 하위 호환성을 위한 함수 래퍼
+function drawGlassTag(x, y, w, h, r, isSelected = false, isHovered = false) {
+  TagRenderer.draw(x, y, w, h, r, isSelected, isHovered);
 }
 
 // 둥근 사각형 경로 헬퍼
@@ -4524,120 +5905,180 @@ function checkBackButtonClick(x, y) {
   return dist <= backButtonSize / 2;
 }
 
+// 하위 호환성을 위한 함수 래퍼 (GraphicsManager 사용)
 function vignette() {
-  const gTop = drawingContext.createLinearGradient(0, 0, 0, height * 0.25);
-  gTop.addColorStop(0, "rgba(0,0,0,0.35)");
-  gTop.addColorStop(1, "rgba(0,0,0,0)");
-  drawingContext.fillStyle = gTop;
-  noStroke();
-  rect(0, 0, width, height * 0.25);
+  if (graphicsManager) {
+    graphicsManager.drawVignette();
+  } else {
+    // 레거시 fallback (비네팅 버퍼가 없을 때만)
+    const gTop = drawingContext.createLinearGradient(0, 0, 0, height * 0.25);
+    gTop.addColorStop(0, "rgba(0,0,0,0.35)");
+    gTop.addColorStop(1, "rgba(0,0,0,0)");
+    drawingContext.fillStyle = gTop;
+    noStroke();
+    rect(0, 0, width, height * 0.25);
 
-  const gBot = drawingContext.createLinearGradient(0, height, 0, height * 0.75);
-  gBot.addColorStop(0, "rgba(0,0,0,0.35)");
-  gBot.addColorStop(1, "rgba(0,0,0,0)");
-  drawingContext.fillStyle = gBot;
-  rect(0, height * 0.75, width, height * 0.25);
+    const gBot = drawingContext.createLinearGradient(0, height, 0, height * 0.75);
+    gBot.addColorStop(0, "rgba(0,0,0,0.35)");
+    gBot.addColorStop(1, "rgba(0,0,0,0)");
+    drawingContext.fillStyle = gBot;
+    rect(0, height * 0.75, width, height * 0.25);
+  }
 }
 
-// 버블 회전 제어는 handlePointerDown, handlePointerMove, handlePointerUp에 통합됨
+// 회전 제어 컨트롤러 클래스 (입력 로직 분리)
+class RotationController {
+  // 회전 상태 (전역 bubbleRotationState를 대체)
+  static state = {
+    rotationAngle: 0,
+    angularVelocity: 0,
+    isDragging: false,
+    lastX: 0,
+    lastY: 0,
+    autoSpeed: 0.01,
+    didDrag: false
+  };
 
-// 회전 제어 헬퍼 함수들
-function handleRotationStart(x, y) {
-  // 태그 필터링 또는 그룹 뷰가 활성화된 경우에만 회전 제어
-  const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
-  const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
-  const hasTagFilter = selectedTag !== null;
-  
-  if (!hasTagFilter && !showGroupView) {
-    return false; // 회전 제어 모드가 아님
-  }
-  
-  // 중심 위치 계산
-  const { centerX, centerY } = getOrbitCenterMetrics();
-  
-  // 중심에서의 거리 계산
-  const dx = x - centerX;
-  const dy = y - centerY;
-  const dist = Math.sqrt(dx * dx + dy * dy);
-  
-  // 중심 이미지 영역 내부인지 확인 (회전 제어 영역)
-  const imageSize = min(width * 0.4, height * 0.4) * getResponsiveScale();
-  const maxRadius = min(width, height) * 0.45; // 버블이 돌아다니는 최대 반지름
-  const controlRadius = maxRadius + 100; // 약간 여유를 둔 제어 영역
-  
-  if (dist <= controlRadius) {
-    bubbleRotationState.isDragging = true;
-    bubbleRotationState.lastX = x;
-    bubbleRotationState.lastY = y;
-    bubbleRotationState.didDrag = false;
-    return true; // 회전 제어 시작됨
-  }
-  
-  return false; // 회전 제어 영역이 아님
-}
+  // 중심점 좌표 (외부에서 주입)
+  static centerX = 0;
+  static centerY = 0;
+  static controlRadius = 0;
 
-function handleRotationDrag(x, y) {
-  if (!bubbleRotationState.isDragging) {
-    return;
+  // 중심점 업데이트 (매 프레임 또는 리사이즈 시)
+  static update(centerX, centerY, controlRadius) {
+    this.centerX = centerX;
+    this.centerY = centerY;
+    this.controlRadius = controlRadius;
   }
-  
-  // 중심 위치 계산
-  const { centerX, centerY } = getOrbitCenterMetrics();
-  
-  // 이전 위치와 현재 위치의 각도 차이 계산
-  const prevDx = bubbleRotationState.lastX - centerX;
-  const prevDy = bubbleRotationState.lastY - centerY;
-  const prevAngle = Math.atan2(prevDy, prevDx);
-  
-  const currDx = x - centerX;
-  const currDy = y - centerY;
-  const currAngle = Math.atan2(currDy, currDx);
-  
-  // 각도 차이 계산 (회전 방향 고려)
-  let angleDelta = currAngle - prevAngle;
-  
-  // 각도 차이를 -π ~ π 범위로 정규화
-  if (angleDelta > Math.PI) {
-    angleDelta -= 2 * Math.PI;
-  } else if (angleDelta < -Math.PI) {
-    angleDelta += 2 * Math.PI;
-  }
-  
-  // 드래그 감도 조절
-  const dragSensitivity = 1.0; // 드래그한 각도를 얼마나 반영할지
-  
-  // 회전 각도 업데이트
-  bubbleRotationState.rotationAngle += angleDelta * dragSensitivity;
-  
-  // 각도 정규화 (드래그 중에도 오버플로우 방지)
-  const TWO_PI = Math.PI * 2;
-  bubbleRotationState.rotationAngle = ((bubbleRotationState.rotationAngle % TWO_PI) + TWO_PI) % TWO_PI;
-  
-  // 마지막 드래그 속도를 관성으로 저장 (튕겨 나가는 느낌)
-  const timeDelta = deltaTime / 1000; // 초 단위
-  if (timeDelta > 0 && Math.abs(angleDelta) > 0.001) {
-    bubbleRotationState.angularVelocity = (angleDelta * dragSensitivity) / timeDelta * 0.5;
-  }
-  if (Math.abs(angleDelta) > 0.0005) {
-    bubbleRotationState.didDrag = true;
-  }
-  
-  // 마지막 위치 업데이트
-  bubbleRotationState.lastX = x;
-  bubbleRotationState.lastY = y;
-}
 
-function handleRotationEnd() {
-  if (bubbleRotationState.isDragging) {
-    bubbleRotationState.isDragging = false;
+  // 회전 시작 확인
+  static start(x, y) {
+    // 태그 필터링 또는 그룹 뷰가 활성화된 경우에만 회전 제어
+    const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
+    const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
+    const hasTagFilter = selectedTag !== null;
     
-    // 거의 안 움직인 상태에서 떼면 그냥 멈춘 느낌 나도록
-    if (Math.abs(bubbleRotationState.angularVelocity) < 0.0001) {
-      bubbleRotationState.angularVelocity = 0;
+    if (!hasTagFilter && !showGroupView) {
+      return false; // 회전 제어 모드가 아님
+    }
+    
+    // 중심에서의 거리 계산
+    const dx = x - this.centerX;
+    const dy = y - this.centerY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    
+    // 회전 제어 영역 내부인지 확인
+    if (dist <= this.controlRadius) {
+      this.state.isDragging = true;
+      this.state.lastX = x;
+      this.state.lastY = y;
+      this.state.didDrag = false;
+      return true; // 회전 제어 시작됨
+    }
+    
+    return false; // 회전 제어 영역이 아님
+  }
+
+  // 회전 드래그 처리
+  static drag(x, y) {
+    if (!this.state.isDragging) {
+      return;
+    }
+    
+    // 이전 위치와 현재 위치의 각도 차이 계산
+    const prevDx = this.state.lastX - this.centerX;
+    const prevDy = this.state.lastY - this.centerY;
+    const prevAngle = Math.atan2(prevDy, prevDx);
+    
+    const currDx = x - this.centerX;
+    const currDy = y - this.centerY;
+    const currAngle = Math.atan2(currDy, currDx);
+    
+    // 각도 차이 계산 (회전 방향 고려)
+    let angleDelta = currAngle - prevAngle;
+    
+    // 각도 차이를 -π ~ π 범위로 정규화
+    if (angleDelta > Math.PI) {
+      angleDelta -= 2 * Math.PI;
+    } else if (angleDelta < -Math.PI) {
+      angleDelta += 2 * Math.PI;
+    }
+    
+    // 드래그 감도 조절
+    const dragSensitivity = 1.0;
+    
+    // 회전 각도 업데이트
+    this.state.rotationAngle += angleDelta * dragSensitivity;
+    
+    // 각도 정규화 (드래그 중에도 오버플로우 방지)
+    const TWO_PI = Math.PI * 2;
+    this.state.rotationAngle = ((this.state.rotationAngle % TWO_PI) + TWO_PI) % TWO_PI;
+    
+    // 마지막 드래그 속도를 관성으로 저장 (튕겨 나가는 느낌)
+    const timeDelta = deltaTime / 1000; // 초 단위
+    if (timeDelta > 0 && Math.abs(angleDelta) > 0.001) {
+      // 최대/최소 속도 제한 (견고성 향상)
+      const rawVelocity = (angleDelta * dragSensitivity) / timeDelta * 0.5;
+      const MAX_VELOCITY = 5.0; // 최대 회전 속도
+      const MIN_VELOCITY = 0.0001; // 최소 회전 속도
+      this.state.angularVelocity = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, rawVelocity));
+    }
+    
+    if (Math.abs(angleDelta) > 0.0005) {
+      this.state.didDrag = true;
+    }
+    
+    // 마지막 위치 업데이트
+    this.state.lastX = x;
+    this.state.lastY = y;
+  }
+
+  // 회전 종료 처리
+  static end() {
+    if (this.state.isDragging) {
+      this.state.isDragging = false;
+      
+      // 거의 안 움직인 상태에서 떼면 그냥 멈춘 느낌 나도록
+      if (Math.abs(this.state.angularVelocity) < 0.0001) {
+        this.state.angularVelocity = 0;
+      }
+    }
+
+    if (this.state.didDrag) {
+      this.state.didDrag = false;
     }
   }
 
-  if (bubbleRotationState.didDrag) {
-    bubbleRotationState.didDrag = false;
+  // 회전 상태 초기화
+  static reset() {
+    this.state = {
+      rotationAngle: 0,
+      angularVelocity: 0,
+      isDragging: false,
+      lastX: 0,
+      lastY: 0,
+      autoSpeed: 0.01,
+      didDrag: false
+    };
   }
+}
+
+// 하위 호환성을 위한 함수 래퍼
+function handleRotationStart(x, y) {
+  // 중심 위치 계산 및 업데이트
+  const { centerX, centerY } = getOrbitCenterMetrics();
+  const imageSize = min(width * 0.4, height * 0.4) * getResponsiveScale();
+  const maxRadius = min(width, height) * 0.45;
+  const controlRadius = maxRadius + 100;
+  
+  RotationController.update(centerX, centerY, controlRadius);
+  return RotationController.start(x, y);
+}
+
+function handleRotationDrag(x, y) {
+  RotationController.drag(x, y);
+}
+
+function handleRotationEnd() {
+  RotationController.end();
 }
