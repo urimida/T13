@@ -4102,9 +4102,13 @@ function updateState() {
 
   // 팡 터지는 애니메이션 업데이트
   const popNow = millis();
-  bubbles.filter(b => b.isPopping).forEach((b) => {
-    b.updatePop(popNow);
-  });
+  // CPU 최적화: for 루프
+  for (let i = 0; i < bubbles.length; i++) {
+    const b = bubbles[i];
+    if (b.isPopping) {
+      b.updatePop(popNow);
+    }
+  }
 
   // 팡 애니메이션 정렬 처리
   if (alignAfterPopStartTime !== null) {
@@ -4133,59 +4137,62 @@ function updateState() {
     }
   }
 
-  // 버블 업데이트 (일반 보기)
+  // 버블 업데이트 (일반 보기) - 간소화된 로직
   if (!selectedGroup) {
-    const shouldUpdateBubbles = !IS_MOBILE || frameCount % 3 === 0;
+    // 태블릿 반짝임 방지: 업데이트 빈도 증가 (3 -> 2)
+    const shouldUpdateBubbles = !IS_MOBILE || frameCount % 2 === 0;
     
     if (shouldUpdateBubbles) {
-      filteredBubbles.forEach((b) => {
+      // 버블 업데이트 (CPU 최적화: 배열 생성 최소화)
+      const len = filteredBubbles.length;
+      for (let i = 0; i < len; i++) {
+        const b = filteredBubbles[i];
         if (!b.isPopping) {
+          // 이미지 알파 처리 (간소화)
           if (b.imageIndex !== null) {
-            const hasImage = bubbleImages[b.imageIndex] && bubbleImages[b.imageIndex].width > 0;
-            if (hasImage) {
-              // 이미지가 로드되었으면 부드럽게 페이드인 (번쩍임 방지)
-              if (b.alpha < 0.3) {
-                b.alpha = lerp(b.alpha, 0.3, 0.15); // 부드럽게 증가
-              }
-            } else {
-              if (bubbleImageLoader && 
-                  !bubbleImageLoader.isLoading(b.imageIndex) && !bubbleImageLoader.isLoaded(b.imageIndex)) {
+            const img = bubbleImages[b.imageIndex];
+            if (img?.width > 0 && b.alpha < 0.3) {
+              b.alpha = lerp(b.alpha, 0.3, 0.15);
+            } else if (!img && bubbleImageLoader) {
+              const loader = bubbleImageLoader;
+              if (!loader.isLoading(b.imageIndex) && !loader.isLoaded(b.imageIndex)) {
                 requestBubbleImage(b.imageIndex);
-                // 로딩 시작 시에도 부드럽게 (번쩍임 방지)
-                if (b.alpha < 0.1) {
-                  b.alpha = lerp(b.alpha, 0.1, 0.1);
-                }
-              } else if (bubbleImageLoader && bubbleImageLoader.isLoaded(b.imageIndex)) {
-                // 이미지 로드 완료 시 부드럽게 증가 (번쩍임 방지)
-                if (b.alpha < 0.5) {
-                  b.alpha = lerp(b.alpha, 0.5, 0.12);
-                }
+                if (b.alpha < 0.1) b.alpha = lerp(b.alpha, 0.1, 0.1);
+              } else if (loader.isLoaded(b.imageIndex) && b.alpha < 0.5) {
+                b.alpha = lerp(b.alpha, 0.5, 0.12);
               }
             }
-          } else {
-            if (b.alpha < 0.01) b.alpha = 1.0;
+          } else if (b.alpha < 0.01) {
+            b.alpha = 1.0;
           }
         }
-        b._isFiltered = true;
+        b._isFiltered = !b.isPopping;
         b.update(centerX, centerY, offsetX, offsetY, null);
         b._isFiltered = false;
-      });
+      }
+      // 팝 애니메이션 버블만 별도 처리
+      for (let i = 0; i < bubbles.length; i++) {
+        const b = bubbles[i];
+        if (b.isPopping && b.alpha > 0.01) {
+          b.update(centerX, centerY, offsetX, offsetY, null);
+        }
+      }
     }
 
-    if (shouldUpdateBubbles) {
-      bubbles.filter(b => b.isPopping && b.alpha > 0.01).forEach((b) => {
-        b.update(centerX, centerY, offsetX, offsetY, null);
-      });
-    }
-
-    // 중앙 버블 찾기
+    // 중앙 버블 찾기 (CPU 최적화: reduce 대신 for 루프)
     let centerBubble = null;
     if (shouldUpdateBubbles || !centerBubble) {
-      centerBubble = filteredBubbles.reduce((closest, b) => {
-        const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
-        const closestDist = closest ? dist(closest.pos.x, closest.pos.y, centerX, centerY) : Infinity;
-        return distToCenter < closestDist ? b : closest;
-      }, null);
+      let minDist = Infinity;
+      for (let i = 0; i < filteredBubbles.length; i++) {
+        const b = filteredBubbles[i];
+        const dx = b.pos.x - centerX;
+        const dy = b.pos.y - centerY;
+        const distSq = dx * dx + dy * dy; // 거리 제곱으로 비교 (sqrt 생략)
+        if (distSq < minDist) {
+          minDist = distSq;
+          centerBubble = b;
+        }
+      }
     }
 
     // 중앙 버블 상호작용 스케일 및 투명도 조정
@@ -4198,28 +4205,34 @@ function updateState() {
         const centerBubbleX = centerBubble.pos.x;
         const centerBubbleY = centerBubble.pos.y;
         
-        filteredBubbles.forEach((b) => {
-          if (b === centerBubble || b.isPopping) return;
-          if (b.imageIndex !== null) {
-            const hasImage = bubbleImages[b.imageIndex] && bubbleImages[b.imageIndex].width > 0;
-            if (!hasImage) return;
-          }
+        // CPU 최적화: for 루프, 거리 제곱 사용, 상수 캐싱
+        // 태블릿 반짝임 방지: 알파 전환 속도 증가
+        const alphaEase = IS_MOBILE ? 0.15 : 0.12;
+        const fadeRange = ALPHA_FADE_RADIUS - CENTER_INFLUENCE_RADIUS;
+        const centerR2 = CENTER_INFLUENCE_RADIUS * CENTER_INFLUENCE_RADIUS;
+        const fadeR2 = ALPHA_FADE_RADIUS * ALPHA_FADE_RADIUS;
+        
+        for (let i = 0; i < filteredBubbles.length; i++) {
+          const b = filteredBubbles[i];
+          if (b === centerBubble || b.isPopping) continue;
+          if (b.imageIndex !== null && !bubbleImages[b.imageIndex]?.width) continue;
           
-          const distToCenter = dist(b.pos.x, b.pos.y, centerBubbleX, centerBubbleY);
+          const dx = b.pos.x - centerBubbleX;
+          const dy = b.pos.y - centerBubbleY;
+          const distSq = dx * dx + dy * dy;
+          
           let targetAlpha;
-          if (distToCenter <= CENTER_INFLUENCE_RADIUS) {
+          if (distSq <= centerR2) {
             targetAlpha = 1.0;
-          } else if (distToCenter >= ALPHA_FADE_RADIUS) {
+          } else if (distSq >= fadeR2) {
             targetAlpha = MIN_ALPHA;
           } else {
-            const fadeRange = ALPHA_FADE_RADIUS - CENTER_INFLUENCE_RADIUS;
+            const distToCenter = Math.sqrt(distSq);
             const fadeProgress = (distToCenter - CENTER_INFLUENCE_RADIUS) / fadeRange;
             targetAlpha = lerp(1.0, MIN_ALPHA, fadeProgress);
           }
-          // 태블릿에서 알파 전환을 더 부드럽게 (깜빡임 방지)
-          const alphaEase = IS_MOBILE ? 0.08 : 0.12; // 태블릿은 더 느리게
           b.alpha = lerp(b.alpha, targetAlpha, alphaEase);
-        });
+        }
       }
       centerBubble.alpha = 1.0;
     }
@@ -4266,41 +4279,44 @@ function renderScene() {
   }
 
   // 태블릿에서도 더 자주 실행하여 화질 향상 (성능은 다른 최적화로 보완)
-  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 3 === 0; // 4 -> 3으로 변경하여 더 자주 실행
+  // 태블릿 반짝임 방지: 무거운 작업 빈도 증가 (3 -> 2)
+  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 2 === 0;
   
-  // 상태 변수 추출
-  const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
-  const selectedGroup = uiStateManager ? uiStateManager.selectedGroup : null;
-  const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
+  // 상태 변수 추출 (CPU 최적화: 옵셔널 체이닝, 불필요한 변수 제거)
+  const showGroupView = uiStateManager?.showGroupView ?? false;
+  const selectedGroup = uiStateManager?.selectedGroup ?? null;
+  const selectedTag = uiStateManager?.selectedTag ?? null;
   const bubbles = bubbleManager?.bubbles ?? [];
   const filterState = ensureFilteredBubblesState();
-  const hasTagFilter = filterState.hasTagFilter;
-  const filteredBubbles = filterState.filteredBubbles;
+  const { filteredBubbles, hasTagFilter } = filterState;
   const { centerX, centerY } = getBubbleAreaCenter();
   const offsetX = panController?.offsetX ?? 0;
   const offsetY = panController?.offsetY ?? 0;
-  const isDragging = panController?.isDragging ?? false;
-  const snapTargetX = panController?.snapTargetX ?? null;
-  const snapTargetY = panController?.snapTargetY ?? null;
-  const panVelocityX = panController?.panVelocityX ?? 0;
-  const panVelocityY = panController?.panVelocityY ?? 0;
   const showToggles = uiStateManager?.showToggles ?? false;
 
-  // 중앙 버블 찾기 (렌더링용)
+  // 중앙 버블 찾기 (렌더링용, CPU 최적화)
   let centerBubble = null;
   if (!selectedGroup) {
-    centerBubble = filteredBubbles.reduce((closest, b) => {
-      const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
-      const closestDist = closest ? dist(closest.pos.x, closest.pos.y, centerX, centerY) : Infinity;
-      return distToCenter < closestDist ? b : closest;
-    }, null);
+    let minDist = Infinity;
+    for (let i = 0; i < filteredBubbles.length; i++) {
+      const b = filteredBubbles[i];
+      const dx = b.pos.x - centerX;
+      const dy = b.pos.y - centerY;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < minDist) {
+        minDist = distSq;
+        centerBubble = b;
+      }
+    }
   }
 
   // 버블 그리기 (일반 보기)
   if (!selectedGroup) {
-    // 가시 영역 버블 가져오기 (최적화)
-    const visible = bubbleManager ? bubbleManager.getVisibleBubbles(centerX, centerY, centerBubble) : [];
-    visible.forEach(b => b.draw());
+    // 가시 영역 버블 그리기 (CPU 최적화: for 루프)
+    const visible = bubbleManager?.getVisibleBubbles(centerX, centerY, centerBubble) ?? [];
+    for (let i = 0; i < visible.length; i++) {
+      visible[i].draw();
+    }
 
     // 중앙 버블 그리기
     if (centerBubble) {
@@ -4417,29 +4433,13 @@ function draw() {
     return;
   }
 
-  // 태블릿에서 프레임 드롭 감지 및 대응 (깜빡임 방지)
+  // 태블릿에서 프레임 드롭 감지 및 대응 (반짝임 방지: 스킵 완화)
   if (IS_MOBILE) {
     const currentTime = millis();
     const frameDelta = currentTime - lastFrameTime;
     
-    // 프레임이 너무 빠르게 실행되면 스킵 (드래그 중이 아닐 때만)
-    if (frameDelta < TARGET_FRAME_TIME * 0.7 && !panController?.isDragging) {
-      frameSkipCounter++;
-      if (frameSkipCounter < 2) {
-        // 배경만 그려서 깜빡임 방지
-        if (graphicsManager) {
-          graphicsManager.drawBackground();
-        } else if (bgBuffer) {
-          image(bgBuffer, 0, 0);
-        } else {
-          background(BG_COLOR);
-        }
-        return;
-      }
-      frameSkipCounter = 0;
-    } else {
-      frameSkipCounter = 0;
-    }
+    // 프레임 스킵 비활성화: 반짝임 방지를 위해 스킵 제거
+    // (프레임레이트는 30fps로 제한되어 있으므로 스킵 불필요)
     lastFrameTime = currentTime;
   }
 
@@ -4449,17 +4449,15 @@ function draw() {
   // 2. 렌더링 (그리기)
   renderScene();
 
-  // 태블릿에서는 더 많은 프레임 스킵으로 CPU/GPU 부담 감소 (프레임레이트는 유지)
-  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 4 === 0;
-
-  // 중간 단계 화면 상태 확인 (먼저 선언)
-  const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
-  const selectedGroup = uiStateManager ? uiStateManager.selectedGroup : null;
-  const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
-  const bubbles = bubbleManager?.bubbles ?? [];
+  // 상태 변수 추출 (간소화)
+  // 태블릿 반짝임 방지: 무거운 작업 빈도 증가 (3 -> 2)
+  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 2 === 0;
+  const showGroupView = uiStateManager?.showGroupView ?? false;
+  const selectedGroup = uiStateManager?.selectedGroup ?? null;
+  const selectedTag = uiStateManager?.selectedTag ?? null;
   const filterState = ensureFilteredBubblesState();
+  const currentFilteredBubbles = filterState.filteredBubbles;
   const hasTagFilter = filterState.hasTagFilter;
-  let currentFilteredBubbles = filterState.filteredBubbles;
 
   const orbitModeActive = !!showGroupView;
   if (!orbitModeActive) {
@@ -4544,15 +4542,20 @@ function draw() {
   const popNow = millis();
   let allPopped = true;
   let lastPopEndTime = 0;
+  const bubbles = bubbleManager?.bubbles ?? [];
 
-  bubbles.filter(b => b.isPopping).forEach((b) => {
-    const completed = b.updatePop(popNow);
-    if (completed) {
-      lastPopEndTime = Math.max(lastPopEndTime, b.popStartTime + b.POP_DURATION);
-    } else {
-      allPopped = false;
+  // CPU 최적화: for 루프
+  for (let i = 0; i < bubbles.length; i++) {
+    const b = bubbles[i];
+    if (b.isPopping) {
+      const completed = b.updatePop(popNow);
+      if (completed) {
+        lastPopEndTime = Math.max(lastPopEndTime, b.popStartTime + b.POP_DURATION);
+      } else {
+        allPopped = false;
+      }
     }
-  });
+  }
 
   // 팡 애니메이션이 진행되는 동안 시점 이동 시작 (더 자연스럽게)
   if (alignAfterPopStartTime !== null) {
@@ -4616,67 +4619,61 @@ function draw() {
     // 일반 버블 그리기 (전체보기)
     // 버블 업데이트 및 그리기 (화면에 보이는 것만)
     // 태블릿에서는 업데이트 빈도를 더 줄여서 CPU/GPU 부담 감소 (프레임레이트는 유지)
-    const shouldUpdateBubbles = !IS_MOBILE || frameCount % 3 === 0;
+    // 태블릿 반짝임 방지: 업데이트 빈도 증가 (3 -> 2)
+    const shouldUpdateBubbles = !IS_MOBILE || frameCount % 2 === 0;
     
     if (shouldUpdateBubbles) {
-      // 먼저 모든 버블 업데이트하여 중앙 버블 찾기 (1차 업데이트)
-      // 필터링된 버블들은 이미지 로드 상태 확인 (거리 기반 투명도는 나중에 적용)
-      filteredBubbles.forEach((b) => {
+      // 버블 업데이트 (CPU 최적화: for 루프)
+      for (let i = 0; i < filteredBubbles.length; i++) {
+        const b = filteredBubbles[i];
         if (!b.isPopping) {
+          // 이미지 알파 처리 (간소화)
           if (b.imageIndex !== null) {
-            const hasImage = bubbleImages[b.imageIndex] && bubbleImages[b.imageIndex].width > 0;
-            if (hasImage) {
-              // 이미지가 로드되면 부드럽게 페이드인 (번쩍임 방지)
-              if (b.alpha < 0.3) {
-                b.alpha = lerp(b.alpha, 0.3, 0.15); // 부드럽게 증가
-              }
-              // 거리 기반 투명도는 중앙 버블 찾은 후 적용되므로 여기서는 최소값만 설정
-            } else {
-              // 아직 로딩 시도조차 안 했으면 로딩 시도
-              if (bubbleImageLoader && 
-                  !bubbleImageLoader.isLoading(b.imageIndex) && !bubbleImageLoader.isLoaded(b.imageIndex)) {
+            const img = bubbleImages[b.imageIndex];
+            if (img?.width > 0 && b.alpha < 0.3) {
+              b.alpha = lerp(b.alpha, 0.3, 0.15);
+            } else if (!img && bubbleImageLoader) {
+              const loader = bubbleImageLoader;
+              if (!loader.isLoading(b.imageIndex) && !loader.isLoaded(b.imageIndex)) {
                 requestBubbleImage(b.imageIndex);
-                // 로딩 중인 버블도 부드럽게 (번쩍임 방지)
-                if (b.alpha < 0.1) {
-                  b.alpha = lerp(b.alpha, 0.1, 0.1);
-                }
-              }
-              // 이미 로드 완료된 이미지인 경우 (실패한 경우는 error 콜백에서 imageIndex를 null로 바꿔주므로 여기 올 일이 거의 없음)
-              else if (bubbleImageLoader && bubbleImageLoader.isLoaded(b.imageIndex)) {
-                // 방어적으로 alpha를 부드럽게 올려줌 (번쩍임 방지)
-                if (b.alpha < 0.5) {
-                  b.alpha = lerp(b.alpha, 0.5, 0.12);
-                }
+                if (b.alpha < 0.1) b.alpha = lerp(b.alpha, 0.1, 0.1);
+              } else if (loader.isLoaded(b.imageIndex) && b.alpha < 0.5) {
+                b.alpha = lerp(b.alpha, 0.5, 0.12);
               }
             }
-          } else {
-            // 이미지가 없는 버블도 거리 기반 투명도 적용 대상
-            // 초기값은 나중에 거리 기반으로 조정됨 (일단 1.0으로 설정)
-            if (b.alpha < 0.01) b.alpha = 1.0;
+          } else if (b.alpha < 0.01) {
+            b.alpha = 1.0;
           }
         }
         b._isFiltered = true;
         b.update(centerX, centerY, offsetX, offsetY, null);
         b._isFiltered = false;
-      });
+      }
     }
 
-    // 팡 터지는 버블도 위치 업데이트 (애니메이션을 위해)
-    // 태블릿에서는 업데이트 빈도 줄이기
+    // 팡 터지는 버블 업데이트 (CPU 최적화: for 루프)
     if (shouldUpdateBubbles) {
-      bubbles.filter(b => b.isPopping && b.alpha > 0.01).forEach((b) => {
-        b.update(centerX, centerY, offsetX, offsetY, null);
-      });
+      for (let i = 0; i < bubbles.length; i++) {
+        const b = bubbles[i];
+        if (b.isPopping && b.alpha > 0.01) {
+          b.update(centerX, centerY, offsetX, offsetY, null);
+        }
+      }
     }
 
-    // 중앙에 가장 가까운 버블 찾기 (간소화)
-    // 태블릿에서는 찾기 빈도 줄이기
+    // 중앙 버블 찾기 (CPU 최적화: for 루프, 거리 제곱 사용)
     if (shouldUpdateBubbles || !centerBubble) {
-      centerBubble = filteredBubbles.reduce((closest, b) => {
-        const distToCenter = dist(b.pos.x, b.pos.y, centerX, centerY);
-        const closestDist = closest ? dist(closest.pos.x, closest.pos.y, centerX, centerY) : Infinity;
-        return distToCenter < closestDist ? b : closest;
-      }, null);
+      let minDist = Infinity;
+      for (let i = 0; i < filteredBubbles.length; i++) {
+        const b = filteredBubbles[i];
+        const dx = b.pos.x - centerX;
+        const dy = b.pos.y - centerY;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < minDist) {
+          minDist = distSq;
+          centerBubble = b;
+        }
+      }
     }
 
     // 중앙 버블을 최대 크기로 부드럽게 설정 (interactionScale 사용)
@@ -4693,39 +4690,34 @@ function draw() {
         const centerBubbleX = centerBubble.pos.x;
         const centerBubbleY = centerBubble.pos.y;
         
-        filteredBubbles.forEach((b) => {
-        if (b === centerBubble || b.isPopping) return; // 중앙 버블과 팡 터지는 버블은 제외
+        // CPU 최적화: for 루프, 거리 제곱 사용, 상수 캐싱
+        // 태블릿 반짝임 방지: 알파 전환 속도 증가
+        const alphaEase = IS_MOBILE ? 0.15 : 0.12;
+        const fadeRange = ALPHA_FADE_RADIUS - CENTER_INFLUENCE_RADIUS;
+        const centerR2 = CENTER_INFLUENCE_RADIUS * CENTER_INFLUENCE_RADIUS;
+        const fadeR2 = ALPHA_FADE_RADIUS * ALPHA_FADE_RADIUS;
         
-        // 이미지가 로드되지 않은 버블은 투명도 조정하지 않음 (이미지가 없는 버블은 제외)
-        if (b.imageIndex !== null) {
-          const hasImage = bubbleImages[b.imageIndex] && bubbleImages[b.imageIndex].width > 0;
-          if (!hasImage) return; // 이미지가 없으면 투명도 조정하지 않음
+        for (let i = 0; i < filteredBubbles.length; i++) {
+          const b = filteredBubbles[i];
+          if (b === centerBubble || b.isPopping) continue;
+          if (b.imageIndex !== null && !bubbleImages[b.imageIndex]?.width) continue;
+          
+          const dx = b.pos.x - centerBubbleX;
+          const dy = b.pos.y - centerBubbleY;
+          const distSq = dx * dx + dy * dy;
+          
+          let targetAlpha;
+          if (distSq <= centerR2) {
+            targetAlpha = 1.0;
+          } else if (distSq >= fadeR2) {
+            targetAlpha = MIN_ALPHA;
+          } else {
+            const distToCenter = Math.sqrt(distSq);
+            const fadeProgress = (distToCenter - CENTER_INFLUENCE_RADIUS) / fadeRange;
+            targetAlpha = lerp(1.0, MIN_ALPHA, fadeProgress);
+          }
+          b.alpha = lerp(b.alpha, targetAlpha, alphaEase);
         }
-        
-        // 중앙 버블로부터의 거리 계산
-        const distToCenter = dist(b.pos.x, b.pos.y, centerBubbleX, centerBubbleY);
-        
-        // 거리에 따라 alpha 계산 (중앙에 가까울수록 1.0, 멀어질수록 MIN_ALPHA)
-        let targetAlpha;
-        if (distToCenter <= CENTER_INFLUENCE_RADIUS) {
-          // 중앙 근처는 완전히 불투명
-          targetAlpha = 1.0;
-        } else if (distToCenter >= ALPHA_FADE_RADIUS) {
-          // 최대 거리 이상은 최소 투명도
-          targetAlpha = MIN_ALPHA;
-        } else {
-          // 중간 영역은 선형 보간
-          const fadeRange = ALPHA_FADE_RADIUS - CENTER_INFLUENCE_RADIUS;
-          const fadeProgress = (distToCenter - CENTER_INFLUENCE_RADIUS) / fadeRange;
-          targetAlpha = lerp(1.0, MIN_ALPHA, fadeProgress);
-        }
-        
-        // 부드럽게 alpha 조정
-        // 이미지가 로드된 버블 또는 이미지가 없는 버블 모두 거리 기반 투명도 적용
-        // 태블릿에서 알파 전환을 더 부드럽게 (깜빡임 방지)
-        const alphaEase = IS_MOBILE ? 0.08 : 0.12; // 태블릿은 더 느리게
-        b.alpha = lerp(b.alpha, targetAlpha, alphaEase);
-        });
       }
       
       // 중앙 버블은 항상 완전히 불투명
