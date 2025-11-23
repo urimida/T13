@@ -6080,7 +6080,7 @@ class RotationController {
     isDragging: false,
     lastX: 0,
     lastY: 0,
-    autoSpeed: 0.01,
+    autoSpeed: 0.005, // 카테고리 선택 시 회전 속도 (2배 느리게: 0.01 -> 0.005)
     didDrag: false
   };
 
