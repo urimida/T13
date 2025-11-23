@@ -302,18 +302,32 @@ class GraphicsManager {
     this.vignetteBuffer = null;
     this.lastVignetteSize = { w: 0, h: 0 };
     this.lastWindowSize = { w: 0, h: 0 };
+    this._bgImageDrawn = false; // 배경 이미지 그리기 완료 플래그 (깜빡임 방지)
   }
 
-  // 배경 그리기 (ResourceManager 사용)
+  // 배경 그리기 (ResourceManager 사용, 깜빡임 방지)
   drawBackground() {
+    // 배경 버퍼가 없으면 즉시 생성하고 배경색으로 채우기 (깜빡임 방지)
     if (!bgBuffer) {
       if (resourceManager) {
         bgBuffer = resourceManager.getOrUpdateBuffer('bg', width, height);
       } else {
         bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
       }
+      // 배경 이미지가 로드되기 전에도 배경색으로 즉시 채우기
       bgBuffer.background(BG_COLOR);
     }
+    
+    // 배경 이미지가 로드되었는지 확인하고, 로드되었으면 그리기
+    if (bgImage && bgImage.width > 0 && bgImage.height > 0) {
+      // 배경 버퍼에 이미지가 그려져 있지 않으면 그리기
+      if (!this._bgImageDrawn) {
+        redrawBackgroundBuffer();
+        this._bgImageDrawn = true;
+      }
+    }
+    
+    // 배경 버퍼를 메인 캔버스에 그리기 (항상 안정적으로 표시)
     image(bgBuffer, 0, 0);
   }
 
@@ -616,6 +630,9 @@ class GroupViewRenderer {
     if (tagLayout) {
       push();
       drawingContext.save();
+      
+      // p5.js와 drawingContext 모두 중앙 정렬 설정
+      textAlign(CENTER, CENTER);
       drawingContext.textBaseline = "middle";
       drawingContext.textAlign = "center";
       drawingContext.imageSmoothingEnabled = true;
@@ -674,6 +691,9 @@ class GroupViewRenderer {
     if (groupName) {
       push();
       drawingContext.save();
+      
+      // p5.js와 drawingContext 모두 중앙 정렬 설정
+      textAlign(CENTER, CENTER);
       drawingContext.textBaseline = "middle";
       drawingContext.textAlign = "center";
       drawingContext.imageSmoothingEnabled = true;
@@ -1231,6 +1251,10 @@ let toggleButtons = [];
 // 주의: RotationController 클래스가 먼저 선언되어야 함
 // setup()에서 초기화됨
 let bubbleRotationState = null;
+
+// 윈도우 리사이즈 추적 (미세 리사이즈 무시용)
+let lastWindowSize = { w: 0, h: 0 };
+const MIN_RESIZE_THRESHOLD = 50; // 50px 이하 변화는 무시
 
 // ---------- CONFIG ----------
 const RENDER_CONFIG = {
@@ -3026,6 +3050,8 @@ function redrawBackgroundBuffer() {
   // 배경 버퍼가 없거나 크기가 변경되었을 때만 재생성
   if (!bgBuffer || bgBuffer.width !== width || bgBuffer.height !== height) {
     bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
+    // 재생성 시 즉시 배경색으로 채우기 (깜빡임 방지)
+    bgBuffer.background(BG_COLOR);
   }
   
   // 배경 이미지가 로드되었는지 확인
@@ -3052,6 +3078,7 @@ function redrawBackgroundBuffer() {
 
     bgBuffer.drawingContext.restore();
   } else {
+    // 이미지가 없으면 배경색으로 채우기 (깜빡임 방지)
     bgBuffer.background(BG_COLOR);
   }
 }
@@ -3290,18 +3317,18 @@ class LifecycleManager {
     // 디바이스별 설정 적용
     applyDeviceSettings(isMobile) {
       if (isMobile) {
-        pixelDensity(1);
-        frameRate(24);
-        MAX_DRAW = 20;
-        MAX_BUBBLE_RADIUS = 70;
+        pixelDensity(1.25); // 화질 개선: 1 -> 1.25로 증가 (성능과 화질 균형)
+        frameRate(30); // 부드러운 렌더링 유지
+        MAX_DRAW = 30; // 화질 개선: 20 -> 30으로 증가 (더 많은 버블 렌더링)
+        MAX_BUBBLE_RADIUS = 80; // 화질 개선: 70 -> 80으로 증가
         ANIMATION_CONFIG.enableBreathAnim = false;
         ANIMATION_CONFIG.lightEffectInterval = 4;
         ANIMATION_CONFIG.enableLightEffect = false;
         ANIMATION_CONFIG.enableMicGlow = false;
         ANIMATION_CONFIG.enableCenterPulse = false;
         ANIMATION_CONFIG.allowIdlePause = true;
-        MAX_CONCURRENT_IMAGE_LOADS = 4;
-        return 10; // queueSize
+        MAX_CONCURRENT_IMAGE_LOADS = 3; // 메모리 안정성: 4 -> 3으로 감소
+        return 8; // 메모리 안정성: 10 -> 8로 감소
     } else {
         pixelDensity(1.5);
         frameRate(30);
@@ -3366,7 +3393,7 @@ class LifecycleManager {
     resetInProgress = false;
   }
 
-  // 메모리 정리 (태블릿 최적화)
+  // 메모리 정리 (태블릿 최적화, 멈춤 방지)
   static gc() {
     // 그라디언트 캐시 정리
     if (gradientCache) {
@@ -3384,14 +3411,27 @@ class LifecycleManager {
       const limitMB = performance.memory.jsHeapSizeLimit / 1048576;
       const usagePercent = (usedMB / limitMB) * 100;
 
-      // 메모리 사용률이 80% 이상이면 경고
-      if (usagePercent > 80) {
+      // 메모리 사용률이 75% 이상이면 경고 (더 빠른 대응)
+      if (usagePercent > 75) {
         logWarn(`[LifecycleManager] 메모리 사용률 높음: ${usagePercent.toFixed(1)}%`);
-        // 필요시 softReset 호출
-        if (usagePercent > 90) {
+        // 그라디언트 캐시 강제 정리
+        if (gradientCache) {
+          gradientCache.clear();
+        }
+        // 필요시 softReset 호출 (85%로 낮춤)
+        if (usagePercent > 85) {
           logWarn(`[LifecycleManager] 메모리 위험 수준, 소프트 리셋 실행`);
           LifecycleManager.softReset();
         }
+      }
+    }
+    
+    // 명시적 GC 호출 (가능한 경우, 태블릿 안정성 향상)
+    if (typeof window !== 'undefined' && window.gc && typeof window.gc === 'function') {
+      try {
+        window.gc();
+      } catch (e) {
+        // GC 호출 실패는 무시
       }
     }
   }
@@ -3438,9 +3478,32 @@ function setup() {
   // 지연 로딩 자산 로드 시작
   loadDeferredAssets();
   
+  // 태블릿/모바일 최적화: 깜빡임 방지를 위한 설정
   const canvas = createCanvas(windowWidth, windowHeight);
   canvasElement = canvas?.elt ?? null;
   explorerRuntime.setP5Instance(canvas?.pInst ?? null);
+  
+  // 태블릿에서 깜빡임 방지: 배경을 먼저 설정
+  background(BG_COLOR);
+  
+  // 캔버스 렌더링 최적화 (태블릿 안정성 향상, 깜빡임 방지)
+  if (canvas && canvas.elt) {
+    const canvasElement = canvas.elt;
+    // 하드웨어 가속 활성화 (태블릿 성능 향상)
+    canvasElement.style.willChange = 'contents';
+    // CSS 최적화: 깜빡임 방지
+    canvasElement.style.imageRendering = 'auto';
+    canvasElement.style.backfaceVisibility = 'hidden';
+    canvasElement.style.transform = 'translateZ(0)'; // GPU 가속 강제
+    // 렌더링 최적화 힌트
+    if (canvasElement.getContext) {
+      const ctx = canvasElement.getContext('2d');
+      if (ctx) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high'; // 화질 개선: 모든 디바이스에서 high 품질 사용
+      }
+    }
+  }
 
   if (typeof window !== "undefined") {
     const beforeUnloadHandler = () => explorerRuntime.destroy();
@@ -3468,9 +3531,17 @@ function setup() {
   // LayoutManager 메트릭 초기 계산
   LayoutManager.calculateMetrics();
   
-  // 초기 배경 버퍼 생성 (ResourceManager 사용)
+  // 초기 배경 버퍼 생성 (ResourceManager 사용, 깜빡임 방지)
   bgBuffer = resourceManager.getOrUpdateBuffer('bg', width, height);
   bgBuffer.background(BG_COLOR);
+  
+  // 배경 이미지가 이미 로드되어 있으면 즉시 그리기
+  if (bgImage && bgImage.width > 0 && bgImage.height > 0) {
+    redrawBackgroundBuffer();
+    if (graphicsManager) {
+      graphicsManager._bgImageDrawn = true;
+    }
+  }
   
   // 🔧 태블릿은 무거운 작업을 살짝 뒤로 미뤄서 첫 화면이 먼저 뜨도록
   if (isMobile) {
@@ -3521,7 +3592,13 @@ function setup() {
   resourceManager.checkAsset(navigationBar, "navigationBar");
   resourceManager.checkAsset(bubbleCap, "bubbleCap");
   resourceManager.checkAsset(pretendardFont, "pretendardFont");
-  resourceManager.checkAsset(bgImage, "bgImage", redrawBackgroundBuffer);
+  // 배경 이미지 로드 완료 시 배경 버퍼 업데이트 (깜빡임 방지)
+  resourceManager.checkAsset(bgImage, "bgImage", () => {
+    redrawBackgroundBuffer();
+    if (graphicsManager) {
+      graphicsManager._bgImageDrawn = true;
+    }
+  });
 
   // 집단 이미지 로드 확인
   for (let i = 1; i <= 5; i++) {
@@ -3920,14 +3997,16 @@ function softReset() {
 function updateState() {
   const now = millis();
 
-  // 리셋 체크
-  if (!resetInProgress && now - lastResetTime > RESET_INTERVAL_MS) {
+  // 리셋 체크 (태블릿 안정성 향상: 2분마다)
+  const resetInterval = IS_MOBILE ? 2 * 60 * 1000 : RESET_INTERVAL_MS; // 태블릿은 2분
+  if (!resetInProgress && now - lastResetTime > resetInterval) {
     LifecycleManager.softReset();
     lastResetTime = now;
   }
 
-  // 주기적 메모리 정리 (30초마다)
-  if (now - lastMemoryCleanup > MEMORY_CLEANUP_INTERVAL) {
+  // 주기적 메모리 정리 (태블릿 안정성 향상: 20초마다)
+  const memoryCleanupInterval = IS_MOBILE ? 20000 : MEMORY_CLEANUP_INTERVAL; // 태블릿은 20초
+  if (now - lastMemoryCleanup > memoryCleanupInterval) {
     if (inputManager) {
       inputManager.cleanupStalePointers();
     } else if (activePointers.size > 10) {
@@ -4132,24 +4211,30 @@ function updateState() {
   }
 }
 
-// 렌더링 함수 (그리기만 수행)
+// 렌더링 함수 (그리기만 수행, 깜빡임 방지 최적화)
 function renderScene() {
-  // 배경 그리기
+  // 배경 그리기 (항상 먼저 그려서 깜빡임 방지)
   if (graphicsManager) {
     graphicsManager.drawBackground();
   } else {
-  if (!bgBuffer) {
+    // 레거시 fallback
+    if (!bgBuffer) {
       if (resourceManager) {
         bgBuffer = resourceManager.getOrUpdateBuffer('bg', width, height);
       } else {
-    bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
+        bgBuffer = recreateGraphicsBuffer(bgBuffer, width, height);
       }
-    bgBuffer.background(BG_COLOR);
-  }
-  image(bgBuffer, 0, 0);
+      bgBuffer.background(BG_COLOR);
+    }
+    // 배경 이미지가 로드되었으면 그리기 (한 번만)
+    if (bgImage && bgImage.width > 0 && bgImage.height > 0) {
+      redrawBackgroundBuffer();
+    }
+    image(bgBuffer, 0, 0);
   }
 
-  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 4 === 0;
+  // 태블릿에서도 더 자주 실행하여 화질 향상 (성능은 다른 최적화로 보완)
+  const shouldRunHeavyPass = !IS_MOBILE || frameCount % 3 === 0; // 4 -> 3으로 변경하여 더 자주 실행
   
   // 상태 변수 추출
   const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
@@ -4259,8 +4344,10 @@ function renderScene() {
       bubblesAbove = drawTagFilteredBubbles(selectedTag, selectedGroup) || [];
     }
     drawGroupView(selectedGroup);
-    bubblesAbove.forEach(({ bubble, x, y }) => {
-      bubble.drawAt(x, y);
+    bubblesAbove.forEach((bubble) => {
+      if (bubble && bubble.drawAt && bubble.pos) {
+        bubble.drawAt(bubble.pos.x, bubble.pos.y);
+      }
     });
   }
 
@@ -4286,9 +4373,9 @@ function renderScene() {
 }
 
 function draw() {
-  // 페이지가 보이지 않으면 렌더링 중단
+  // 페이지가 보이지 않으면 렌더링 중단 (깜빡임 방지를 위해 clear() 대신 배경만 그리기)
   if (!isPageVisible) {
-    clear();
+    // clear() 대신 배경만 그려서 깜빡임 최소화
     background(BG_COLOR);
     return;
   }
@@ -4721,8 +4808,10 @@ function draw() {
     drawGroupView(selectedGroup);
     
     // 위쪽 버블 그리기 (중심 이미지 뒤) - 태그가 선택된 경우에만
-    bubblesAbove.forEach(({ bubble, x, y }) => {
-      bubble.drawAt(x, y);
+    bubblesAbove.forEach((bubble) => {
+      if (bubble && bubble.drawAt && bubble.pos) {
+        bubble.drawAt(bubble.pos.x, bubble.pos.y);
+      }
     });
   }
 
@@ -5625,6 +5714,9 @@ function drawGroupView(groupIndex) {
 
     push();
     drawingContext.save();
+    
+    // p5.js와 drawingContext 모두 중앙 정렬 설정
+    textAlign(CENTER, CENTER);
     drawingContext.textBaseline = "middle";
     drawingContext.textAlign = "center";
     drawingContext.imageSmoothingEnabled = true;
@@ -5653,6 +5745,9 @@ function drawGroupView(groupIndex) {
       // 태그 텍스트 (그림자 효과 포함)
       push();
       drawingContext.save();
+      
+      // p5.js와 drawingContext 모두 중앙 정렬 설정
+      textAlign(CENTER, CENTER);
       drawingContext.textBaseline = "middle";
       drawingContext.textAlign = "center";
       drawingContext.imageSmoothingEnabled = true;
@@ -5673,7 +5768,7 @@ function drawGroupView(groupIndex) {
       drawingContext.shadowOffsetY = 2;
       
       const textX = tagX;
-      const textY = tagY - 8;
+      const textY = tagY; // -8 오프셋 제거하여 정확히 중앙에 배치
       text(tag, textX, textY);
       
       drawingContext.restore();
@@ -5787,79 +5882,79 @@ class TagRenderer {
 
   // 글래스 태그 그리기 (최적화된 버전)
   static draw(x, y, w, h, r, isSelected = false, isHovered = false) {
-    const ctx = drawingContext;
+  const ctx = drawingContext;
 
-    // 1) 아웃샤도우 (태그 외곽 글로우, hover 시 더 강하게)
-    ctx.save();
-    const shadowOffsetY = isHovered ? -2 : 0;
-    roundRectPath(ctx, x, y + shadowOffsetY, w, h, r);
+  // 1) 아웃샤도우 (태그 외곽 글로우, hover 시 더 강하게)
+  ctx.save();
+  const shadowOffsetY = isHovered ? -2 : 0;
+  roundRectPath(ctx, x, y + shadowOffsetY, w, h, r);
     ctx.shadowBlur = isHovered ? 24 : 18;
-    ctx.shadowColor = isHovered ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.25)";
-    ctx.shadowOffsetY = shadowOffsetY;
+  ctx.shadowColor = isHovered ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.25)";
+  ctx.shadowOffsetY = shadowOffsetY;
     ctx.fillStyle = "rgba(0,0,0,0.001)";
-    ctx.fill();
-    ctx.restore();
+  ctx.fill();
+  ctx.restore();
 
-    // 2) 클립 후, 배경을 다시 그리면서 필터 적용 → 백드롭 블러 효과
-    ctx.save();
-    roundRectPath(ctx, x, y, w, h, r);
-    ctx.clip();
-    ctx.globalAlpha = 0.5;
+  // 2) 클립 후, 배경을 다시 그리면서 필터 적용 → 백드롭 블러 효과
+  ctx.save();
+  roundRectPath(ctx, x, y, w, h, r);
+  ctx.clip();
+  ctx.globalAlpha = 0.5;
     
     // 백드롭 블러 효과 (성능 모드에 따라 조건부 실행)
     if (!this.LOW_QUALITY_MODE) {
-      if (bgBuffer) {
-        ctx.filter = "blur(5px) saturate(120%) brightness(80%)";
-        const src = bgBuffer.canvas || bgBuffer.elt;
-        ctx.drawImage(src, 0, 0);
-        ctx.filter = "none";
-      } else if (bgImage && bgImage.width > 0) {
-        ctx.filter = "blur(5px) saturate(120%) brightness(80%)";
-        const src = bgImage.canvas || bgImage.elt;
-        ctx.drawImage(src, 0, 0, width, height);
-        ctx.filter = "none";
-      } else {
-        ctx.fillStyle = BG_COLOR;
+  if (bgBuffer) {
+    ctx.filter = "blur(5px) saturate(120%) brightness(80%)";
+    const src = bgBuffer.canvas || bgBuffer.elt;
+    ctx.drawImage(src, 0, 0);
+    ctx.filter = "none";
+  } else if (bgImage && bgImage.width > 0) {
+    ctx.filter = "blur(5px) saturate(120%) brightness(80%)";
+    const src = bgImage.canvas || bgImage.elt;
+    ctx.drawImage(src, 0, 0, width, height);
+    ctx.filter = "none";
+  } else {
+    ctx.fillStyle = BG_COLOR;
         ctx.fillRect(x, y, w, h);
       }
     } else {
       // 저품질 모드: 단순 투명도 조절로 대체
       ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
-      ctx.fillRect(x, y, w, h);
-    }
+    ctx.fillRect(x, y, w, h);
+  }
 
     // 3) 글래스모피즘 그라디언트 배경 (캐시된 그라디언트 사용)
     const glassGradient = this._getGradient('glass', w, h, x, y);
-    ctx.fillStyle = glassGradient;
-    ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = glassGradient;
+  ctx.fillRect(x, y, w, h);
 
     // 4) 내부 하이라이트 그라디언트 (캐시된 그라디언트 사용)
     const innerHighlight = this._getGradient('highlight', w, h, x, y);
-    ctx.fillStyle = innerHighlight;
-    ctx.fillRect(x, y, w, h * 0.5);
-    
-    ctx.globalAlpha = 1.0;
+  ctx.fillStyle = innerHighlight;
+  ctx.fillRect(x, y, w, h * 0.5);
+  
+  ctx.globalAlpha = 1.0;
 
     // 5) 유리 테두리 (캐시된 그라디언트 사용)
     let edgeGradient;
     let lineWidth;
-    if (isSelected) {
+  if (isSelected) {
       edgeGradient = this._getGradient('edgeSelected', w, h, x, y);
       lineWidth = 3;
-    } else if (isHovered) {
+  } else if (isHovered) {
       edgeGradient = this._getGradient('edgeHovered', w, h, x, y);
       lineWidth = 2.5;
-    } else {
+  } else {
       edgeGradient = this._getGradient('edgeNormal', w, h, x, y);
       lineWidth = 1.5;
     }
     
     ctx.strokeStyle = edgeGradient;
     ctx.lineWidth = lineWidth;
-    roundRectPath(ctx, x, y, w, h, r);
-    ctx.stroke();
+  roundRectPath(ctx, x, y, w, h, r);
+  ctx.stroke();
 
-    ctx.restore();
+  ctx.restore();
   }
 
   // 캐시 무효화 (리사이즈 시)
@@ -5911,18 +6006,18 @@ function vignette() {
     graphicsManager.drawVignette();
   } else {
     // 레거시 fallback (비네팅 버퍼가 없을 때만)
-    const gTop = drawingContext.createLinearGradient(0, 0, 0, height * 0.25);
-    gTop.addColorStop(0, "rgba(0,0,0,0.35)");
-    gTop.addColorStop(1, "rgba(0,0,0,0)");
-    drawingContext.fillStyle = gTop;
-    noStroke();
-    rect(0, 0, width, height * 0.25);
+  const gTop = drawingContext.createLinearGradient(0, 0, 0, height * 0.25);
+  gTop.addColorStop(0, "rgba(0,0,0,0.35)");
+  gTop.addColorStop(1, "rgba(0,0,0,0)");
+  drawingContext.fillStyle = gTop;
+  noStroke();
+  rect(0, 0, width, height * 0.25);
 
-    const gBot = drawingContext.createLinearGradient(0, height, 0, height * 0.75);
-    gBot.addColorStop(0, "rgba(0,0,0,0.35)");
-    gBot.addColorStop(1, "rgba(0,0,0,0)");
-    drawingContext.fillStyle = gBot;
-    rect(0, height * 0.75, width, height * 0.25);
+  const gBot = drawingContext.createLinearGradient(0, height, 0, height * 0.75);
+  gBot.addColorStop(0, "rgba(0,0,0,0.35)");
+  gBot.addColorStop(1, "rgba(0,0,0,0)");
+  drawingContext.fillStyle = gBot;
+  rect(0, height * 0.75, width, height * 0.25);
   }
 }
 
@@ -5953,70 +6048,70 @@ class RotationController {
 
   // 회전 시작 확인
   static start(x, y) {
-    // 태그 필터링 또는 그룹 뷰가 활성화된 경우에만 회전 제어
-    const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
-    const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
-    const hasTagFilter = selectedTag !== null;
-    
-    if (!hasTagFilter && !showGroupView) {
-      return false; // 회전 제어 모드가 아님
-    }
-    
-    // 중심에서의 거리 계산
+  // 태그 필터링 또는 그룹 뷰가 활성화된 경우에만 회전 제어
+  const showGroupView = uiStateManager ? uiStateManager.showGroupView : false;
+  const selectedTag = uiStateManager ? uiStateManager.selectedTag : null;
+  const hasTagFilter = selectedTag !== null;
+  
+  if (!hasTagFilter && !showGroupView) {
+    return false; // 회전 제어 모드가 아님
+  }
+  
+  // 중심에서의 거리 계산
     const dx = x - this.centerX;
     const dy = y - this.centerY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  
     // 회전 제어 영역 내부인지 확인
     if (dist <= this.controlRadius) {
       this.state.isDragging = true;
       this.state.lastX = x;
       this.state.lastY = y;
       this.state.didDrag = false;
-      return true; // 회전 제어 시작됨
-    }
-    
-    return false; // 회전 제어 영역이 아님
+    return true; // 회전 제어 시작됨
   }
+  
+  return false; // 회전 제어 영역이 아님
+}
 
   // 회전 드래그 처리
   static drag(x, y) {
     if (!this.state.isDragging) {
-      return;
-    }
-    
-    // 이전 위치와 현재 위치의 각도 차이 계산
+    return;
+  }
+  
+  // 이전 위치와 현재 위치의 각도 차이 계산
     const prevDx = this.state.lastX - this.centerX;
     const prevDy = this.state.lastY - this.centerY;
-    const prevAngle = Math.atan2(prevDy, prevDx);
-    
+  const prevAngle = Math.atan2(prevDy, prevDx);
+  
     const currDx = x - this.centerX;
     const currDy = y - this.centerY;
-    const currAngle = Math.atan2(currDy, currDx);
-    
-    // 각도 차이 계산 (회전 방향 고려)
-    let angleDelta = currAngle - prevAngle;
-    
-    // 각도 차이를 -π ~ π 범위로 정규화
-    if (angleDelta > Math.PI) {
-      angleDelta -= 2 * Math.PI;
-    } else if (angleDelta < -Math.PI) {
-      angleDelta += 2 * Math.PI;
-    }
-    
-    // 드래그 감도 조절
+  const currAngle = Math.atan2(currDy, currDx);
+  
+  // 각도 차이 계산 (회전 방향 고려)
+  let angleDelta = currAngle - prevAngle;
+  
+  // 각도 차이를 -π ~ π 범위로 정규화
+  if (angleDelta > Math.PI) {
+    angleDelta -= 2 * Math.PI;
+  } else if (angleDelta < -Math.PI) {
+    angleDelta += 2 * Math.PI;
+  }
+  
+  // 드래그 감도 조절
     const dragSensitivity = 1.0;
-    
-    // 회전 각도 업데이트
+  
+  // 회전 각도 업데이트
     this.state.rotationAngle += angleDelta * dragSensitivity;
-    
-    // 각도 정규화 (드래그 중에도 오버플로우 방지)
-    const TWO_PI = Math.PI * 2;
+  
+  // 각도 정규화 (드래그 중에도 오버플로우 방지)
+  const TWO_PI = Math.PI * 2;
     this.state.rotationAngle = ((this.state.rotationAngle % TWO_PI) + TWO_PI) % TWO_PI;
-    
-    // 마지막 드래그 속도를 관성으로 저장 (튕겨 나가는 느낌)
-    const timeDelta = deltaTime / 1000; // 초 단위
-    if (timeDelta > 0 && Math.abs(angleDelta) > 0.001) {
+  
+  // 마지막 드래그 속도를 관성으로 저장 (튕겨 나가는 느낌)
+  const timeDelta = deltaTime / 1000; // 초 단위
+  if (timeDelta > 0 && Math.abs(angleDelta) > 0.001) {
       // 최대/최소 속도 제한 (견고성 향상)
       const rawVelocity = (angleDelta * dragSensitivity) / timeDelta * 0.5;
       const MAX_VELOCITY = 5.0; // 최대 회전 속도
@@ -6024,11 +6119,11 @@ class RotationController {
       this.state.angularVelocity = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, rawVelocity));
     }
     
-    if (Math.abs(angleDelta) > 0.0005) {
+  if (Math.abs(angleDelta) > 0.0005) {
       this.state.didDrag = true;
-    }
-    
-    // 마지막 위치 업데이트
+  }
+  
+  // 마지막 위치 업데이트
     this.state.lastX = x;
     this.state.lastY = y;
   }
@@ -6037,8 +6132,8 @@ class RotationController {
   static end() {
     if (this.state.isDragging) {
       this.state.isDragging = false;
-      
-      // 거의 안 움직인 상태에서 떼면 그냥 멈춘 느낌 나도록
+    
+    // 거의 안 움직인 상태에서 떼면 그냥 멈춘 느낌 나도록
       if (Math.abs(this.state.angularVelocity) < 0.0001) {
         this.state.angularVelocity = 0;
       }
