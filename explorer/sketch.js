@@ -2214,9 +2214,9 @@ class BubbleManager {
         const imageIndex = maxImageIndex > 0 ? (count % maxImageIndex) : null;
         const bubble = new Bubble(x, y, hueSeed, imageIndex);
         
-        // 이미지가 이미 로드되어 있으면 alpha를 조정 (깜빡거림 방지)
+        // 이미지가 이미 로드되어 있으면 alpha를 조정 (번쩍임 방지)
         if (imageIndex !== null && bubbleImages[imageIndex] && bubbleImages[imageIndex].width > 0) {
-          bubble.alpha = 0.01; // 페이드인 시작
+          bubble.alpha = 0.3; // 페이드인 시작 (0.01 -> 0.3으로 변경하여 더 부드럽게)
         }
         
         this.bubbles.push(bubble);
@@ -2841,11 +2841,17 @@ function requestBubbleImage(imageIndex) {
     imageIndex, 
     imageFiles, 
     (idx, img) => {
-    // 이미지 로드 완료 후 해당 이미지를 사용하는 버블들을 페이드인
+    // 이미지 로드 완료 후 해당 이미지를 사용하는 버블들을 부드럽게 페이드인 (번쩍임 방지)
     if (bubbleManager && bubbleManager.bubbles) {
       bubbleManager.bubbles.forEach((b) => {
-        if (b.imageIndex === idx && b.alpha < 0.01) {
-          b.alpha = 0.01;
+        if (b.imageIndex === idx) {
+          // 알파가 너무 낮으면 부드럽게 시작 (번쩍임 방지)
+          if (b.alpha < 0.01) {
+            b.alpha = 0.3; // 0.01 -> 0.3으로 변경하여 더 부드럽게 시작
+          } else if (b.alpha < 0.5) {
+            // 이미 어느 정도 보이면 더 부드럽게 증가
+            b.alpha = Math.max(b.alpha, 0.3);
+          }
         }
       });
       }
@@ -4137,14 +4143,23 @@ function updateState() {
           if (b.imageIndex !== null) {
             const hasImage = bubbleImages[b.imageIndex] && bubbleImages[b.imageIndex].width > 0;
             if (hasImage) {
-              if (b.alpha < 0.01) b.alpha = 0.01;
+              // 이미지가 로드되었으면 부드럽게 페이드인 (번쩍임 방지)
+              if (b.alpha < 0.3) {
+                b.alpha = lerp(b.alpha, 0.3, 0.15); // 부드럽게 증가
+              }
             } else {
               if (bubbleImageLoader && 
                   !bubbleImageLoader.isLoading(b.imageIndex) && !bubbleImageLoader.isLoaded(b.imageIndex)) {
                 requestBubbleImage(b.imageIndex);
-                if (b.alpha < 0.01) b.alpha = 0.01;
+                // 로딩 시작 시에도 부드럽게 (번쩍임 방지)
+                if (b.alpha < 0.1) {
+                  b.alpha = lerp(b.alpha, 0.1, 0.1);
+                }
               } else if (bubbleImageLoader && bubbleImageLoader.isLoaded(b.imageIndex)) {
-                if (b.alpha < 0.5) b.alpha = 0.5;
+                // 이미지 로드 완료 시 부드럽게 증가 (번쩍임 방지)
+                if (b.alpha < 0.5) {
+                  b.alpha = lerp(b.alpha, 0.5, 0.12);
+                }
               }
             }
           } else {
@@ -4611,21 +4626,27 @@ function draw() {
           if (b.imageIndex !== null) {
             const hasImage = bubbleImages[b.imageIndex] && bubbleImages[b.imageIndex].width > 0;
             if (hasImage) {
-              // 이미지가 로드되면 페이드인 시작 (거리 기반 투명도는 나중에 적용)
-              if (b.alpha < 0.01) b.alpha = 0.01; // 페이드인 시작
+              // 이미지가 로드되면 부드럽게 페이드인 (번쩍임 방지)
+              if (b.alpha < 0.3) {
+                b.alpha = lerp(b.alpha, 0.3, 0.15); // 부드럽게 증가
+              }
               // 거리 기반 투명도는 중앙 버블 찾은 후 적용되므로 여기서는 최소값만 설정
             } else {
               // 아직 로딩 시도조차 안 했으면 로딩 시도
               if (bubbleImageLoader && 
                   !bubbleImageLoader.isLoading(b.imageIndex) && !bubbleImageLoader.isLoaded(b.imageIndex)) {
                 requestBubbleImage(b.imageIndex);
-                // 로딩 중인 버블도 최소한 살짝 보이게 (완전 투명 X)
-                if (b.alpha < 0.01) b.alpha = 0.01;
+                // 로딩 중인 버블도 부드럽게 (번쩍임 방지)
+                if (b.alpha < 0.1) {
+                  b.alpha = lerp(b.alpha, 0.1, 0.1);
+                }
               }
               // 이미 로드 완료된 이미지인 경우 (실패한 경우는 error 콜백에서 imageIndex를 null로 바꿔주므로 여기 올 일이 거의 없음)
               else if (bubbleImageLoader && bubbleImageLoader.isLoaded(b.imageIndex)) {
-                // 방어적으로 alpha를 올려줌 (실패한 버블은 이미 imageIndex=null로 바뀌었을 것)
-                if (b.alpha < 0.5) b.alpha = 0.5;
+                // 방어적으로 alpha를 부드럽게 올려줌 (번쩍임 방지)
+                if (b.alpha < 0.5) {
+                  b.alpha = lerp(b.alpha, 0.5, 0.12);
+                }
               }
             }
           } else {
