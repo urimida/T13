@@ -1610,6 +1610,8 @@ function updateFullscreen() {
       fullscreenIndex = -1;
       fullscreenAnim = 0;
       fullscreenTagLayout = [];
+      // VR 모드에서 나왔을 때 안내 텍스트 다시 표시
+      showInstructionText = true;
     }
   } else {
     // 들어가는 애니메이션 (0 -> 1)
@@ -1725,10 +1727,24 @@ function drawFullscreen() {
       ? lerp(startOffsetY, targetOffsetY, anim)  // 나갈 때: targetOffsetY → startOffsetY (역방향)
       : lerp(startOffsetY, targetOffsetY, easedAnim);  // 들어갈 때: startOffsetY → targetOffsetY
     
-    // 클리핑 먼저 적용 (화면 밖으로 나가는 부분 제거)
-    drawingContext.beginPath();
-    drawingContext.rect(0, 0, width, height);
-    drawingContext.clip();
+    // 나갈 때는 동그란 모양으로 클리핑
+    if (isExiting) {
+      // 원의 중심 (이미지의 중심)
+      const circleCenterX = currentOffsetX + currentW * 0.5;
+      const circleCenterY = currentOffsetY + currentH * 0.5;
+      // 원의 반지름 (이미지의 작은 쪽에 맞춤)
+      const circleRadius = Math.min(currentW, currentH) * 0.5;
+      
+      // 원형 클리핑 적용
+      drawingContext.beginPath();
+      drawingContext.arc(circleCenterX, circleCenterY, circleRadius, 0, Math.PI * 2);
+      drawingContext.clip();
+    } else {
+      // 들어갈 때는 기존처럼 사각형 클리핑
+      drawingContext.beginPath();
+      drawingContext.rect(0, 0, width, height);
+      drawingContext.clip();
+    }
     
     // 확대/축소 애니메이션 적용
     imageMode(CORNER);
@@ -2094,6 +2110,18 @@ function drawLeftCards(scaleAll) {
     // 태그와 동일한 글래스 스타일로 그리기
     drawGlassTag(x, y, cardW, cardH, cardR, selected, false);
 
+    // 선택된 카테고리에 노란색 배경 추가
+    if (selected) {
+      push();
+      drawingContext.save();
+      noStroke();
+      fill(255, 255, 0, 0.05 * 255); // 노란색 0.3 투명도
+      roundRectPath(drawingContext, x, y, cardW, cardH, cardR);
+      drawingContext.fill();
+      drawingContext.restore();
+      pop();
+    }
+
     // 텍스트 그리기 (태그와 동일한 스타일)
     push();
     drawingContext.save();
@@ -2167,19 +2195,19 @@ function drawInstructionText() {
   ctx.shadowOffsetX = 0;
   ctx.shadowOffsetY = 0;
   fill(255, 255, 255, alpha * 0.2 * 255);
-  text("버블을 터트려 채집 환경으로 돌아가보세요.", width / 2, textY);
+  text("버블을 터트려 채집했던 그 순간의 감각을 다시 느껴보세요.", width / 2, textY);
 
   // 2단계: 중간 글로우 레이어
   ctx.shadowBlur = 10;
   ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.5})`;
   fill(255, 255, 255, alpha * 0.4 * 255);
-  text("버블을 터트려 채집 환경으로 돌아가보세요.", width / 2, textY);
+  text("버블을 터트려 채집했던 그 순간의 감각을 다시 느껴보세요.", width / 2, textY);
 
   // 3단계: 메인 LED 텍스트
   ctx.shadowBlur = 8;
   ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.8})`;
   fill(255, 255, 255, alpha * 255);
-  text("버블을 터트려 채집 환경으로 돌아가보세요.", width / 2, textY);
+  text("버블을 터트려 채집했던 그 순간의 감각을 다시 느껴보세요.", width / 2, textY);
 
   // 그림자 리셋
   ctx.shadowBlur = 0;
@@ -2356,12 +2384,15 @@ function setupPointerEvents() {
 
   c.style.touchAction = "none";
 
-  // 좌표 변환 헬퍼 함수 (익스플로어와 동일한 방식)
+  // 좌표 변환 헬퍼 함수 (태블릿 지원 개선)
   function getCanvasCoords(e) {
     const rect = c.getBoundingClientRect();
-    // p5.js 캔버스 좌표계로 변환
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    // 실제 캔버스 크기와 논리적 크기의 비율 계산
+    const scaleX = width / rect.width;
+    const scaleY = height / rect.height;
+    // p5.js 캔버스 좌표계로 변환 (스케일 고려)
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
     // 좌표 범위 체크 및 클램핑
     const clampedX = Math.max(0, Math.min(width, x));
     const clampedY = Math.max(0, Math.min(height, y));
@@ -2503,7 +2534,13 @@ function handleUI(id) {
 function toggleTagFilter(tag) {
   if (!tag || !bubbles || bubbleCount === 0) return;
   
+  const previousTag = activeTag;
   activeTag = (activeTag === tag) ? null : tag;
+  
+  // 카테고리가 변경되었을 때만 안내 텍스트 다시 표시
+  if (previousTag !== activeTag) {
+    showInstructionText = true;
+  }
 
   filteredIndices.length = 0;
   if (!activeTag) {
