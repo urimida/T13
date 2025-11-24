@@ -87,6 +87,40 @@ const DEFAULT_GROUP_LANGUAGES = {
        emotional: ["자기취향 강도","통통 귀여움","흥미","아이코닉함","즉각적 몰입"] },
 };
 
+const TAG_HORIZONTAL_SHIFTS = {
+  "깊이감": 30,
+  "긴장과 기대": 30,
+  "미드나잇 톤": -30,
+  "탐험": -30,
+  "자기취향 강도": 30,
+  "안정된 구형": -80,
+};
+
+const TAG_VERTICAL_OVERRIDES = {
+  "따뜻한 난색": 80,
+  "글로시한 윤기": 80,
+  "사랑스러움": -100,
+  "활력": -100,
+  "네온 핑크": 100,
+  "사이버 파스텔": 100,
+  "통통 귀여움": -130,
+  "자기취향 강도": -130,
+  "따뜻한 일상": -20,
+  "평온": -40,
+  "긴장과 기대": -50,
+  "탐험": -50,
+  "보호": -80,
+};
+
+function getGroupSizeMultiplier(g) {
+  switch(g) {
+    case 1: return 1.1;   // traveler
+    case 2: return 1.4;   // 20s
+    case 5: return 1.5;   // 10s
+    default: return 1.0;
+  }
+}
+
 let groupLanguages = cloneGroupLanguages(DEFAULT_GROUP_LANGUAGES);
 
 function cloneGroupLanguages(src){
@@ -397,6 +431,67 @@ function drawGlassTag(x, y, w, h, r, isSelected = false, isHovered = false){
 }
 
 /* =========================
+   2.5. TAG LAYOUT COMPUTATION
+========================= */
+
+const TagLayoutCache = { key: null, layout: null };
+
+function computeGroupTagLayout(g, s, imageRadius) {
+  const groupLang = groupLanguages[g];
+  if (!groupLang) return [];
+
+  const visualTags = groupLang.visual.slice(0, 2);
+  const emotionalTags = groupLang.emotional.slice(0, 2);
+  const tags = [...visualTags, ...emotionalTags].slice(0, 4);
+
+  const cacheKey = `${g}|${width}|${height}|${s}|${imageRadius}`;
+  if (TagLayoutCache.key === cacheKey) return TagLayoutCache.layout;
+
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const fontSize = 16 * 1.4 * s * 1.3;
+  const padding = 28 * s * 1.3;
+  const tagH = 56 * s * 1.3;
+  const tagR = tagH / 2;
+
+  const positions = [
+    { offsetX: -0.5, offsetY: -0.15 },
+    { offsetX: 0.5, offsetY: -0.35 },
+    { offsetX: 0.5, offsetY: 0.35 },
+    { offsetX: -0.5, offsetY: 0.55 },
+  ];
+
+  const ringRadius = imageRadius + ((g === 2 || g === 5) ? 15 : 30);
+
+  textSize(fontSize); // textWidth 위해 설정
+
+  const layout = tags.map((tag, i) => {
+    const pos = positions[i];
+    let ox = pos.offsetX;
+    let oy = pos.offsetY;
+    if (g === 2 || g === 5) ox *= 0.4;
+
+    const angle = Math.atan2(oy, ox);
+
+    let x = centerX + Math.cos(angle) * ringRadius + (TAG_HORIZONTAL_SHIFTS[tag] || 0) * s;
+    let y = centerY - 20 + Math.sin(angle) * ringRadius;
+
+    if (TAG_VERTICAL_OVERRIDES[tag]) {
+      y += TAG_VERTICAL_OVERRIDES[tag] * s;
+    }
+
+    const label = tag.startsWith("#") ? tag : `#${tag}`;
+    const w = textWidth(label) + padding * 2;
+
+    return { tag, label, x, baseY: y, w, h: tagH, r: tagR, fontSize };
+  });
+
+  TagLayoutCache.key = cacheKey;
+  TagLayoutCache.layout = layout;
+  return layout;
+}
+
+/* =========================
    3. RESOURCE / IMAGE LOADER
 ========================= */
 
@@ -407,6 +502,7 @@ class ImageLoader {
     this.loading = new Set();         // currently loading
     this.lastCheck = 0;
     this.activeLoads = 0;
+    this.lastSeen = new Map();       // path -> timestamp (LRU용)
   }
 
   has(path){ return this.cache.has(path); }
@@ -418,6 +514,13 @@ class ImageLoader {
     if (this.cache.has(path) || this.loading.has(path)) return;
     if (this.queue.length >= PERFORMANCE_CONFIG.maxImageQueueLength) return;
     this.queue.push(path);
+    this.lastSeen.set(path, millis());
+  }
+
+  markVisible(path) {
+    if (path) {
+      this.lastSeen.set(path, millis());
+    }
   }
 
   update(now) {
@@ -435,6 +538,7 @@ class ImageLoader {
         path,
         img => {
           this.cache.set(path, img);
+          this.lastSeen.set(path, millis());
           this.loading.delete(path);
           this.activeLoads = Math.max(0, this.activeLoads - 1);
         },
@@ -448,10 +552,13 @@ class ImageLoader {
   }
 
   gc(visibleSet) {
-    // remove images not visible recently
-    for (const key of this.cache.keys()) {
-      if (!visibleSet.has(key)) {
-        this.cache.delete(key);
+    // LRU 방식: 최근 60초 안 본 것만 삭제
+    const now = millis();
+    for (const [path] of this.cache) {
+      const seen = this.lastSeen.get(path) || 0;
+      if (now - seen > 60000) { // 60초 미가시 = 삭제
+        this.cache.delete(path);
+        this.lastSeen.delete(path);
       }
     }
   }
@@ -1007,8 +1114,46 @@ class Bubble {
     const img = this.imgPath ? app.imageLoader.get(this.imgPath) : null;
 
     push();
-    translate(this.displayX, this.displayY);
+    translate(this.displayX, this.displayY + (this.isCenter ? -20 : 0));
     noStroke();
+
+    // 주인공 버블 후광 (흰색 후광 + 반짝이는 효과)
+    if (this.isCenter) {
+      const t = app.t;
+      const glowRadius = this.displayR * 2.2;
+      const glowLayers = 5; // 레이어 수 증가
+      
+      // 기본 흰색 후광
+      for (let i = glowLayers; i > 0; i--) {
+        const layerRadius = glowRadius * (i / glowLayers);
+        const baseAlpha = 0.25 / glowLayers;
+        // 반짝이는 효과: 시간에 따라 알파 변화
+        const sparkle = 0.15 * Math.sin(t * 2 + this.pulseOffset);
+        const layerAlpha = (baseAlpha + sparkle) * this.alpha;
+        fill(255, 255, 255, Math.max(0, Math.min(255, layerAlpha * 255)));
+        circle(0, 0, layerRadius * 2);
+      }
+      
+      // 추가 반짝이는 하이라이트 (회전하는 하이라이트)
+      const sparkleAngle = t * 1.5 + this.pulseOffset;
+      const sparkleDist = this.displayR * 1.3;
+      const sparkleX = Math.cos(sparkleAngle) * sparkleDist;
+      const sparkleY = Math.sin(sparkleAngle) * sparkleDist;
+      const sparkleSize = this.displayR * 0.4;
+      const sparkleAlpha = (0.6 + 0.4 * Math.sin(t * 3)) * this.alpha;
+      
+      fill(255, 255, 255, sparkleAlpha * 255);
+      drawingContext.shadowBlur = sparkleSize * 2;
+      drawingContext.shadowColor = "rgba(255, 255, 255, 0.8)";
+      circle(sparkleX, sparkleY, sparkleSize);
+      
+      // 반대편 하이라이트 (대칭)
+      const sparkleX2 = Math.cos(sparkleAngle + Math.PI) * sparkleDist;
+      const sparkleY2 = Math.sin(sparkleAngle + Math.PI) * sparkleDist;
+      circle(sparkleX2, sparkleY2, sparkleSize * 0.7);
+      
+      drawingContext.shadowBlur = 0;
+    }
 
     // base - 모든 버블에 이미지 표시 (이미지가 없으면 기본 색상)
     if (img) {
@@ -1162,6 +1307,7 @@ class BubbleManager {
       // request visible image lazy-load
       if (b.imgPath) {
         app.imageLoader.request(b.imgPath);
+        app.imageLoader.markVisible(b.imgPath);
         this.visibleImgSet.add(b.imgPath);
       }
 
@@ -1274,10 +1420,10 @@ class BubbleManager {
       const zOffsetY = smoothZ * 20 * app.scaleAll;
       const finalY = bubbleY + zOffsetY;
       
-      // 크기 계산 (앞쪽이 더 큼)
+      // 크기 계산 (앞쪽이 더 큼) - 1.6배 확대
       const frontFactor = (sin(currentAngle) + 1) / 2;
-      const MIN_R = 50 * app.scaleAll;
-      const MAX_R = 85 * app.scaleAll;
+      const MIN_R = 50 * app.scaleAll * 1.6;
+      const MAX_R = 85 * app.scaleAll * 1.6;
       const targetBaseR = lerp(MIN_R, MAX_R, frontFactor);
       
       // 오비트 버블 준비 (원본과 동일)
@@ -1312,6 +1458,7 @@ class BubbleManager {
       // 이미지 요청
       if (b.imgPath) {
         app.imageLoader.request(b.imgPath);
+        app.imageLoader.markVisible(b.imgPath);
         this.visibleImgSet.add(b.imgPath);
       }
     }
@@ -1449,10 +1596,10 @@ class UIRenderer {
       rectMode(CORNER);
       rect(0, 0, width, height);
       
-    this.drawToggles();
+      this.drawToggles();
     }
     
-    this.drawInfo();
+    // drawInfo는 App.draw()에서 배경 다음에 호출되므로 여기서는 호출하지 않음
   }
 
   drawToggles(){
@@ -1469,9 +1616,10 @@ class UIRenderer {
       "10대 여성의 취향만",
     ];
 
-    const btnW = 300*s;
-    const btnH = 50*s;
-    const gap = 60*s;
+    // 글자 크기가 2배로 커졌으므로 버튼도 크게 조정
+    const btnW = 300*s * 1.5;
+    const btnH = 50*s * 1.5;
+    const gap = 60*s * 1.5;
     
     // 화면 중앙 기준으로 정렬
     const totalHeight = (labels.length - 1) * gap;
@@ -1485,15 +1633,20 @@ class UIRenderer {
       const rectX = x - btnW * 0.5;
       const rectY = y - btnH * 0.5;
 
-      drawGlassToggleButton(rectX, rectY, btnW, btnH, 16*s, { active: isActive });
+      // 버튼 크기가 커졌으므로 모서리 반경도 비례해서 증가
+      drawGlassToggleButton(rectX, rectY, btnW, btnH, 16*s * 1.5, { active: isActive });
 
       this.withTextRendering(() => {
         drawingContext.shadowBlur = isActive ? 8 : 4;
         drawingContext.shadowColor = isActive ? "rgba(255, 255, 255, 0.2)" : "rgba(255, 255, 255, 0.1)";
         drawingContext.shadowOffsetY = 0;
         fill(255, isActive ? 180 : 140);
-        textSize(16*s);
-        text(labels[i], x, y);
+        // 글자 크기 2배로 증가 및 볼드체 적용
+        const fontSize = 16 * s * 2;
+        textSize(fontSize);
+        drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
+        // 글자 위치 3픽셀 위로 올림
+        text(labels[i], x, y - 3);
         drawingContext.shadowBlur = 0;
       });
     }
@@ -1521,36 +1674,43 @@ class UIRenderer {
     if (ui.showGroupView && ui.groupMode) {
       infoY = b.displayY + b.displayR + 40 * s;
     } else {
-      infoY = b.isCenter ? (this.app.centerY + b.displayR + 40*s) : (b.displayY + b.displayR + 30*s);
+      // 주인공 버블은 20픽셀 위로 올라가고, 텍스트는 20픽셀 아래로 내림
+      infoY = b.isCenter ? (this.app.centerY - 20 + b.displayR + 40*s + 20) : (b.displayY + b.displayR + 30*s);
     }
 
     // 원본 스타일: withTextRendering 헬퍼 사용
     this.withTextRendering(() => {
+      // 주인공 버블일 때 1.3배 확대, 궤도 모드 버블일 때 1.6배 확대
+      let centerMultiplier = b.isCenter ? 1.3 : 1.0;
+      if (ui.showGroupView && ui.groupMode && !b.isCenter) {
+        centerMultiplier = 1.6; // 궤도 모드 버블 정보 1.6배
+      }
+      
       // 제목 (1.2배 크기, 700 굵기, 흰색, alpha 230)
-      const titleSize = 18 * s;
+      const titleSize = 18 * s * centerMultiplier;
       const titleFontSize = titleSize * 1.2;
       drawingContext.font = `700 ${titleFontSize}px "Pretendard Variable", Pretendard, sans-serif`;
       drawingContext.fillStyle = `rgba(255, 255, 255, ${230 / 255})`;
       drawingContext.fillText(b.title, x, infoY);
 
-      // 감정/비주얼 태그를 각각 모두 표시 (JSON 구조 변경 대응)
-      const visualTags = (b.visualTags || []).filter(Boolean);
-      const emotionalTags = (b.emotionalTags || []).filter(Boolean);
+      // 감정 2개, 비주얼 2개만 표시 (상위 4개)
+      const visualTags = (b.visualTags || []).filter(Boolean).slice(0, 2);
+      const emotionalTags = (b.emotionalTags || []).filter(Boolean).slice(0, 2);
       const tagGroups = [
         { list: visualTags },
         { list: emotionalTags }
       ].filter(group => group.list.length > 0);
 
       if (tagGroups.length > 0) {
-        const tagSize = 14 * s;
+        const tagSize = 14 * s * centerMultiplier;
         const tagFontSize = tagSize * 1.3;
-        const lineGap = 28 * s;
+        const lineGap = 28 * s * centerMultiplier;
         drawingContext.font = `400 ${tagFontSize}px "Pretendard Variable", Pretendard, sans-serif`;
         drawingContext.fillStyle = `rgba(255, 255, 255, ${180 / 255})`;
 
         tagGroups.forEach((group, idx) => {
           const tagText = group.list.map(tag => `#${tag}`).join("  ");
-          drawingContext.fillText(tagText, x, infoY + 35 * s + idx * lineGap);
+          drawingContext.fillText(tagText, x, infoY + 35 * s * centerMultiplier + idx * lineGap);
         });
       }
     });
@@ -1605,6 +1765,13 @@ class App {
 
     this._lastGC = 0;
     this._lastSoftReset = 0;
+    this._layoutDirty = true;
+    this._vignette = null;
+
+    // 워치독(감시) 안전장치
+    this._lastFrameAt = millis();
+    this._stallStart = null;
+    this._avgFps = 30;
   }
 
   preload(){
@@ -1697,16 +1864,31 @@ class App {
     const baseW = 1920, baseH = 1080;
     const s = Math.min(width/baseW, height/baseH);
     this.scaleAll = clamp(s, 0.5, 1.5);
+
+    // 비네트 프리렌더링
+    this._vignette = createGraphics(width, height);
+    const vg = this._vignette;
+    vg.clear();
+    vg.noFill();
+    for (let i = 0; i < 6; i++) {
+      const a = map(i, 0, 5, 0, 120);
+      vg.stroke(0, a);
+      vg.rectMode(CENTER);
+      vg.rect(width / 2, height / 2, width - i * 40, height - i * 40);
+    }
   }
 
   onResize(){
-    this.recalcLayout();
+    this._layoutDirty = true;
   }
 
   draw(){
     this.t = millis() / 1000;
 
-    this.recalcLayout(); // cheap; keeps ratios stable
+    if (this._layoutDirty) {
+      this.recalcLayout();
+      this._layoutDirty = false;
+    }
     this.ui.update();
 
     // 회전 각도 업데이트 (원본과 동일)
@@ -1733,6 +1915,37 @@ class App {
 
     // background
     this.drawBackground();
+
+    // 첫 화면에서 주인공 버블 정보를 항상 표시하기 위해 중앙 버블을 미리 찾아서 설정
+    if (!this.ui.showGroupView && !this.ui.groupMode) {
+      // 필터링된 버블 중에서 가장 가까운 버블 찾기
+      let centerCandidate = null;
+      let centerBestD2 = Infinity;
+      const bubbles = this.bubbleManager.bubbles;
+      
+      for (let i = 0; i < bubbles.length; i++) {
+        const b = bubbles[i];
+        // 필터링 확인
+        if (!b.matchesFilter(this.ui)) continue;
+        
+        // 카메라로부터의 거리 계산
+        const relX = wrapDelta(b.x - this.pan.camX, this.bubbleManager.worldW);
+        const relY = wrapDelta(b.y - this.pan.camY, this.bubbleManager.worldH);
+        const d2 = relX * relX + relY * relY;
+        
+        if (d2 < centerBestD2) {
+          centerBestD2 = d2;
+          centerCandidate = b;
+        }
+      }
+      
+      if (centerCandidate) {
+        this.ui.infoBubble = centerCandidate;
+      }
+    }
+
+    // 버블 클릭 시 나오는 글자를 가장 뒤 레이어에 배치 (배경 다음, 버블들 그리기 전)
+    this.uiRenderer.drawInfo();
 
     // render bubbles
     if (this.ui.showGroupView && this.ui.activeTag) {
@@ -1775,6 +1988,9 @@ class App {
 
     // periodic memory GC / soft reset
     this.handleMaintenance();
+
+    // 워치독(감시) 안전장치
+    this.watchdog();
   }
 
   drawBackground(){
@@ -1795,13 +2011,9 @@ class App {
       image(bg, width/2, height/2, dw, dh);
     }
 
-    // vignette (cheap gradient)
-    noFill();
-    for (let i=0; i<6; i++){
-      const a = map(i,0,5,0,120);
-      stroke(0, a);
-      rectMode(CENTER);
-      rect(width/2, height/2, width - i*40, height - i*40);
+    // vignette (프리렌더링된 것 사용)
+    if (this._vignette) {
+      image(this._vignette, 0, 0);
     }
   }
 
@@ -1843,30 +2055,26 @@ class App {
     const g = this.ui.activeGroup;
     if (g === 0) return;
     
-    // 태그 히트박스 초기화
-    this._tagHitBoxes = [];
+    this._tagHitBoxes = []; // 매 프레임 새로
     
     const s = this.scaleAll;
-    const centerX = width / 2;
-    const centerY = height / 2;
-    // 그룹별 이미지 크기 배율 적용
-    let sizeMultiplier = 1.0;
-    if (g === 1) sizeMultiplier = 1.1;      // 여행자
-    else if (g === 2) sizeMultiplier = 1.4;  // 20대 여성
-    else if (g === 5) sizeMultiplier = 1.5;  // 10대 여성
+    const sizeMultiplier = getGroupSizeMultiplier(g);
+    
     const baseImageSize = min(width * 0.4, height * 0.4) * s;
-    const imageSize = baseImageSize * sizeMultiplier;
+    const imageSize = baseImageSize * sizeMultiplier * 1.3;
     const imageRadius = imageSize / 2;
     
-    // 대표 이미지 그리기
+    const centerX = width / 2;
+    const centerY = height / 2;
+    
+    // 대표 이미지
     const groupImg = this.assets[`group_${g}`];
     if (groupImg && groupImg.width > 2) {
       imageMode(CENTER);
       image(groupImg, centerX, centerY, imageSize, imageSize);
       
-      // 버블캡 (원래 크기 기준으로 유지)
       if (this.assets.bubbleCap && this.assets.bubbleCap.width > 2) {
-        const capScale = baseImageSize / this.assets.bubbleCap.width;
+        const capScale = baseImageSize / this.assets.bubbleCap.width * 1.25;
         push();
         translate(centerX, centerY);
         scale(capScale);
@@ -1875,76 +2083,43 @@ class App {
       }
     }
     
-    // 태그들 그리기 (글래스모피즘 스타일)
-    const groupLang = groupLanguages[g];
-    if (groupLang) {
-      const visualTags = groupLang.visual.slice(0, 2);
-      const emotionalTags = groupLang.emotional.slice(0, 2);
-      const selectedTags = [...visualTags, ...emotionalTags];
-
-      const fontSize = 16 * 1.4 * s;
-      const padding = 28 * s;
-      const tagHeight = 56 * s;
-      const tagRadius = tagHeight / 2;
-
-      const tagPositions = [
-        { offsetX: -0.8, offsetY: -0.15 },
-        { offsetX: 0.85, offsetY: -0.35 },
-        { offsetX: 0.85, offsetY: 0.35 },
-        { offsetX: -0.8, offsetY: 0.55 },
-      ];
-
-      if (this.font) textFont(this.font);
-      textAlign(CENTER, CENTER);
-      textSize(fontSize);
-
-      selectedTags.forEach((tag, index) => {
-        if (index >= tagPositions.length) return;
-
-        const pos = tagPositions[index] || tagPositions[0];
-        const angle = Math.atan2(pos.offsetY, pos.offsetX);
-        const ringRadius = imageRadius + 10 * s;
-        const tagCenterX = centerX + Math.cos(angle) * ringRadius;
-        const tagCenterY = centerY + Math.sin(angle) * ringRadius;
-
-        const t = millis() * 0.001;
-        const floatY = Math.sin(t + index) * 3 * s;
-        const finalY = tagCenterY + floatY;
-
-        const label = tag.startsWith("#") ? tag : `#${tag}`;
-        const tagW = textWidth(label) + padding * 2;
-        const rectX = tagCenterX - tagW / 2;
-        const rectY = finalY - tagHeight / 2;
-
-        const isSelected = this.ui.activeTag === tag;
-
-        drawGlassTag(rectX, rectY, tagW, tagHeight, tagRadius, isSelected, false);
-
-        push();
-        drawingContext.save();
-        drawingContext.textBaseline = "middle";
-        drawingContext.textAlign = "center";
-        drawingContext.imageSmoothingEnabled = true;
-        drawingContext.imageSmoothingQuality = "high";
-        fill(255, isSelected ? 255 : 225);
-        textSize(fontSize);
-        drawingContext.shadowBlur = isSelected ? 18 : 10;
-        drawingContext.shadowColor = isSelected ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.25)";
-        text(label, tagCenterX, finalY);
-        drawingContext.shadowBlur = 0;
-        drawingContext.restore();
-        pop();
-
-        this._tagHitBoxes.push({
-          tag,
-          x: tagCenterX,
-          y: finalY,
-          w: tagW,
-          h: tagHeight,
-          group: g
-        });
-      });
-    }
+    // 태그 레이아웃 1번 계산
+    if (this.font) textFont(this.font);
+    textAlign(CENTER, CENTER);
+    
+    const layout = computeGroupTagLayout(g, s, imageRadius);
+    const t = millis() * 0.001;
+    
+    layout.forEach((L, idx) => {
+      const floatY = Math.sin(t + idx) * 3 * s;
+      const y = L.baseY + floatY;
+      
+      const rectX = L.x - L.w / 2;
+      const rectY = y - L.h / 2;
+      
+      const isSelected = this.ui.activeTag === L.tag;
+      
+      drawGlassTag(rectX, rectY, L.w, L.h, L.r, isSelected, false);
+      
+      push();
+      drawingContext.save();
+      drawingContext.textBaseline = "middle";
+      drawingContext.textAlign = "center";
+      drawingContext.imageSmoothingEnabled = true;
+      drawingContext.imageSmoothingQuality = "high";
+      fill(255, isSelected ? 255 : 225);
+      textSize(L.fontSize);
+      drawingContext.font = `700 ${L.fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
+      drawingContext.shadowBlur = isSelected ? 18 : 10;
+      drawingContext.shadowColor = isSelected ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.25)";
+      text(L.label, L.x, y);
+      drawingContext.shadowBlur = 0;
+      drawingContext.restore();
+      pop();
+      
+      // 히트박스 저장
+      this._tagHitBoxes.push({ ...L, y });
+    });
   }
 
   handleMaintenance(){
@@ -1960,6 +2135,35 @@ class App {
     if (now - this._lastSoftReset > softResetInterval){
       this.imageLoader.softReset();
       this._lastSoftReset = now;
+    }
+  }
+
+  watchdog(){
+    const now = millis();
+
+    // fps EMA(부드러운 평균) 추적
+    const fps = frameRate();
+    this._avgFps = lerp(this._avgFps, fps, 0.05);
+
+    // 프레임 스톨 감지: draw 호출 간격이 너무 길어지면
+    const dt = now - this._lastFrameAt;
+    this._lastFrameAt = now;
+
+    // 2초 이상 draw가 멈춘 걸 감지하면 리로드
+    if (dt > 2000) {
+      console.warn("STALL DETECTED, reloading...");
+      location.reload();
+    }
+
+    // 평균 fps가 8 이하로 5초 이상 지속되면 리로드(스로틀링/메모리 누수 대응)
+    if (this._avgFps < 8) {
+      if (!this._stallStart) this._stallStart = now;
+      if (now - this._stallStart > 5000) {
+        console.warn("LOW FPS TOO LONG, reloading...");
+        location.reload();
+      }
+    } else {
+      this._stallStart = null;
     }
   }
 
@@ -2073,79 +2277,16 @@ class App {
   }
 
   checkTagClick(x, y){
-    // 원본과 동일하게 태그 레이아웃을 직접 계산하여 클릭 감지
-    const ui = this.ui;
-    const g = ui.activeGroup;
-    if (g === 0) return null;
-    
-    const groupLang = groupLanguages[g];
-    if (!groupLang) return null;
-    
-    const s = this.scaleAll;
-    const centerX = width / 2;
-    const centerY = height / 2;
-    // 그룹별 이미지 크기 배율 적용
-    let sizeMultiplier = 1.0;
-    if (g === 1) sizeMultiplier = 1.1;      // 여행자
-    else if (g === 2) sizeMultiplier = 1.4;  // 20대 여성
-    else if (g === 5) sizeMultiplier = 1.5;  // 10대 여성
-    const imageSize = min(width * 0.4, height * 0.4) * s * sizeMultiplier;
-    const imageRadius = imageSize / 2;
-    
-    const visualTags = groupLang.visual.slice(0, 2);
-    const emotionalTags = groupLang.emotional.slice(0, 2);
-    const selectedTags = [...visualTags, ...emotionalTags];
-    
-    const fontSize = 16 * 1.4 * s;
-    const padding = 28 * s;
-    const tagHeight = 56 * s;
-    
-    const tagPositions = [
-      { offsetX: -0.8, offsetY: -0.15 },
-      { offsetX: 0.85, offsetY: -0.35 },
-      { offsetX: 0.85, offsetY: 0.35 },
-      { offsetX: -0.8, offsetY: 0.55 },
-    ];
-    
-    // 폰트 설정
-    if (this.font) textFont(this.font);
-    textSize(fontSize);
-    
-    let clicked = null;
-    
-    selectedTags.forEach((tag, index) => {
-      if (index >= 4 || clicked) return;
-      
-      const pos = tagPositions[index] || tagPositions[0];
-      const angle = Math.atan2(pos.offsetY, pos.offsetX);
-      const ringRadius = imageRadius + 10 * s;
-      const tagX = centerX + Math.cos(angle) * ringRadius;
-      const tagY = centerY + Math.sin(angle) * ringRadius;
-      
-      // 둥둥 떠다니는 효과 고려
-      const t = millis() * 0.001;
-      const floatY = Math.sin(t + index) * 3 * s;
-      const finalY = tagY + floatY;
-      
-      // 태그에 # 추가 (표시용)
-      const tagWithHash = tag.startsWith('#') ? tag : `#${tag}`;
-      
-      // 태그 크기 계산 (표시용 태그로 계산)
-      const tagW = textWidth(tagWithHash) + padding * 2;
-      
-      // 클릭 감지 (원본과 동일한 로직)
+    const boxes = this._tagHitBoxes || [];
+    for (const hb of boxes) {
       if (
-        x >= tagX - tagW / 2 &&
-        x <= tagX + tagW / 2 &&
-        y >= finalY - tagHeight / 2 &&
-        y <= finalY + tagHeight / 2
+        x >= hb.x - hb.w / 2 && x <= hb.x + hb.w / 2 &&
+        y >= hb.y - hb.h / 2 && y <= hb.y + hb.h / 2
       ) {
-        // 원본과 동일하게 # 없이 태그 반환
-        clicked = tag;
+        return hb.tag; // # 없는 원본 태그 반환
       }
-    });
-    
-    return clicked;
+    }
+    return null;
   }
 
   checkToggleHit(x,y){
