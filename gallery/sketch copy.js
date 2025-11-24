@@ -85,15 +85,32 @@ let arcTargetIndex = 0; // 목표 버블 인덱스 (스냅용)
 let arcCurrentIndex = 0; // 현재 버블 인덱스 (애니메이션용)
 let arcBubbleHitboxes = []; // 현재 화면에 그려진 버블의 히트박스 정보 [{x, y, r, bubble, slotIndex}]
 
+// --- ARC source cache (GC-free) ---
+let arcSrcIndices = [];   // 필터링된 버블 인덱스만 저장
+let arcSrcCount = 0;
+
+// 슬롯 재사용 버퍼 (객체 재사용으로 GC 방지)
+const ARC_SLOTS = ARC_VISIBLE_COUNT; // 7
+const arcSlotItems = new Array(ARC_SLOTS); // {x,y,r,bi,slotIndex,ySort} - 미리 초기화
+const arcAngles = new Float32Array(ARC_SLOTS);
+const arcRadii  = new Float32Array(ARC_SLOTS);
+
+// arcSlotItems 객체 미리 초기화 (setup에서 호출)
+function initArcSlotItems() {
+  for (let i = 0; i < ARC_SLOTS; i++) {
+    arcSlotItems[i] = { x: 0, y: 0, r: 0, bi: 0, slotIndex: 0, ySort: 0 };
+  }
+}
+
+// 드로우 순서(뒤→앞). 중앙은 마지막에 텍스트 따로.
+const ARC_DRAW_ORDER = [-3,-2,-1,1,2,3,0];
+
 // 캐러셀 변수 (carouselOffset, carouselVel, carouselSnapping)
 let carouselOffset = 0; // 캐러셀 오프셋
 let carouselVel = 0; // 캐러셀 속도
 let carouselSnapping = false; // 캐러셀 스냅 상태
 
-// 버블 스프라이트 캐시 (원본 스케치와 동일)
-const SPRITES = new Map(); // 스프라이트 캐시 (key: "bucket|hue", val: {g, size})
-const SPRITE_STEP = 6; // 반지름 버킷 간격(px) - 스프라이트 캐시용
-const BUBBLE_GLOSS = true; // 글로스 효과 활성화
+// 버블 스프라이트 캐시는 SpriteCache만 사용
 
 // 버블 이미지 배열 (원본 스케치와 동일)
 let bubbleImages = []; // 버블 이미지들 (지연 로딩)
@@ -110,14 +127,7 @@ let bubbles = null;
 let bubbleCount = 0;
 
 // pooled arrays / temp buffers (no per-frame alloc)
-let visibleIndices = [];     // viewport culling result
-let filteredIndices = [];    // current filter result
-let tmpIndices = [];         // scratch reuse
-
-// hex world
-let worldW = 0, worldH = 0;
-let camX = 0, camY = 0;
-let camVX = 0, camVY = 0;
+let filteredIndices = [];    // current filter result (태그 필터링용, 일부만 사용)
 
 // input
 let pointerDown = false;
@@ -158,6 +168,8 @@ let imageManager = null;
 let fpsSmoother = 60;
 let idleFrameSkip = 0;
 let lastActiveTime = 0;
+let deltaTime = 16.666; // 프레임 간 시간 차이 (ms, 기본값 60fps)
+let lastDrawTime = 0;
 
 // 안내 텍스트 관련 변수
 let showInstructionText = true; // 안내 텍스트 표시 여부
@@ -428,118 +440,6 @@ class Bubble {
   }
 }
 
-// 버블 색상 생성 함수 (원본 스케치와 동일)
-function bubbleColor(seed) {
-  const h = (seed * 137.5) % 360;
-  return {
-    outer: `hsl(${h} 70% 55% / 0.95)`,
-    inner: `hsl(${(h + 20) % 360} 80% 35% / 0.75)`,
-  };
-}
-
-// 스프라이트 캐시 시스템 (성능 최적화) - 원본 스케치와 동일
-function getBubbleSprite(r, hueSeed, imageIndex = null) {
-  const bucket = Math.max(6, Math.round(r / SPRITE_STEP) * SPRITE_STEP);
-  const h =
-    imageIndex !== null
-      ? `img${imageIndex}`
-      : Math.floor((hueSeed * 137.5) % 360);
-  const key = `${bucket}|${h}`;
-
-  if (SPRITES.has(key)) return SPRITES.get(key);
-
-  const size = bucket * 2;
-  const g = createGraphics(size, size);
-  g.drawingContext.imageSmoothingEnabled = true;
-  g.drawingContext.imageSmoothingQuality = "high";
-  g.noStroke();
-
-  // 이미지가 있으면 이미지 사용, 없으면 색상 사용
-  if (
-    imageIndex !== null &&
-    bubbleImages[imageIndex] &&
-    bubbleImages[imageIndex].width > 0
-  ) {
-    // 이미지 사용
-    g.push();
-    g.imageMode(g.CENTER);
-    g.ellipseMode(g.CENTER);
-
-    // 클리핑 마스크로 원형으로 자르기
-    g.drawingContext.save();
-    g.drawingContext.beginPath();
-    g.drawingContext.arc(bucket, bucket, bucket, 0, Math.PI * 2);
-    g.drawingContext.clip();
-
-    // 이미지 그리기 (크롭 및 스케일)
-    const img = bubbleImages[imageIndex];
-    const imgRatio = img.width / img.height;
-    const targetRatio = 1;
-
-    let drawW, drawH, offsetX, offsetY;
-    if (imgRatio > targetRatio) {
-      // 이미지가 더 넓음
-      drawH = size;
-      drawW = imgRatio * drawH;
-      offsetX = (size - drawW) / 2;
-      offsetY = 0;
-    } else {
-      // 이미지가 더 높음
-      drawW = size;
-      drawH = drawW / imgRatio;
-      offsetX = 0;
-      offsetY = (size - drawH) / 2;
-    }
-
-    g.image(img, bucket, bucket, drawW, drawH);
-    g.drawingContext.restore();
-    g.pop();
-  } else {
-    // 색상 사용
-    const base = bubbleColor(hueSeed);
-    const outer = base.outer;
-    const inner = base.inner;
-
-    // 그림자(오프스크린에서 한 번만)
-    g.drawingContext.save();
-    g.drawingContext.shadowBlur = 24;
-    g.drawingContext.shadowColor = "rgba(0,0,0,0.35)";
-    g.fill(outer);
-    g.circle(bucket, bucket, size);
-    g.drawingContext.restore();
-
-    // 글로스 그라디언트
-    if (BUBBLE_GLOSS) {
-      const grd = g.drawingContext.createRadialGradient(
-        bucket - bucket * 0.35,
-        bucket - bucket * 0.35,
-        bucket * 0.1,
-        bucket,
-        bucket,
-        bucket
-      );
-      grd.addColorStop(0, "rgba(255,255,255,0.45)");
-      grd.addColorStop(0.25, "rgba(255,255,255,0.20)");
-      grd.addColorStop(1, inner);
-      g.drawingContext.fillStyle = grd;
-      g.circle(bucket, bucket, size);
-    }
-  }
-
-  // 캡 이미지(있다면)까지 합성해서 완성 스프라이트로 캐시
-  const bubbleCapImg = uiImages["bubble-cap.png"];
-  if (bubbleCapImg && bubbleCapImg.width > 0) {
-    g.push();
-    g.imageMode(g.CENTER);
-    g.image(bubbleCapImg, bucket, bucket, size, size);
-    g.pop();
-  }
-
-  const sprite = { g, size };
-  SPRITES.set(key, sprite);
-  return sprite;
-}
-
 // 이미지 로딩은 ImageLoader가 자동으로 처리 (익스플로어와 동일)
 
 // very small sprite cache (size bucket -> graphics)
@@ -584,55 +484,6 @@ class SpriteCache {
 }
 
 // lazy image manager with fixed map (no retries / no growth)
-class ImageManager {
-  constructor() {
-    this.map = Object.create(null);  // key -> {state,img}
-    this.keys = [];                 // stable key list
-    this.maxConcurrent = 3;
-    this.loadingCount = 0;
-  }
-
-  registerKeys(files) {
-    this.keys.length = 0;
-    for (let i = 0; i < files.length; i++) {
-      const k = files[i];
-      this.map[k] = { state: 0, img: null };
-      this.keys.push(k);
-    }
-  }
-
-  request(key) {
-    const e = this.map[key];
-    if (!e) return null;
-    if (e.state === 2 || e.state === 3) return e.img;
-
-    if (e.state === 0 && this.loadingCount < this.maxConcurrent) {
-      e.state = 1;
-      this.loadingCount++;
-      const path = PATHS.bubbleImgs + key;
-      loadImage(
-        path,
-        (img) => {
-          e.img = img;
-          e.state = 2;
-          this.loadingCount--;
-          spriteCache.invalidateAll(); // image 들어오면 스프라이트 무효화
-        },
-        () => {
-          e.img = null;
-          e.state = 3;
-          this.loadingCount--;
-        }
-      );
-    }
-    return e.img;
-  }
-
-  state(key) {
-    const e = this.map[key];
-    return e ? e.state : 3;
-  }
-}
 
 /* =========================
    4. PRELOAD / SETUP
@@ -663,13 +514,14 @@ function setup() {
   textAlign(CENTER, CENTER);
 
   spriteCache = new SpriteCache();
-  imageManager = new ImageManager();
   imageLoader = new ImageLoader(); // 익스플로어와 동일한 ImageLoader
+
+  // 아크 캐러셀 슬롯 아이템 초기화 (객체 재사용)
+  initArcSlotItems();
 
   // JSON 비동기 로드
   loadBubbleDataFromJSON();
   
-  initWorld();
   initBackground();
   initUI();
 
@@ -706,13 +558,6 @@ function initData(raw) {
   // register image keys (fallback: from imageFiles)
   const files = raw.imageFiles || norm.map(d => d.imageFile).filter(Boolean);
   imageFiles = files; // 원본 스케치와 동일하게 전역 변수에 저장
-  imageManager.registerKeys(files);
-
-  // bubbleImages 배열 초기화 (원본 스케치와 동일)
-  bubbleImages = new Array(files.length);
-  for (let i = 0; i < files.length; i++) {
-    bubbleImages[i] = null; // 나중에 지연 로딩
-  }
 
   bubbles = new Array(bubbleCount);
   for (let i = 0; i < bubbleCount; i++) {
@@ -721,7 +566,6 @@ function initData(raw) {
     const imgKey = d.imageFile || files[i % files.length] || "";
     b.setData(d, imgKey);
     // imageIndex 설정 (원본 스케치와 동일)
-    b.imageIndex = files.indexOf(imgKey) >= 0 ? files.indexOf(imgKey) : null;
     b.hueSeed = i + 1; // 색상 시드 설정
     // 이미지 경로 설정 (익스플로어와 동일)
     b.imgPath = imgKey ? PATHS.bubbleImgs + imgKey : null;
@@ -729,51 +573,33 @@ function initData(raw) {
   }
 
   tagList = DATA_SCHEMA_ADAPTER.collectTags(norm);
-  activeTag = null;
+  
+  // "온기" 카테고리가 있으면 기본 선택
+  const warmthTag = tagList.find(tag => tag === "온기");
+  activeTag = warmthTag || null;
 
-  // filteredIndices init (all)
+  // ✅ 캐러셀 소스 캐싱
+  rebuildArcSource();
+
+  // filteredIndices init (필터링 적용)
   filteredIndices.length = 0;
-  for (let i = 0; i < bubbleCount; i++) filteredIndices.push(i);
-  
-  // 데이터 로드 후 월드 초기화 (이미 setup에서 호출되었을 수 있으므로 조건부)
-  if (worldW === 0 && worldH === 0) {
-    initWorld();
-  }
-
-  // 버블 이미지 지연 로딩은 ImageLoader가 자동으로 처리
-}
-
-function initWorld() {
-  // bubbles가 아직 초기화되지 않았으면 스킵
-  if (!bubbles || bubbleCount === 0) return;
-  
-  // hex grid size derived from count
-  const cols = Math.ceil(Math.sqrt(bubbleCount));
-  const rows = Math.ceil(bubbleCount / cols);
-
-  const spacing = RENDER.hexSpacing;
-  worldW = cols * spacing * 0.9;
-  worldH = rows * spacing * 0.8;
-
-  // place bubbles in hex pattern
-  let idx = 0;
-  for (let r = 0; r < rows; r++) {
-    const y = r * spacing * 0.86;
-    const xOffset = (r & 1) ? spacing * 0.5 : 0;
-    for (let c = 0; c < cols; c++) {
-      if (idx >= bubbleCount) break;
-      const x = c * spacing + xOffset;
-      const baseR = RENDER.baseBubbleRadius + (idx % 5);
-      if (bubbles[idx]) {
-        bubbles[idx].resetPlacement(x, y, baseR);
-      }
-      idx++;
+  if (!activeTag) {
+    // 태그가 없으면 모든 버블 표시
+    for (let i = 0; i < bubbleCount; i++) filteredIndices.push(i);
+  } else {
+    // "온기" 태그가 있으면 필터링 적용
+    for (let i = 0; i < bubbleCount; i++) {
+      const b = bubbles[i];
+      if (!b) continue;
+      const hasVisualTag = b.visualTags && b.visualTags.includes(activeTag);
+      const hasEmotionalTag = b.emotionalTags && b.emotionalTags.includes(activeTag);
+      b.filtered = hasVisualTag || hasEmotionalTag;
+      if (b.filtered) filteredIndices.push(i);
     }
   }
-
-  camX = worldW * 0.5 - width * 0.5;
-  camY = worldH * 0.55 - height * 0.5;
-  camVX = camVY = 0;
+  
+  // 데이터 로드 후 월드 초기화 (이미 setup에서 호출되었을 수 있으므로 조건부)
+  // 버블 이미지 지연 로딩은 ImageLoader가 자동으로 처리
 }
 
 function initBackground() {
@@ -790,19 +616,11 @@ function initBackground() {
     let drawW, drawH, bgOffsetX, bgOffsetY;
 
     // 화면을 완전히 꽉 채우도록 cover 방식 적용
-    if (imgRatio > screenRatio) {
-      // 이미지가 더 넓음 → 높이에 맞춰 확대
-      drawH = height;
-      drawW = imgRatio * drawH;
-      bgOffsetX = (width - drawW) / 2;
-      bgOffsetY = 0;
-    } else {
-      // 이미지가 더 높음 → 너비에 맞춰 확대
-      drawW = width;
-      drawH = drawW / imgRatio;
-      bgOffsetX = 0;
-      bgOffsetY = (height - drawH) / 2;
-    }
+    const cover = coverRect(bgImg.width, bgImg.height, width, height);
+    drawW = cover.w;
+    drawH = cover.h;
+    bgOffsetX = cover.x;
+    bgOffsetY = cover.y;
 
     // 클리핑 먼저 적용
     bgBuffer.drawingContext.save();
@@ -841,6 +659,8 @@ function initUI() {
 function draw() {
   // idle frame skip
   const now = millis();
+  deltaTime = now - (lastDrawTime || now);
+  lastDrawTime = now;
   const idle = !dragging && mode === 0 && (now - lastActiveTime) > 800;
   if (idle) {
     // skip to maintain ~idleFPS
@@ -888,427 +708,243 @@ function draw() {
   }
 
   if (DEV.showFPS) drawFPS();
-}
 
-/* =========================
-   7. UPDATE CORE
-========================= */
+  // --- GC 관리 (하루 종일 안정성 강화) ---
+  const isTablet = width < 1200;
+  const gcInterval = isTablet ? PERFORMANCE_CONFIG.tabletGCInterval : PERFORMANCE_CONFIG.desktopGCInterval;
+  const softInterval = isTablet ? PERFORMANCE_CONFIG.tabletSoftReset : PERFORMANCE_CONFIG.desktopSoftReset;
 
-function updatePanPhysics() {
-  // inertia decay
-  if (!dragging && (Math.abs(camVX) > 0.01 || Math.abs(camVY) > 0.01)) {
-    camX += camVX;
-    camY += camVY;
-    camVX *= INTERACT.inertiaDecay;
-    camVY *= INTERACT.inertiaDecay;
-    lastActiveTime = millis();
+  if (!window.lastGC) window.lastGC = 0;
+  if (!window.lastSoftReset) window.lastSoftReset = 0;
+
+  if (now - window.lastGC > gcInterval) {
+    window.lastGC = now;
+    if (imageLoader && imageLoader.gc) imageLoader.gc();
+    if (spriteCache && spriteCache.invalidateAll) spriteCache.invalidateAll();
   }
 
-  // torus wrap camera
-  camX = mod(camX, worldW);
-  camY = mod(camY, worldH);
-}
-
-function computeVisibleIndices() {
-  visibleIndices.length = 0;
-  
-  // bubbles가 아직 초기화되지 않았으면 스킵
-  if (!bubbles || bubbleCount === 0) return;
-
-  // viewport bounds in world coords
-  const padding = RENDER.maxBubbleRadius + 40;
-  const vx0 = camX - padding;
-  const vy0 = camY - padding;
-  const vx1 = camX + width + padding;
-  const vy1 = camY + height + padding;
-
-  // simple cull using wrap copies
-  for (let i = 0; i < filteredIndices.length; i++) {
-    const bi = filteredIndices[i];
-    const b = bubbles[bi];
-    
-    // 버블이 존재하지 않으면 스킵
-    if (!b) continue;
-
-    // normalize to camera wrapped space
-    const wx = wrapToCam(b.ax, camX, worldW);
-    const wy = wrapToCam(b.ay, camY, worldH);
-
-    if (wx >= vx0 && wx <= vx1 && wy >= vy0 && wy <= vy1) {
-      visibleIndices.push(bi);
-    }
-  }
-}
-
-function updateBubbles() {
-  // bubbles가 아직 초기화되지 않았으면 스킵
-  if (!bubbles || bubbleCount === 0) return;
-  
-  const cx = camX + width * 0.5;
-  const cy = camY + height * 0.55;
-
-  for (let k = 0; k < visibleIndices.length; k++) {
-    const i = visibleIndices[k];
-    const b = bubbles[i];
-    
-    // 버블이 존재하지 않으면 스킵
-    if (!b) continue;
-
-    // apply wrap around camera to keep continuity
-    const wx = wrapToCam(b.ax, camX, worldW);
-    const wy = wrapToCam(b.ay, camY, worldH);
-    b.wx = wx;
-    b.wy = wy;
-
-    // fisheye / size by distance (avoid sqrt when possible)
-    const dx = wx - cx;
-    const dy = wy - cy;
-    const d2 = dx * dx + dy * dy;
-
-    let targetR = b.rBase;
-    if (d2 < RENDER.centerInfluenceRadius * RENDER.centerInfluenceRadius) {
-      const d = Math.sqrt(d2); // only near center
-      const t = 1 - d / RENDER.centerInfluenceRadius;
-      targetR = b.rBase + t * (RENDER.maxBubbleRadius - b.rBase) * 0.6;
-    }
-
-    // cheap smoothing
-    b.r += (targetR - b.r) * 0.12;
-
-    // alpha fade by distance
-    let aT = 1;
-    if (d2 > RENDER.alphaFadeRadius * RENDER.alphaFadeRadius) {
-      aT = RENDER.minAlpha;
-    } else if (d2 > (RENDER.alphaFadeRadius * 0.5) ** 2) {
-      const d = Math.sqrt(d2);
-      aT = map(d, RENDER.alphaFadeRadius * 0.5, RENDER.alphaFadeRadius, 1, RENDER.minAlpha);
-    }
-
-    // filtering alpha target
-    if (!b.filtered) aT = 0;
-
-    b.alphaTarget = aT;
-    b.alpha += (b.alphaTarget - b.alpha) * 0.14;
-
-    // lazy image request only if alpha meaningful
-    if (b.alpha > 0.05 && b.imgState !== 2 && b.imgState !== 3) {
-      const img = imageManager.request(b.imgKey);
-      b.imgState = imageManager.state(b.imgKey);
-      b.img = img;
-    }
+  if (now - window.lastSoftReset > softInterval) {
+    window.lastSoftReset = now;
+    if (imageLoader && imageLoader.softReset) imageLoader.softReset();
   }
 }
 
 /* =========================
-   8. DRAW BUBBLES
-========================= */
-
-function drawBubbles() {
-  // bubbles가 아직 초기화되지 않았으면 스킵
-  if (!bubbles || bubbleCount === 0) return;
-  
-  noStroke();
-
-  for (let k = 0; k < visibleIndices.length; k++) {
-    const i = visibleIndices[k];
-    const b = bubbles[i];
-    
-    // 버블이 존재하지 않으면 스킵
-    if (!b) continue;
-    if (b.alpha <= 0.01) continue;
-
-    const rBucket = spriteCache.bucketSize(b.r);
-    const sprite = spriteCache.getCircle(rBucket, true);
-
-    const x = b.wx - camX;
-    const y = b.wy - camY;
-
-    push();
-    translate(x, y);
-    tint(255, 255 * b.alpha);
-
-    // image if loaded
-    if (b.imgState === 2 && b.img) {
-      imageMode(CENTER);
-      image(b.img, 0, 0, b.r * 2, b.r * 2);
-    } else {
-      // fallback circle
-      imageMode(CENTER);
-      image(sprite, 0, 0, rBucket * 2, rBucket * 2);
-    }
-
-    noTint();
-
-    // title only for near center bubble
-    if (isCenterBubble(b)) {
-      if (fontPretendard) textFont(fontPretendard);
-      fill(255, 255, 255, 230 * b.alpha);
-      textSize(clamp(b.r * 0.28, 11, 20));
-      textStyle(BOLD);
-      text(b.title, 0, b.r + 18);
-    }
-
-    pop();
-  }
-}
-
-/* =========================
-   9. ARC CAROUSEL
+   7. ARC CAROUSEL
 ========================= */
 
 // 아크 캐러셀 렌더링(필터링된 버블 사용) - 원본 스케치와 동일
 function drawArcCarousel() {
-  // 필터링된 버블 사용 (원본 스케치와 동일)
-  const src = activeTag !== null 
-    ? bubbles.filter((b, idx) => {
-        if (!b) return false;
-        const hasVisualTag = b.visualTags && b.visualTags.includes(activeTag);
-        const hasEmotionalTag = b.emotionalTags && b.emotionalTags.includes(activeTag);
-        return hasVisualTag || hasEmotionalTag;
-      })
-    : bubbles;
-  
-  if (!src || src.length === 0) return;
+  if (arcSrcCount === 0) return;
 
-  const { arcCenterX, arcCenterY, arcRadius, arcTopY, arcBottomY } = getArcMetrics();
+  const { arcCenterX, arcCenterY, arcRadius } = getArcMetrics();
+  const s = getResponsiveScale();
+  const bubbleScale = Math.max(0.7, s);
+  const EDGE_GAP = 20 * s;
 
-  // 아크 형태는 고정, 버블이 아크를 따라 이동하는 애니메이션
-  // 원의 윗부분만 보이는 형태 유지 (각도 범위: 0도 ~ 180도, 상단 반원)
-  const step = ARC_SPREAD_RAD / Math.max(1, ARC_VISIBLE_COUNT - 1);
-
-  // 목표 인덱스로 부드럽게 이동 (애니메이션)
+  // --- 1) 목표 인덱스 애니메이션 (최단 거리 보정 + 속도 완화 + deltaTime 보정) ---
   if (!arcDragging) {
-    const indexDiff = arcTargetIndex - arcCurrentIndex;
-    // 인덱스 차이를 최단 경로로 정규화
-    let normalizedDiff = indexDiff;
-    if (normalizedDiff > src.length / 2) normalizedDiff -= src.length;
-    if (normalizedDiff < -src.length / 2) normalizedDiff += src.length;
-
-    // 초기화 직후 또는 목표가 0일 때는 즉시 중앙 고정
-    if (arcTargetIndex === 0 && Math.abs(arcCurrentIndex) < 0.01) {
-      arcCurrentIndex = 0;
-    } else if (Math.abs(normalizedDiff) > 0.01) {
-      arcCurrentIndex = lerp(arcCurrentIndex, arcTargetIndex, 0.2); // 부드러운 이동
-      // 인덱스가 목표에 가까워지면 정확히 맞춤
-      if (Math.abs(normalizedDiff) < 0.1) {
-        arcCurrentIndex = arcTargetIndex;
-      }
+    const INDEX_EPS = 0.0008;
+    const VEL_EPS = 0.0008;
+    
+    // deltaTime 보정 (태블릿 FPS 흔들림 대응)
+    const dt = Math.min(33, deltaTime || 16.666) / 16.666; // 60fps 기준 배율
+    
+    const diff = shortestIndexDelta(arcCurrentIndex, arcTargetIndex, arcSrcCount);
+    
+    // 스냅은 하되, 속도를 갑자기 0 만들지 말고 감쇠로 자연스럽게
+    if (Math.abs(diff) > INDEX_EPS) {
+      arcCurrentIndex = lerpIndex(arcCurrentIndex, arcTargetIndex, 0.2 * dt, arcSrcCount);
+      // 스냅 중에는 속도도 조금 더 강하게 감쇠 (dt 적용)
+      arcVel *= Math.pow(0.92, dt);
     } else {
-      arcCurrentIndex = arcTargetIndex;
+      // 완전히 가까워졌고 속도도 충분히 작을 때만 완전히 고정
+      if (Math.abs(arcVel) < VEL_EPS) {
+        arcCurrentIndex = arcTargetIndex;
+        arcVel = 0;
+      } else {
+        // 아직 속도가 있으면 계속 감쇠 (dt 적용)
+        arcCurrentIndex = lerpIndex(arcCurrentIndex, arcTargetIndex, 0.2 * dt, arcSrcCount);
+        arcVel *= Math.pow(0.92, dt);
+      }
     }
   } else {
-    // 드래그 중에는 즉시 반응
     arcCurrentIndex = arcTargetIndex;
   }
 
-  // 각도 오프셋 계산 (버블 이동 애니메이션)
+  const mid = (ARC_VISIBLE_COUNT >> 1); // 3
+  const angleBase = -Math.PI / 2;
+
+  // --- 2) 슬롯별 반지름 미리 계산(재사용 배열) ---
+  let idxSlot = 0;
+  for (let i = -mid; i <= mid; i++) {
+    const distC = Math.abs(i) / mid;
+    const sizeRatio = 1 - Math.pow(distC, 4) * 0.8;
+    const maxR = (i === 0 ? ARC_HERO_R : ARC_MAX_R);
+    arcRadii[idxSlot++] = lerp(ARC_MIN_R, maxR, sizeRatio) * bubbleScale;
+  }
+
+  // --- 3) 슬롯 각도 계산(angles.find 제거) ---
+  // 중앙 슬롯
+  arcAngles[mid] = angleBase;
+
+  // 왼쪽
+  let currentAngle = angleBase;
+  for (let stepL = 1; stepL <= mid; stepL++) {
+    const prevR = arcRadii[mid - stepL + 1];
+    const currR = arcRadii[mid - stepL];
+    const centerDist = EDGE_GAP + prevR + currR;
+    currentAngle -= centerDist / arcRadius;
+    arcAngles[mid - stepL] = currentAngle;
+  }
+
+  // 오른쪽
+  currentAngle = angleBase;
+  for (let stepR = 1; stepR <= mid; stepR++) {
+    const prevR = arcRadii[mid + stepR - 1];
+    const currR = arcRadii[mid + stepR];
+    const centerDist = EDGE_GAP + prevR + currR;
+    currentAngle += centerDist / arcRadius;
+    arcAngles[mid + stepR] = currentAngle;
+  }
+
+  // arcScroll(소수 인덱스 기반)
+  const step = ARC_SPREAD_RAD / Math.max(1, ARC_VISIBLE_COUNT - 1);
   const indexOffset = arcCurrentIndex - Math.floor(arcCurrentIndex);
   arcScroll = -indexOffset * step;
 
-  // 7개 슬롯 배치 (중앙 기준 -3 ~ +3)
-  // 버블의 끝점(edge) 간 거리를 일정하게 유지하도록 각도 계산
-  const mid = Math.floor(ARC_VISIBLE_COUNT / 2); // 3
-  const angleBase = -Math.PI / 2; // 위 방향(12시 기준 -90도) 중심
+  // 히트박스 재사용 (길이만 조정, 객체 재사용)
+  arcBubbleHitboxes.length = ARC_SLOTS;
 
-  // 반응형 스케일 적용
-  const responsiveScale = getResponsiveScale();
+  // --- 4) 슬롯 아이템 채우기(객체 7개만 재사용) ---
+  const baseIndex = Math.floor(arcCurrentIndex);
+  for (let slot = -mid; slot <= mid; slot++) {
+    const slotIdx = slot + mid; // 0..6
+    const ang = arcAngles[slotIdx] + arcScroll;
+    const r = arcRadii[slotIdx];
 
-  // 먼저 모든 버블의 크기를 계산 (반응형 스케일 적용)
-  // 태블릿에서 버블이 너무 작아지지 않도록 최소 스케일 보장
-  const bubbleScale = Math.max(0.7, responsiveScale); // 최소 70% 크기 보장
-  const bubbleRadii = [];
-  for (let i = -mid; i <= mid; i++) {
-    const distanceFromCenter = Math.abs(i);
-    const maxDistance = mid;
-    const normalizedDistance = distanceFromCenter / maxDistance;
-    // 4제곱 함수를 사용하여 주인공과 그 다음, 그 다음의 차이를 더 크게
-    const sizeRatio = 1 - Math.pow(normalizedDistance, 4) * 0.8; // 4제곱으로 더 가파르게
-    // 주인공 버블(i=0)만 ARC_HERO_R 사용, 나머지는 ARC_MAX_R 사용
-    const maxR = i === 0 ? ARC_HERO_R : ARC_MAX_R;
-    const r = lerp(ARC_MIN_R, maxR, sizeRatio) * bubbleScale;
-    bubbleRadii.push({ index: i, r: r });
-  }
+    const x = arcCenterX + Math.cos(ang) * arcRadius;
+    const y = arcCenterY + Math.sin(ang) * arcRadius;
 
-  // 버블 끝점 간 일정한 간격 설정 (픽셀 단위, 반응형 스케일 적용)
-  const EDGE_GAP = 20 * responsiveScale; // 버블 끝점 간 간격 (픽셀)
-
-  // 중앙 버블부터 시작하여 각도를 누적 계산
-  const angles = [];
-  let currentAngle = angleBase; // 중앙 버블의 각도
-  angles.push({ index: 0, angle: currentAngle });
-
-  // 왼쪽으로 이동하면서 각도 계산
-  for (let i = 1; i <= mid; i++) {
-    const prevR = bubbleRadii[mid - i + 1].r; // 이전 버블 반지름
-    const currR = bubbleRadii[mid - i].r; // 현재 버블 반지름
-    // 두 버블의 끝점 간 거리 = 중심 간 거리 - 반지름 합
-    // 중심 간 거리 = 끝점 간 거리 + 반지름 합
-    const centerDistance = EDGE_GAP + prevR + currR;
-    // 아크 반지름을 기준으로 각도 차이 계산
-    const angleDiff = centerDistance / arcRadius;
-    currentAngle -= angleDiff; // 왼쪽으로 이동
-    angles.push({ index: -i, angle: currentAngle });
-  }
-
-  // 오른쪽으로 이동하면서 각도 계산
-  currentAngle = angleBase;
-  for (let i = 1; i <= mid; i++) {
-    const prevR = bubbleRadii[mid + i - 1].r; // 이전 버블 반지름
-    const currR = bubbleRadii[mid + i].r; // 현재 버블 반지름
-    const centerDistance = EDGE_GAP + prevR + currR;
-    const angleDiff = centerDistance / arcRadius;
-    currentAngle += angleDiff; // 오른쪽으로 이동
-    angles.push({ index: i, angle: currentAngle });
-  }
-
-  // 각도에 arcScroll 오프셋 추가
-  angles.forEach((angle) => {
-    angle.angle += arcScroll;
-  });
-
-  // 깊이(뒤→앞) 오버드로우 줄이기 위해 y가 큰 것부터 그리기
-  const drawList = [];
-  // 히트박스 정보 초기화 (매 프레임마다 업데이트)
-  arcBubbleHitboxes.length = 0;
-  
-  for (let i = -mid; i <= mid; i++) {
-    // 해당 인덱스의 각도 찾기
-    const angleData = angles.find((a) => a.index === i);
-    const fixedAngle = angleData
-      ? angleData.angle
-      : angleBase + i * step + arcScroll;
-    const x = arcCenterX + Math.cos(fixedAngle) * arcRadius;
-    const y = arcCenterY + Math.sin(fixedAngle) * arcRadius;
-
-    // 버블 크기는 이미 계산됨
-    const bubbleData = bubbleRadii.find((b) => b.index === i);
-    const r = bubbleData ? bubbleData.r : ARC_MIN_R;
-
-    // 버블만 순환: arcCurrentIndex 기준으로 상대 위치 계산
-    const baseIndex = Math.floor(arcCurrentIndex);
-    const idx = positiveMod(baseIndex + i, src.length);
-    const b = src[idx];
+    const bi = arcSrcIndices[positiveMod(baseIndex + slot, arcSrcCount)];
+    const b = bubbles[bi];
     if (!b) continue;
-    
-    drawList.push({ x, y, r, bubble: b, ySort: y, slotIndex: i });
-    
-    // 히트박스 정보 저장 (실제 그려지는 위치와 크기)
-    arcBubbleHitboxes.push({
-      x: x,
-      y: y,
-      r: r,
-      bubble: b,
-      slotIndex: i,
-      ySort: y
-    });
+
+    // slotItems 재사용 (객체 재사용으로 GC 방지)
+    const it = arcSlotItems[slotIdx];
+    it.x = x;
+    it.y = y;
+    it.r = r;
+    it.bi = bi;
+    it.slotIndex = slot;
+    it.ySort = y;
+
+    // 히트박스도 같은 객체 재사용
+    arcBubbleHitboxes[slotIdx] = { x, y, r, bubble: b, slotIndex: slot, ySort: y };
   }
 
-  // y값 큰 것(아래쪽)부터 그리면 위쪽 큰 버블이 겹쳐서 자연스러움
-  drawList.sort((a, b) => b.ySort - a.ySort);
-
-  // 중앙 버블(정보 텍스트)은 나중에 따로
+  // --- 5) 드로우(정렬 제거, 고정 order) ---
   let centerCandidate = null;
 
-  for (const it of drawList) {
-    const b = it.bubble;
-    // 버블 스프라이트/이미지 그대로 재사용
+  for (let k = 0; k < ARC_DRAW_ORDER.length; k++) {
+    const slot = ARC_DRAW_ORDER[k];
+    const slotIdx = slot + mid;
+    const it = arcSlotItems[slotIdx];
+    if (!it) continue;
+
+    const b = bubbles[it.bi];
+    if (!b) continue;
+
     b.pos.set(it.x, it.y);
-    // 계산된 크기를 바로 적용 (lerp 제거하여 정확한 크기 유지)
     b.r = it.r;
     b.alpha = 1.0;
 
-    // 이미지 요청 (익스플로어와 동일)
     if (b.imgPath && imageLoader) {
       imageLoader.request(b.imgPath);
       imageLoader.markVisible(b.imgPath);
     }
 
-    // 그림
-    b.drawAt(b.pos.x, b.pos.y);
+    b.drawAt(it.x, it.y);
 
-    // 중앙 후보(슬롯 인덱스가 0인 것)
-    if (it.slotIndex === 0) {
-      centerCandidate = it;
-    }
+    if (slot === 0) centerCandidate = it;
   }
 
-  // 이미지 로더 업데이트 (익스플로어와 동일)
-  if (imageLoader) {
-    imageLoader.update(performance.now());
-  }
+  if (imageLoader) imageLoader.update(performance.now());
 
-  // 중앙 후보에만 텍스트를 추가 (익스플로어 스타일)
+  // --- 6) 중앙 텍스트 ---
   if (centerCandidate) {
-    const b = centerCandidate.bubble;
-    const x = centerCandidate.x;
-    const y = centerCandidate.y;
-    const r = centerCandidate.r;
-    
-    const s = responsiveScale;
-    const centerMultiplier = 1.3; // 주인공 버블 1.3배 확대
-    
-    push();
-    drawingContext.save();
-    drawingContext.textBaseline = "middle";
-    drawingContext.textAlign = "center";
-    drawingContext.imageSmoothingEnabled = true;
-    drawingContext.imageSmoothingQuality = "high";
-    noStroke();
-    textAlign(CENTER, CENTER);
-    if (fontPretendard) textFont(fontPretendard);
-    
-    // 제목 (1.2배 크기, 700 굵기, 흰색, alpha 230) - 익스플로어와 동일
-    const titleSize = 18 * s * centerMultiplier;
-    const titleFontSize = titleSize * 1.2;
-    drawingContext.font = `700 ${titleFontSize}px "Pretendard Variable", Pretendard, sans-serif`;
-    drawingContext.fillStyle = `rgba(255, 255, 255, ${230 / 255})`;
-    const infoY = y + r + 40 * s;
-    drawingContext.fillText(b.name || b.title, x, infoY);
-    
-    // 감정 2개, 비주얼 2개만 표시 (상위 4개) - 익스플로어와 동일
-    const visualTags = (b.visualTags || []).filter(Boolean).slice(0, 2);
-    const emotionalTags = (b.emotionalTags || []).filter(Boolean).slice(0, 2);
-    const tagGroups = [
-      { list: visualTags },
-      { list: emotionalTags }
-    ].filter(group => group.list.length > 0);
-    
-    if (tagGroups.length > 0) {
-      const tagSize = 14 * s * centerMultiplier;
-      const tagFontSize = tagSize * 1.3;
-      const lineGap = 28 * s * centerMultiplier;
-      drawingContext.font = `400 ${tagFontSize}px "Pretendard Variable", Pretendard, sans-serif`;
-      drawingContext.fillStyle = `rgba(255, 255, 255, ${180 / 255})`;
-      
-      tagGroups.forEach((group, idx) => {
-        const tagText = group.list.map(tag => `#${tag}`).join("  ");
-        drawingContext.fillText(tagText, x, infoY + 35 * s * centerMultiplier + idx * lineGap);
-      });
-    }
-    
-    drawingContext.restore();
-    pop();
+    drawCenterBubbleInfo(centerCandidate, s);
   }
 
   updateCarouselPhysics();
 }
 
+function drawCenterBubbleInfo(centerCandidate, s) {
+  const b = bubbles[centerCandidate.bi];
+  const x = centerCandidate.x;
+  const y = centerCandidate.y;
+  const r = centerCandidate.r;
+
+  const centerMultiplier = 1.3;
+
+  push();
+  drawingContext.save();
+  drawingContext.textBaseline = "middle";
+  drawingContext.textAlign = "center";
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  noStroke();
+  textAlign(CENTER, CENTER);
+  if (fontPretendard) textFont(fontPretendard);
+
+  const titleSize = 18 * s * centerMultiplier;
+  const titleFontSize = titleSize * 1.2;
+  drawingContext.font = `700 ${titleFontSize}px "Pretendard Variable", Pretendard, sans-serif`;
+  drawingContext.fillStyle = `rgba(255, 255, 255, ${230 / 255})`;
+  const infoY = y + r + 40 * s;
+  drawingContext.fillText(b.name || b.title, x, infoY);
+
+  const visualTags = (b.visualTags || []).slice(0, 2);
+  const emotionalTags = (b.emotionalTags || []).slice(0, 2);
+  const tagGroups = [];
+  if (visualTags.length) tagGroups.push(visualTags);
+  if (emotionalTags.length) tagGroups.push(emotionalTags);
+
+  if (tagGroups.length) {
+    const tagSize = 14 * s * centerMultiplier;
+    const tagFontSize = tagSize * 1.3;
+    const lineGap = 28 * s * centerMultiplier;
+    drawingContext.font = `600 ${tagFontSize}px "Pretendard Variable", Pretendard, sans-serif`;
+    drawingContext.fillStyle = `rgba(255, 255, 255, ${180 / 255})`;
+
+    for (let i = 0; i < tagGroups.length; i++) {
+      const tagText = tagGroups[i].map(t => `#${t}`).join("  ");
+      drawingContext.fillText(tagText, x, infoY + 35 * s * centerMultiplier + i * lineGap);
+    }
+  }
+
+  drawingContext.restore();
+  pop();
+}
+
 function updateCarouselPhysics() {
   // 아크 캐러셀 물리 업데이트는 drawArcCarousel 내부에서 처리됨
-  // 여기서는 관성 감쇠만 처리
+  // 여기서는 관성 감쇠만 처리 (속도 완화 + deltaTime 보정)
   if (!arcDragging && Math.abs(arcVel) > 0.0005) {
-    const src = activeTag !== null 
-      ? bubbles.filter((b) => {
-          if (!b) return false;
-          const hasVisualTag = b.visualTags && b.visualTags.includes(activeTag);
-          const hasEmotionalTag = b.emotionalTags && b.emotionalTags.includes(activeTag);
-          return hasVisualTag || hasEmotionalTag;
-        })
-      : bubbles;
-    
-    if (src.length > 0) {
-      arcTargetIndex -= arcVel;
-      arcVel *= ARC_DAMP;
+    if (arcSrcCount > 0) {
+      // deltaTime 보정 (태블릿 FPS 흔들림 대응)
+      const dt = Math.min(33, deltaTime || 16.666) / 16.666;
+      
+      // 인덱스 순환 고려하여 최단 거리로 이동 (dt 적용)
+      const currentTarget = arcTargetIndex;
+      arcTargetIndex = currentTarget - arcVel * dt;
+      
+      // 인덱스 범위 정규화 (순환)
+      if (arcTargetIndex < 0) arcTargetIndex += arcSrcCount;
+      if (arcTargetIndex >= arcSrcCount) arcTargetIndex -= arcSrcCount;
+      
+      // 속도 감쇠 (갑자기 0으로 만들지 않음, dt 적용)
+      arcVel *= Math.pow(ARC_DAMP, dt);
       lastActiveTime = millis();
     }
   }
@@ -1404,17 +1040,9 @@ class TagRenderer {
     // 배경 이미지가 있으면 블러 효과 적용
     const bgImg = uiImages["bg.png"];
     if (bgImg && bgImg.width > 2) {
-      const canvasRatio = width / height;
-      const imgRatio = bgImg.width / bgImg.height;
-
-      let dw, dh;
-      if (imgRatio > canvasRatio) {
-        dh = height;
-        dw = height * imgRatio;
-      } else {
-        dw = width;
-        dh = width / imgRatio;
-      }
+      const cover = coverRect(bgImg.width, bgImg.height, width, height);
+      const dw = cover.w;
+      const dh = cover.h;
 
       const bgX = width / 2;
       const bgY = height / 2;
@@ -1490,16 +1118,48 @@ function generateRandomTagLayout(tags, imageRadius, visualTags = [], emotionalTa
     return "unknown";
   };
 
-  // 두 태그가 겹치는지 확인하는 함수
+  // VR 나가기 버튼 영역 계산
+  const centerX = width / 2;
+  const vrButtonTopY = 60 * responsiveScale;
+  const vrButtonFontSize = 16 * 1.4 * responsiveScale * 1.3;
+  const vrButtonPadding = 28 * responsiveScale * 1.3;
+  const vrButtonH = 56 * responsiveScale * 1.3;
+  textSize(vrButtonFontSize);
+  if (fontPretendard) textFont(fontPretendard);
+  textStyle(BOLD);
+  const vrButtonText = "<   VR모드 나가기"; // 실제 버튼 텍스트와 일치
+  const vrButtonTextW = textWidth(vrButtonText);
+  const vrButtonW = vrButtonTextW + vrButtonPadding * 2;
+  const vrButtonX = centerX - vrButtonW / 2;
+  const vrButtonY = vrButtonTopY;
+  const vrButtonBottomY = vrButtonY + vrButtonH;
+
+  // 두 태그가 겹치는지 확인하는 함수 (VR 버튼 영역도 체크)
   function checkCollision(x, y, w, h, existingLayout) {
+    const nx = x - w / 2;
+    const ny = y - h / 2;
+    
+    // VR 나가기 버튼과의 충돌 체크 (100픽셀 거리 강제)
+    const vrButtonMinDistance = 100; // VR 버튼과의 최소 거리 (픽셀)
+    const vrButtonExpandedX = vrButtonX - vrButtonMinDistance;
+    const vrButtonExpandedY = vrButtonY - vrButtonMinDistance;
+    const vrButtonExpandedW = vrButtonW + vrButtonMinDistance * 2;
+    const vrButtonExpandedH = vrButtonBottomY - vrButtonY + vrButtonMinDistance * 2;
+    const vrButtonExpandedBottomY = vrButtonExpandedY + vrButtonExpandedH;
+    
+    if (!(nx + w < vrButtonExpandedX || 
+          nx > vrButtonExpandedX + vrButtonExpandedW || 
+          ny + h < vrButtonExpandedY || 
+          ny > vrButtonExpandedBottomY)) {
+      return true; // VR 버튼과 100픽셀 이내 거리
+    }
+    
+    // 기존 태그들과의 충돌 체크
     for (const existing of existingLayout) {
       const ex = existing.x - existing.w / 2;
       const ey = existing.baseY - existing.h / 2;
       const ew = existing.w;
       const eh = existing.h;
-      
-      const nx = x - w / 2;
-      const ny = y - h / 2;
       
       // 사각형 충돌 감지 (여유 공간 포함)
       if (!(nx + w + minSpacing < ex || 
@@ -1564,6 +1224,23 @@ function generateRandomTagLayout(tags, imageRadius, visualTags = [], emotionalTa
             if (adjustedX + w / 2 > width - marginX) adjustedX = width - marginX - w / 2;
             if (adjustedY - tagH / 2 < marginYTop) adjustedY = marginYTop + tagH / 2;
             if (adjustedY + tagH / 2 > height - marginYBottom) adjustedY = height - marginYBottom - tagH / 2;
+            
+            // VR 버튼과의 충돌 체크 (100픽셀 거리 강제)
+            const nx = adjustedX - w / 2;
+            const ny = adjustedY - tagH / 2;
+            const vrButtonMinDistance = 100; // VR 버튼과의 최소 거리 (픽셀)
+            const vrButtonExpandedX = vrButtonX - vrButtonMinDistance;
+            const vrButtonExpandedY = vrButtonY - vrButtonMinDistance;
+            const vrButtonExpandedW = vrButtonW + vrButtonMinDistance * 2;
+            const vrButtonExpandedH = vrButtonBottomY - vrButtonY + vrButtonMinDistance * 2;
+            const vrButtonExpandedBottomY = vrButtonExpandedY + vrButtonExpandedH;
+            
+            const vrCollision = !(nx + w < vrButtonExpandedX || 
+                                  nx > vrButtonExpandedX + vrButtonExpandedW || 
+                                  ny + tagH < vrButtonExpandedY || 
+                                  ny > vrButtonExpandedBottomY);
+            
+            if (vrCollision) continue; // VR 버튼과 100픽셀 이내 거리면 스킵
             
             // 기존 태그들과의 최소 거리 계산
             let minDistToExisting = Infinity;
@@ -1773,12 +1450,12 @@ function drawFullscreen() {
   // VR모드 나가기 버튼 (가운데 위쪽)
   drawVRExitButton(anim);
 
-  // 태그 표시 (랜덤 배치) - 나갈 때는 더 빨리 사라지도록
-  const tagThreshold = isExiting ? 0.7 : 0.5; // 나갈 때는 0.7 이상일 때만 표시
+  // 태그 표시 (랜덤 배치) - 순차적으로 나타나도록
+  const tagThreshold = isExiting ? 0.7 : 0.3; // 들어갈 때는 더 일찍 시작 (0.3)
   if (fullscreenTagLayout.length > 0 && anim > tagThreshold) {
-    // 나갈 때는 태그 알파를 더 빠르게 감소
+    // 나갈 때는 태그 알파를 더 빠르게 감소, 들어갈 때는 전체 애니메이션 진행도 전달
     const tagAlpha = isExiting ? (anim - tagThreshold) / (1 - tagThreshold) : anim;
-    drawFullscreenTags(tagAlpha);
+    drawFullscreenTags(tagAlpha, isExiting);
   }
 }
 
@@ -1788,8 +1465,8 @@ function drawVRExitButton(anim) {
   const centerX = width / 2;
   const topY = 60 * responsiveScale;
   
-  // 태그와 동일한 크기 스타일 적용
-  const fontSize = 16 * 1.4 * responsiveScale * 1.3;
+  // 태그와 동일한 크기 스타일 적용 (글자 크기 더 작게)
+  const fontSize = 16 * 1.4 * responsiveScale * 1.3; // 더 작게 조정
   const padding = 28 * responsiveScale * 1.3;
   const tagH = 56 * responsiveScale * 1.3;
   const tagR = tagH / 2;
@@ -1797,7 +1474,8 @@ function drawVRExitButton(anim) {
   // 텍스트 크기 측정
   textSize(fontSize);
   if (fontPretendard) textFont(fontPretendard);
-  const buttonText = "> VR모드 나가기";
+  textStyle(BOLD);
+  const buttonText = "<   VR모드 나가기";
   const textW = textWidth(buttonText);
   const buttonWidth = textW + padding * 2;
   const buttonHeight = tagH;
@@ -1818,12 +1496,19 @@ function drawVRExitButton(anim) {
   fill(255, 255);
   textSize(fontSize);
   if (fontPretendard) textFont(fontPretendard);
-  drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
-  drawingContext.shadowBlur = 4;
-  drawingContext.shadowColor = "rgba(0,0,0,0.25)";
+  textStyle(BOLD);
+  drawingContext.shadowBlur = 0; // 그림자 제거 (버블 제목과 동일)
   drawingContext.shadowOffsetX = 0;
-  drawingContext.shadowOffsetY = 2;
-  text(buttonText, centerX, buttonY + buttonHeight / 2);
+  drawingContext.shadowOffsetY = 0;
+  const textY = buttonY + buttonHeight / 2 - 2; // 텍스트를 2픽셀 위로 이동
+  // 텍스트를 약간 오프셋을 두고 여러 번 그려서 엑스트라 볼드 효과 (더 많이 그려서 더 굵게)
+  text(buttonText, centerX, textY);
+  text(buttonText, centerX + 0.5, textY);
+  text(buttonText, centerX - 0.5, textY);
+  text(buttonText, centerX, textY + 0.5);
+  text(buttonText, centerX, textY - 0.5);
+  text(buttonText, centerX + 0.5, textY + 0.5);
+  text(buttonText, centerX - 0.5, textY - 0.5);
   drawingContext.shadowBlur = 0;
   drawingContext.restore();
   pop();
@@ -1943,10 +1628,34 @@ function drawGlassLabelFullscreen(x, y, w, h, r, anim, tagType = null) {
 }
 
 // 풀스크린 태그 그리기 (서클 투 캡쳐 스타일)
-function drawFullscreenTags(anim) {
+function drawFullscreenTags(anim, isExiting = false) {
   const t = millis() * 0.001;
+  const totalTags = fullscreenTagLayout.length;
   
   fullscreenTagLayout.forEach((L, idx) => {
+    let tagAlpha;
+    
+    if (isExiting) {
+      // 나갈 때: 모든 태그가 동시에 사라짐
+      tagAlpha = anim;
+    } else {
+      // 들어갈 때: 각 태그마다 순차적으로 나타나도록 지연 시간 계산
+      // 첫 번째 태그는 0.3부터 시작, 마지막 태그는 0.8까지
+      const delayStart = 0.3;
+      const delayEnd = 0.8;
+      const tagDelay = delayStart + (idx / Math.max(1, totalTags - 1)) * (delayEnd - delayStart);
+      
+      // 현재 애니메이션 진행도가 지연 시간을 넘었는지 확인
+      const tagProgress = Math.max(0, Math.min(1, (anim - tagDelay) / (1 - tagDelay)));
+      
+      // 부드러운 페이드인 효과 (ease-out)
+      const easeOut = (t) => 1 - Math.pow(1 - t, 2);
+      tagAlpha = easeOut(tagProgress);
+    }
+    
+    // 알파가 0이면 그리지 않음
+    if (tagAlpha <= 0) return;
+    
     // 부드러운 떠다니는 애니메이션
     const floatY = Math.sin(t + idx) * 3 * getResponsiveScale();
     const y = L.baseY + floatY;
@@ -1958,27 +1667,28 @@ function drawFullscreenTags(anim) {
     push();
     drawingContext.save();
     const tagType = L.tagType || null;
-    drawGlassLabelFullscreen(rectX, rectY, L.w, L.h, L.r, anim, tagType);
+    drawGlassLabelFullscreen(rectX, rectY, L.w, L.h, L.r, tagAlpha, tagType);
     drawingContext.restore();
     pop();
     
-    // 텍스트 그리기 (원래대로)
+    // 텍스트 그리기 (VR 나가기 버튼과 동일한 스타일)
     push();
     drawingContext.save();
     drawingContext.textBaseline = "middle";
     drawingContext.textAlign = "center";
     drawingContext.imageSmoothingEnabled = true;
     drawingContext.imageSmoothingQuality = "high";
-    drawingContext.globalAlpha = anim;
+    drawingContext.globalAlpha = tagAlpha;
     fill(255, 255);
     textSize(L.fontSize);
     if (fontPretendard) textFont(fontPretendard);
-    drawingContext.font = `700 ${L.fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
-    drawingContext.shadowBlur = 4;
-    drawingContext.shadowColor = "rgba(0,0,0,0.25)";
+    drawingContext.font = `600 ${L.fontSize}px "Pretendard Variable", Pretendard, sans-serif`; // 세미볼드
+    drawingContext.shadowBlur = 0; // 그림자 제거
     drawingContext.shadowOffsetX = 0;
-    drawingContext.shadowOffsetY = 2;
-    text(L.label, L.x, y);
+    drawingContext.shadowOffsetY = 0;
+    const textY = y - 2; // 텍스트를 2픽셀 위로 이동
+    // 세미볼드 스타일로 한 번만 그리기
+    text(L.label, L.x, textY);
     drawingContext.shadowBlur = 0;
     drawingContext.restore();
     pop();
@@ -2129,16 +1839,21 @@ function drawLeftCards(scaleAll) {
     drawingContext.imageSmoothingEnabled = true;
     drawingContext.imageSmoothingQuality = "high";
     
-    // 태그 이름
+    // 태그 이름 (세미볼드)
     textAlign(LEFT, CENTER);
     if (fontPretendard) textFont(fontPretendard);
     textSize(12 * 1.5); // 글자 크기 1.5배
+    drawingContext.font = `600 ${12 * 1.5}px "Pretendard Variable", Pretendard, sans-serif`; // 세미볼드
     fill(selected ? 255 : 200);
-    drawingContext.shadowBlur = selected ? 4 : 2;
-    drawingContext.shadowColor = "rgba(0,0,0,0.25)";
+    drawingContext.shadowBlur = 0; // 그림자 제거 (버블 제목과 동일)
     drawingContext.shadowOffsetX = 0;
-    drawingContext.shadowOffsetY = 1;
-    text(tagText, x + textPadding, y + cardH * 0.5);
+    drawingContext.shadowOffsetY = 0;
+    const textX = x + textPadding;
+    const textY = y + cardH * 0.5 - 2; // 텍스트를 2픽셀 위로 이동
+    // 텍스트를 약간 오프셋을 두고 여러 번 그려서 더 굵게 보이게 (버블 제목과 동일)
+    text(tagText, textX, textY);
+    text(tagText, textX + 0.5, textY);
+    text(tagText, textX, textY + 0.5);
     
     drawingContext.shadowBlur = 0;
     drawingContext.restore();
@@ -2337,21 +2052,36 @@ function pointerEnd(x, y) {
   // drag end snap
   if (dragMode === 2) {
     arcDragging = false;
-    // 스냅: 가장 가까운 정수 인덱스로 이동
-    const src = activeTag !== null 
-      ? bubbles.filter((b) => {
-          if (!b) return false;
-          const hasVisualTag = b.visualTags && b.visualTags.includes(activeTag);
-          const hasEmotionalTag = b.emotionalTags && b.emotionalTags.includes(activeTag);
-          return hasVisualTag || hasEmotionalTag;
-        })
-      : bubbles;
     
-    if (src.length > 0) {
-      arcTargetIndex = Math.round(arcCurrentIndex);
-      // 인덱스를 범위 내로 정규화
-      if (arcTargetIndex < 0) arcTargetIndex += src.length;
-      if (arcTargetIndex >= src.length) arcTargetIndex -= src.length;
+    if (arcSrcCount > 0) {
+      // 현재 위치에서 가장 가까운 정수 인덱스 계산 (최단 거리 고려)
+      let nearestIndex = Math.round(arcCurrentIndex);
+      
+      // 속도가 있으면 속도 방향으로 약간 보정 (더 자연스러운 스냅)
+      if (Math.abs(arcVel) > 0.01) {
+        // 속도 방향으로 다음/이전 인덱스 고려
+        const velocityDirection = arcVel > 0 ? 1 : -1;
+        const nextIndex = nearestIndex + velocityDirection;
+        
+        // 현재 위치와 다음 인덱스의 거리 비교
+        const distToNearest = Math.abs(shortestIndexDelta(arcCurrentIndex, nearestIndex, arcSrcCount));
+        const distToNext = Math.abs(shortestIndexDelta(arcCurrentIndex, nextIndex, arcSrcCount));
+        
+        // 다음 인덱스가 더 가까우면 그것으로 변경
+        if (distToNext < distToNearest) {
+          nearestIndex = nextIndex;
+        }
+      }
+      
+      // 최단 거리로 목표 인덱스 설정
+      arcTargetIndex = nearestIndex;
+      
+      // 인덱스를 범위 내로 정규화 (순환)
+      if (arcTargetIndex < 0) arcTargetIndex += arcSrcCount;
+      if (arcTargetIndex >= arcSrcCount) arcTargetIndex -= arcSrcCount;
+      
+      // 속도는 자연스럽게 감쇠되도록 유지 (갑자기 0으로 만들지 않음)
+      // drawArcCarousel의 애니메이션 로직이 자연스럽게 처리함
     }
     
     // 아크 드래그가 없었고, 버블을 클릭했으면 확대
@@ -2542,6 +2272,9 @@ function toggleTagFilter(tag) {
     showInstructionText = true;
   }
 
+  // ✅ 캐러셀 소스는 여기서 한 번만 갱신!
+  rebuildArcSource();
+
   filteredIndices.length = 0;
   if (!activeTag) {
     for (let i = 0; i < bubbleCount; i++) {
@@ -2676,6 +2409,35 @@ function normalizeIndex(i, n) {
   return i;
 }
 
+// 태그 바뀔 때만 소스 갱신 함수
+function rebuildArcSource() {
+  arcSrcIndices.length = 0;
+
+  if (!bubbles || bubbleCount === 0) {
+    arcSrcCount = 0;
+    return;
+  }
+
+  if (activeTag == null) {
+    for (let i = 0; i < bubbleCount; i++) {
+      if (bubbles[i]) arcSrcIndices.push(i);
+    }
+  } else {
+    for (let i = 0; i < bubbleCount; i++) {
+      const b = bubbles[i];
+      if (!b) continue;
+      const hasV = b.visualTags && b.visualTags.includes(activeTag);
+      const hasE = b.emotionalTags && b.emotionalTags.includes(activeTag);
+      if (hasV || hasE) arcSrcIndices.push(i);
+    }
+  }
+
+  arcSrcCount = arcSrcIndices.length;
+  // 안전하게 인덱스 보정
+  arcTargetIndex = clamp(Math.round(arcTargetIndex), 0, Math.max(0, arcSrcCount-1));
+  arcCurrentIndex = arcTargetIndex;
+}
+
 // 원본 스케치와 동일한 positiveMod 함수
 function positiveMod(n, m) {
   return ((n % m) + m) % m;
@@ -2729,15 +2491,40 @@ function clamp(v, lo, hi) {
   return v < lo ? lo : (v > hi ? hi : v);
 }
 
-function wrapToCam(pos, cam, size) {
-  // keep pos near cam (torus)
-  let p = pos;
-  const half = size * 0.5;
-  const d = p - cam;
-  if (d > half) p -= size;
-  else if (d < -half) p += size;
-  return p;
+// cover-fit 계산 헬퍼 (반복되는 cover 계산 통합)
+function coverRect(imgW, imgH, boxW, boxH) {
+  const imgR = imgW / imgH;
+  const boxR = boxW / boxH;
+  let w, h, x, y;
+  if (imgR > boxR) {
+    h = boxH;
+    w = imgR * h;
+    x = (boxW - w) / 2;
+    y = 0;
+  } else {
+    w = boxW;
+    h = w / imgR;
+    x = 0;
+    y = (boxH - h) / 2;
+  }
+  return { w, h, x, y };
 }
+
+// 인덱스 순환에서 최단 거리 계산 (각도와 유사한 개념)
+function shortestIndexDelta(current, target, count) {
+  if (count === 0) return 0;
+  let diff = target - current;
+  if (diff > count / 2) diff -= count;
+  if (diff < -count / 2) diff += count;
+  return diff;
+}
+
+// 인덱스 기반 부드러운 보간 (속도 완화)
+function lerpIndex(current, target, t, count) {
+  const d = shortestIndexDelta(current, target, count);
+  return current + d * t;
+}
+
 
 /* =========================
    17. DEBUG UI

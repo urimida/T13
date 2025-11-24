@@ -1961,11 +1961,11 @@ function drawFeatureLabels() {
   const centerY = captureAnimation.currentY ?? height / 2;
   const lensR = captureAnimation.targetRadius ?? 200;
 
-  const padX = 32 * responsiveScale; // 라벨 마진 더 크게 (글자보다 더 크게)
-  const labelH = 50 * responsiveScale; // 라벨 높이 더 크게 (위아래로 뚱뚱하게)
+  const padX = 28 * responsiveScale * 1.3; // 라벨 마진 (갤러리와 동일)
+  const labelH = 56 * responsiveScale * 1.3; // 라벨 높이 (갤러리와 동일)
   const radius = 79 * responsiveScale;
 
-  textSize(18 * responsiveScale);
+  textSize(16 * 1.4 * responsiveScale * 1.3); // 태그 크기 (갤러리와 동일)
   if (pretendardFont) {
     textFont(pretendardFont);
   }
