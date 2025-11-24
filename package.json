@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "T13 통합 프로젝트",
   "scripts": {
-    "build": "node build.js",
-    "build:analyze": "node build.js"
+    "build": "echo 'No build step required'",
+    "build:analyze": "echo 'No build step required'"
   },
   "keywords": [],
   "author": "",
