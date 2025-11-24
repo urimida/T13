@@ -34,184 +34,906 @@
     "super-market.webp",
     "jeju.webp",
     "crosswalk.webp",
-    "ginkgo-tree.webp"
+    "ginkgo-tree.webp",
+    "Child’s Family Drawing.webp",
+    "Golden Retriever Puppy Running.webp",
+    "Pastel Balloon Bouquet.webp",
+    "Pastel Carousel with Heart Balloons.webp",
+    "Pink Tulips at Sunset.webp",
+    "Plush Bunny on the Bed.webp",
+    "Sleeping Child in Warm Lamplight.webp",
+    "Toy Bunny with Wheels.webp"
   ],
   "bubbles": [
     {
       "title": "아키하바라의 밤거리",
-      "tags": ["#비비드 컬러", "#시각적 과부하", "#도시광 반사"],
-      "attributes": [1, 2, 5]
+      "image": "akihabara.webp",
+      "attributes": [
+        1,
+        2,
+        5
+      ],
+      "visualTags": [
+        "깊이감",
+        "메탈릭 쉐이드",
+        "미드나잇 톤",
+        "풍경 반사감",
+        "네온 핑크",
+        "디지털 글로시",
+        "높은 채도"
+      ],
+      "emotionalTags": [
+        "탐험",
+        "긴장과 기대",
+        "활력",
+        "흥미",
+        "자기취향 강도",
+        "아이코닉함"
+      ]
     },
     {
       "title": "식물 가득한 카페 인테리어",
-      "tags": ["#자연채광 강조", "#유기적 질감", "#우드톤 통일"],
-      "attributes": [2, 4]
+      "image": "cafe.webp",
+      "attributes": [
+        2,
+        4
+      ],
+      "visualTags": [
+        "따뜻한 난색",
+        "소프트 톤",
+        "파스텔 옐로",
+        "부드러운 난반사",
+        "투명한 안정감"
+      ],
+      "emotionalTags": [
+        "온기",
+        "안정",
+        "평온",
+        "설렘"
+      ]
     },
     {
       "title": "햇살 드는 거실 공간",
-      "tags": ["#부드러운 파스텔", "#확산광", "#시각적 여백"],
-      "attributes": [4]
+      "image": "home.webp",
+      "attributes": [
+        4
+      ],
+      "visualTags": [
+        "소프트 톤",
+        "파스텔 옐로",
+        "투명한 안정감",
+        "깨끗한 정결 이미지"
+      ],
+      "emotionalTags": [
+        "온기",
+        "안정",
+        "평온",
+        "따뜻한 일상"
+      ]
     },
     {
       "title": "경복궁의 야경",
-      "tags": ["#점광원 리듬", "#온냉색 대비", "#대칭적 구도"],
-      "attributes": [1, 3]
+      "image": "kyeongbokgung.webp",
+      "attributes": [
+        1,
+        3
+      ],
+      "visualTags": [
+        "깊이감",
+        "미드나잇 톤",
+        "고명도 대비",
+        "안정된 구형",
+        "균형적 분포"
+      ],
+      "emotionalTags": [
+        "탐험",
+        "긴장과 기대",
+        "보호",
+        "신뢰"
+      ]
     },
     {
       "title": "파리 에펠탑의 낮 풍경",
-      "tags": ["#구조적 중심", "#공기 원근감", "#자연색 대비"],
-      "attributes": [1, 2]
+      "image": "paris.webp",
+      "attributes": [
+        1,
+        2
+      ],
+      "visualTags": [
+        "깊이감",
+        "자연광 리플렉션",
+        "풍경 반사감",
+        "따뜻한 난색"
+      ],
+      "emotionalTags": [
+        "탐험",
+        "체험의 몰입",
+        "로맨틱",
+        "설렘"
+      ]
     },
     {
       "title": "해질녘 유럽 거리 풍경",
-      "tags": ["#저채도 컬러", "#따스한 조도", "#거리 리듬감"],
-      "attributes": [3, 4]
+      "image": "park.webp",
+      "attributes": [
+        3,
+        4
+      ],
+      "visualTags": [
+        "소프트 톤",
+        "부드러운 난반사",
+        "고명도 대비",
+        "균형적 분포"
+      ],
+      "emotionalTags": [
+        "온기",
+        "안정",
+        "평온",
+        "따뜻한 일상"
+      ]
     },
     {
       "title": "야외 수영장과 숲 배경",
-      "tags": ["#청명 색온도", "#인공자연", "#곡선 공간"],
-      "attributes": [2, 5]
+      "image": "pool.webp",
+      "attributes": [
+        2,
+        5
+      ],
+      "visualTags": [
+        "글로시한 윤기",
+        "부드러운 곡면",
+        "높은 채도",
+        "사이버 파스텔"
+      ],
+      "emotionalTags": [
+        "활력",
+        "설렘",
+        "흥미",
+        "즉각적 몰입"
+      ]
     },
     {
       "title": "프라하의 석양 다리",
-      "tags": ["#웜톤 그라데", "#공간 원근", "#수면 반사"],
-      "attributes": [1, 3]
+      "image": "Praha.webp",
+      "attributes": [
+        1,
+        3
+      ],
+      "visualTags": [
+        "깊이감",
+        "풍경 반사감",
+        "자연광 리플렉션",
+        "고명도 대비",
+        "균형적 분포"
+      ],
+      "emotionalTags": [
+        "고독한 낭만",
+        "체험의 몰입",
+        "신뢰",
+        "안정"
+      ]
     },
     {
       "title": "비 오는 도심 거리",
-      "tags": ["#반사광 질감", "#선형 원근", "#냉색 조명"],
-      "attributes": [2, 5]
+      "image": "rainy.webp",
+      "attributes": [
+        2,
+        5
+      ],
+      "visualTags": [
+        "네온 핑크",
+        "디지털 글로시",
+        "높은 채도",
+        "글로시한 윤기"
+      ],
+      "emotionalTags": [
+        "활력",
+        "흥미",
+        "즉각적 몰입",
+        "자기취향 강도"
+      ]
     },
     {
       "title": "학교 전경과 운동장",
-      "tags": ["#대지색 대비", "#대칭 수평", "#명시적 공간"],
-      "attributes": [5]
+      "image": "school.webp",
+      "attributes": [
+        5
+      ],
+      "visualTags": [
+        "사이버 파스텔",
+        "높은 채도",
+        "K-pop 팔레트"
+      ],
+      "emotionalTags": [
+        "흥미",
+        "통통 귀여움",
+        "즉각적 몰입"
+      ]
     },
     {
       "title": "서울의 봄 전경",
-      "tags": ["#계절 명도", "#원근감 흐름", "#수평선 중심"],
-      "attributes": [1, 2, 3]
+      "image": "seoul.webp",
+      "attributes": [
+        1,
+        2,
+        3
+      ],
+      "visualTags": [
+        "깊이감",
+        "자연광 리플렉션",
+        "풍경 반사감",
+        "고명도 대비",
+        "균형적 분포"
+      ],
+      "emotionalTags": [
+        "탐험",
+        "활력",
+        "성취",
+        "체험의 몰입"
+      ]
     },
     {
       "title": "남산과 전통건축 조망",
-      "tags": ["#계절 색채", "#수직 원근", "#전통현대"],
-      "attributes": [1, 2]
+      "image": "street.webp",
+      "attributes": [
+        1,
+        2
+      ],
+      "visualTags": [
+        "깊이감",
+        "자연광 리플렉션",
+        "풍경 반사감",
+        "따뜻한 난색"
+      ],
+      "emotionalTags": [
+        "탐험",
+        "긴장과 기대",
+        "체험의 몰입",
+        "설렘"
+      ]
     },
     {
       "title": "루프탑 테라스 공간",
-      "tags": ["#황혼 명도 대비", "#개방적 공간", "#점광원 리듬"],
-      "attributes": [3, 4]
+      "image": "terrace.webp",
+      "attributes": [
+        3,
+        4
+      ],
+      "visualTags": [
+        "고명도 대비",
+        "소프트 톤",
+        "부드러운 난반사",
+        "투명한 안정감"
+      ],
+      "emotionalTags": [
+        "온기",
+        "안정",
+        "평온",
+        "따뜻한 일상"
+      ]
     },
     {
       "title": "고즈넉한 유럽 골목",
-      "tags": ["#저명도 톤", "#반사 질감", "#중앙 구도"],
-      "attributes": [3, 4]
+      "image": "town.webp",
+      "attributes": [
+        3,
+        4
+      ],
+      "visualTags": [
+        "소프트 톤",
+        "부드러운 난반사",
+        "파스텔 옐로",
+        "시원한 색",
+        "균형적 분포"
+      ],
+      "emotionalTags": [
+        "평온",
+        "온기",
+        "안정"
+      ]
     },
     {
-      "title": "건설 현장의 일출 풍경",
-      "tags": ["#황금광 대비", "#산업 질감", "#수직 구조"],
-      "attributes": [3]
+      "title": "일하는 공간",
+      "image": "work.webp",
+      "attributes": [
+        3
+      ],
+      "visualTags": [
+        "고명도 대비",
+        "안정된 구형",
+        "균형적 분포",
+        "시원한 색"
+      ],
+      "emotionalTags": [
+        "책임감",
+        "신뢰",
+        "성취",
+        "안정"
+      ]
     },
     {
       "title": "빌딩",
-      "tags": ["#사선 구도", "#엣지 대비", "#브루탈"],
-      "attributes": [1, 3]
+      "image": "building.webp",
+      "attributes": [
+        1,
+        3
+      ],
+      "visualTags": [
+        "깊이감",
+        "메탈릭 쉐이드",
+        "고명도 대비",
+        "시원한 색"
+      ],
+      "emotionalTags": [
+        "탐험",
+        "긴장과 기대",
+        "신뢰",
+        "보호"
+      ]
     },
     {
       "title": "윤슬",
-      "tags": ["#사인 곡선", "#투명색", "#반추상"],
-      "attributes": [2, 5]
+      "image": "water-glitter.webp",
+      "attributes": [
+        2,
+        3,
+        5
+      ],
+      "visualTags": [
+        "글로시한 윤기",
+        "부드러운 곡면",
+        "사이버 파스텔",
+        "디지털 글로시"
+      ],
+      "emotionalTags": [
+        "설렘",
+        "사랑스러움",
+        "흥미",
+        "즉각적 몰입"
+      ]
     },
     {
       "title": "참깨 빵",
-      "tags": ["#유기적 분포", "#비정형성", "#표면 밀도"],
-      "attributes": [4]
+      "image": "hamburger.webp",
+      "attributes": [
+        4
+      ],
+      "visualTags": [
+        "소프트 톤",
+        "부드러운 난반사",
+        "파스텔 옐로"
+      ],
+      "emotionalTags": [
+        "온기",
+        "따뜻한 일상",
+        "배려"
+      ]
     },
     {
       "title": "네온 사인",
-      "tags": ["#형광 물질", "#외부 광선", "#팝아트"],
-      "attributes": [2, 5]
+      "image": "neon-sign.webp",
+      "attributes": [
+        2,
+        5
+      ],
+      "visualTags": [
+        "네온 핑크",
+        "디지털 글로시",
+        "높은 채도",
+        "사이버 파스텔"
+      ],
+      "emotionalTags": [
+        "흥미",
+        "아이코닉함",
+        "즉각적 몰입",
+        "자기취향 강도",
+        "활력"
+      ]
     },
     {
       "title": "핫소스",
-      "tags": ["#동심원 모양", "#점성 질감", "#모노미니멀"],
-      "attributes": [3, 4]
+      "image": "hot-sauce.webp",
+      "attributes": [
+        3,
+        4
+      ],
+      "visualTags": [
+        "고명도 대비",
+        "안정된 구형",
+        "균형적 분포"
+      ],
+      "emotionalTags": [
+        "온기",
+        "안정",
+        "신뢰"
+      ]
     },
     {
       "title": "폭죽 놀이",
-      "tags": ["#방사선 구도", "#광채 확산", "#동적 에너지"],
-      "attributes": [2, 5]
+      "image": "firework.webp",
+      "attributes": [
+        2,
+        5
+      ],
+      "visualTags": [
+        "높은 채도",
+        "네온 핑크",
+        "디지털 글로시",
+        "사이버 파스텔"
+      ],
+      "emotionalTags": [
+        "활력",
+        "흥미",
+        "즉각적 몰입",
+        "설렘",
+        "아이코닉함"
+      ]
     },
     {
       "title": "가을 낙엽",
-      "tags": ["#그물맥 구조", "#세포 패턴", "#프랙탈"],
-      "attributes": [3, 4]
+      "image": "fallen-leaf.webp",
+      "attributes": [
+        3,
+        4
+      ],
+      "visualTags": [
+        "소프트 톤",
+        "파스텔 옐로",
+        "부드러운 난반사",
+        "균형적 분포"
+      ],
+      "emotionalTags": [
+        "온기",
+        "평온",
+        "따뜻한 일상",
+        "안정"
+      ]
     },
     {
       "title": "성탄절 스웨터",
-      "tags": ["#지오메트릭", "#하이라키", "#민속 모티프"],
-      "attributes": [4, 5]
+      "image": "sweater.webp",
+      "attributes": [
+        4,
+        5
+      ],
+      "visualTags": [
+        "높은 채도",
+        "K-pop 팔레트",
+        "소프트 톤"
+      ],
+      "emotionalTags": [
+        "온기",
+        "흥미",
+        "통통 귀여움",
+        "즉각적 몰입"
+      ]
     },
     {
       "title": "풍선 강아지",
-      "tags": ["#풍선 질감", "#반사 질감", "#포스트모던"],
-      "attributes": [2, 5]
+      "image": "balloon-dog.webp",
+      "attributes": [
+        2,
+        5
+      ],
+      "visualTags": [
+        "젤리 텍스처",
+        "글로시한 윤기",
+        "부드러운 곡면",
+        "사이버 파스텔"
+      ],
+      "emotionalTags": [
+        "사랑스러움",
+        "흥미",
+        "통통 귀여움",
+        "즉각적 몰입"
+      ]
     },
     {
-      "title": "철근",
-      "tags": ["#산업 질감", "#규칙 그리드", "#텍토닉"],
-      "attributes": [1, 3]
+      "title": "건설 현장의 일출 풍경",
+      "image": "construction.webp",
+      "attributes": [
+        1,
+        3
+      ],
+      "visualTags": [
+        "깊이감",
+        "메탈릭 쉐이드",
+        "자연광 리플렉션",
+        "고명도 대비",
+        "균형적 분포"
+      ],
+      "emotionalTags": [
+        "긴장과 기대",
+        "탐험",
+        "책임감",
+        "성취"
+      ]
     },
     {
       "title": "고전 도서관의 정적",
-      "tags": ["#확산광", "#목재 질감", "#수직 반복"],
-      "attributes": [3]
+      "image": "library.webp",
+      "attributes": [
+        3
+      ],
+      "visualTags": [
+        "안정된 구형",
+        "균형적 분포",
+        "고명도 대비"
+      ],
+      "emotionalTags": [
+        "신뢰",
+        "안정",
+        "책임감"
+      ]
     },
     {
       "title": "트랙 위의 질주",
-      "tags": ["#저각 원근", "#역광 실루엣", "#동세 중심"],
-      "attributes": [2, 5]
+      "image": "running.webp",
+      "attributes": [
+        2,
+        5
+      ],
+      "visualTags": [
+        "부드러운 곡면",
+        "높은 채도",
+        "따뜻한 난색"
+      ],
+      "emotionalTags": [
+        "활력",
+        "흥미",
+        "즉각적 몰입",
+        "자기취향 강도"
+      ]
     },
     {
       "title": "삼겹살 식사 장면",
-      "tags": ["#근접 시선", "#온기감 색채", "#증기 조명"],
-      "attributes": [2, 4]
+      "image": "samgyeopsal.webp",
+      "attributes": [
+        2,
+        3,
+        4
+      ],
+      "visualTags": [
+        "따뜻한 난색",
+        "글로시한 윤기",
+        "소프트 톤",
+        "부드러운 난반사"
+      ],
+      "emotionalTags": [
+        "온기",
+        "따뜻한 일상",
+        "사랑스러움",
+        "활력"
+      ]
     },
     {
       "title": "실내 농구 경기",
-      "tags": ["#역동적 순간", "#인공조명", "#원형 구도"],
-      "attributes": [2, 5]
+      "image": "basketball.webp",
+      "attributes": [
+        2,
+        5
+      ],
+      "visualTags": [
+        "디지털 글로시",
+        "높은 채도",
+        "글로시한 윤기",
+        "네온 핑크"
+      ],
+      "emotionalTags": [
+        "활력",
+        "흥미",
+        "즉각적 몰입",
+        "자기표현"
+      ]
     },
     {
       "title": "홍대 거리 버스킹",
-      "tags": ["#네온 조명", "#군중 밀도", "#도시 에너지"],
-      "attributes": [1, 2, 5]
+      "image": "hongdae.webp",
+      "attributes": [
+        1,
+        2,
+        5
+      ],
+      "visualTags": [
+        "깊이감",
+        "미드나잇 톤",
+        "풍경 반사감",
+        "네온 핑크",
+        "높은 채도",
+        "디지털 글로시"
+      ],
+      "emotionalTags": [
+        "탐험",
+        "긴장과 기대",
+        "활력",
+        "흥미",
+        "즉각적 몰입",
+        "자기취향 강도"
+      ]
     },
     {
       "title": "수족관 터널 전경",
-      "tags": ["#수중광 산란", "#곡면 원근감", "#청록 단일톤"],
-      "attributes": [2, 5]
+      "image": "aquarium.webp",
+      "attributes": [
+        2,
+        5
+      ],
+      "visualTags": [
+        "부드러운 곡면",
+        "디지털 글로시",
+        "사이버 파스텔",
+        "높은 채도"
+      ],
+      "emotionalTags": [
+        "흥미",
+        "즉각적 몰입",
+        "설렘"
+      ]
     },
     {
       "title": "대형마트 통로",
-      "tags": ["#선형 원근", "#인공조명", "#포장색 반복"],
-      "attributes": [4]
+      "image": "super-market.webp",
+      "attributes": [
+        4
+      ],
+      "visualTags": [
+        "깨끗한 정결 이미지",
+        "투명한 안정감",
+        "소프트 톤"
+      ],
+      "emotionalTags": [
+        "따뜻한 일상",
+        "안정",
+        "평온"
+      ]
     },
     {
       "title": "제주 해안 일몰",
-      "tags": ["#색온도", "#수평선 중심", "#반사광 질감"],
-      "attributes": [1, 3, 4]
+      "image": "jeju.webp",
+      "attributes": [
+        1,
+        3,
+        4
+      ],
+      "visualTags": [
+        "깊이감",
+        "자연광 리플렉션",
+        "풍경 반사감",
+        "고명도 대비",
+        "소프트 톤",
+        "파스텔 옐로"
+      ],
+      "emotionalTags": [
+        "탐험",
+        "고독한 낭만",
+        "체험의 몰입",
+        "평온",
+        "온기",
+        "안정"
+      ]
     },
     {
       "title": "차창 밖 횡단보도",
-      "tags": ["#프레이밍", "#일상 리듬감", "#선형 대비"],
-      "attributes": [2, 4]
+      "image": "crosswalk.webp",
+      "attributes": [
+        2,
+        3,
+        4
+      ],
+      "visualTags": [
+        "소프트 톤",
+        "투명한 안정감",
+        "부드러운 난반사",
+        "따뜻한 난색"
+      ],
+      "emotionalTags": [
+        "활력",
+        "사랑스러움",
+        "따뜻한 일상",
+        "온기"
+      ]
     },
     {
       "title": "가을 은행나무길",
-      "tags": ["#계절색 지배", "#원근 반복", "#자연광 투과"],
-      "attributes": [3, 4]
+      "image": "ginkgo-tree.webp",
+      "attributes": [
+        3,
+        4
+      ],
+      "visualTags": [
+        "파스텔 옐로",
+        "소프트 톤",
+        "고명도 대비",
+        "균형적 분포"
+      ],
+      "emotionalTags": [
+        "온기",
+        "평온",
+        "안정",
+        "따뜻한 일상"
+      ]
+    },
+    {
+      "title": "아이의 가족 그림",
+      "image": "Child’s Family Drawing.webp",
+      "attributes": [
+        3,
+        4,
+        5
+      ],
+      "visualTags": [
+        "파스텔 옐로",
+        "소프트 톤",
+        "부드러운 난반사",
+        "따뜻한 난색",
+        "투명한 안정감"
+      ],
+      "emotionalTags": [
+        "사랑스러움",
+        "온기",
+        "따뜻한 일상",
+        "배려",
+        "안정"
+      ]
+    },
+    {
+      "title": "골든리트리버 강아지 질주",
+      "image": "Golden Retriever Puppy Running.webp",
+      "attributes": [
+        2,
+        5
+      ],
+      "visualTags": [
+        "부드러운 곡면",
+        "자연광 리플렉션",
+        "따뜻한 난색",
+        "높은 채도",
+        "글로시한 윤기"
+      ],
+      "emotionalTags": [
+        "활력",
+        "자유",
+        "설렘",
+        "흥미",
+        "즉각적 몰입"
+      ]
+    },
+    {
+      "title": "파스텔 풍선 부케",
+      "image": "Pastel Balloon Bouquet.webp",
+      "attributes": [
+        2,
+        3,
+        4,
+        5
+      ],
+      "visualTags": [
+        "파스텔 옐로",
+        "소프트 톤",
+        "부드러운 곡면",
+        "글로시한 윤기",
+        "사이버 파스텔"
+      ],
+      "emotionalTags": [
+        "사랑스러움",
+        "로맨틱",
+        "설렘",
+        "통통 귀여움",
+        "자기표현"
+      ]
+    },
+    {
+      "title": "하트 풍선 회전목마",
+      "image": "Pastel Carousel with Heart Balloons.webp",
+      "attributes": [
+        1,
+        2,
+        5
+      ],
+      "visualTags": [
+        "깊이감",
+        "파스텔 옐로",
+        "네온 핑크",
+        "사이버 파스텔",
+        "글로시한 윤기"
+      ],
+      "emotionalTags": [
+        "설렘",
+        "추억",
+        "로맨틱",
+        "흥미",
+        "체험의 몰입"
+      ]
+    },
+    {
+      "title": "노을 속 핑크 튤립",
+      "image": "Pink Tulips at Sunset.webp",
+      "attributes": [
+        1,
+        3,
+        4
+      ],
+      "visualTags": [
+        "파스텔 옐로",
+        "따뜻한 난색",
+        "풍경 반사감",
+        "소프트 톤",
+        "부드러운 난반사"
+      ],
+      "emotionalTags": [
+        "평온",
+        "온기",
+        "로맨틱",
+        "설렘",
+        "따뜻한 일상"
+      ]
+    },
+    {
+      "title": "침대 위 봉제 토끼",
+      "image": "Plush Bunny on the Bed.webp",
+      "attributes": [
+        3,
+        4,
+        5
+      ],
+      "visualTags": [
+        "소프트 톤",
+        "부드러운 난반사",
+        "파스텔 옐로",
+        "부드러운 곡면",
+        "투명한 안정감"
+      ],
+      "emotionalTags": [
+        "안정",
+        "온기",
+        "사랑스러움",
+        "통통 귀여움",
+        "휴식"
+      ]
+    },
+    {
+      "title": "램프 불빛 속 잠든 아이",
+      "image": "Sleeping Child in Warm Lamplight.webp",
+      "attributes": [
+        3,
+        4
+      ],
+      "visualTags": [
+        "소프트 톤",
+        "따뜻한 난색",
+        "부드러운 난반사",
+        "투명한 안정감",
+        "고명도 대비"
+      ],
+      "emotionalTags": [
+        "온기",
+        "보호",
+        "안정",
+        "따뜻한 일상",
+        "평온"
+      ]
+    },
+    {
+      "title": "바퀴 달린 토끼 장난감",
+      "image": "Toy Bunny with Wheels.webp",
+      "attributes": [
+        4,
+        5
+      ],
+      "visualTags": [
+        "젤리 텍스처",
+        "글로시한 윤기",
+        "부드러운 곡면",
+        "사이버 파스텔",
+        "파스텔 옐로"
+      ],
+      "emotionalTags": [
+        "통통 귀여움",
+        "사랑스러움",
+        "흥미",
+        "즉각적 몰입",
+        "자기표현"
+      ]
     }
   ]
 }
-
