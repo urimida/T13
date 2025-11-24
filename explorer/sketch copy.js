@@ -684,33 +684,47 @@ class PanController {
     this.dragging = false;
     // snap to nearest bubble after release (실제 드래그가 있었을 때만)
     if (this.hasDragged) {
-    const nearest = this.app.bubbleManager.findNearestToCam(this.camX, this.camY);
-    if (nearest) {
-      this.snapTargetX = nearest.x;
-      this.snapTargetY = nearest.y;
-    }
+      const nearest = this.app.bubbleManager.findNearestToCam(this.camX, this.camY);
+      if (nearest) {
+        this.snapTargetX = nearest.x;
+        this.snapTargetY = nearest.y;
+        // 스냅 시작 시 관성 즉시 멈춤
+        this.velX = 0;
+        this.velY = 0;
+      }
     }
     this.hasDragged = false;
   }
 
   update(){
     if (!this.dragging) {
-      // inertia
-      this.camX += this.velX;
-      this.camY += this.velY;
-      this.velX *= INTERACTION_CONFIG.inertiaDecay;
-      this.velY *= INTERACTION_CONFIG.inertiaDecay;
-
-      // snap lerp
+      // snap lerp (우선순위: 스냅이 있으면 관성 비활성화)
       if (this.snapTargetX != null) {
-        this.camX = lerp(this.camX, this.snapTargetX, INTERACTION_CONFIG.snapSpeed);
-        this.camY = lerp(this.camY, this.snapTargetY, INTERACTION_CONFIG.snapSpeed);
+        const dx = this.snapTargetX - this.camX;
+        const dy = this.snapTargetY - this.camY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (abs(this.camX - this.snapTargetX) < 0.5 &&
-            abs(this.camY - this.snapTargetY) < 0.5) {
+        if (dist < 0.5) {
+          // 스냅 완료
+          this.camX = this.snapTargetX;
+          this.camY = this.snapTargetY;
           this.snapTargetX = this.snapTargetY = null;
           this.velX = this.velY = 0;
+        } else {
+          // 거리에 따라 동적 스냅 속도 (가까울수록 느리게)
+          const dynamicSpeed = Math.min(INTERACTION_CONFIG.snapSpeed * (1 + dist / 1000), 0.25);
+          this.camX = lerp(this.camX, this.snapTargetX, dynamicSpeed);
+          this.camY = lerp(this.camY, this.snapTargetY, dynamicSpeed);
+          // 스냅 중에는 관성 비활성화
+          this.velX = 0;
+          this.velY = 0;
         }
+      } else {
+        // 스냅이 없을 때만 관성 작동
+        this.camX += this.velX;
+        this.camY += this.velY;
+        this.velX *= INTERACTION_CONFIG.inertiaDecay;
+        this.velY *= INTERACTION_CONFIG.inertiaDecay;
       }
     }
 
@@ -1163,7 +1177,23 @@ class Bubble {
       drawingContext.arc(0,0,this.displayR,0,Math.PI*2);
       drawingContext.clip();
       imageMode(CENTER);
-      image(img, 0, 0, this.displayR*2, this.displayR*2);
+      
+      // 원본 비율 유지하면서 원 안에 맞추기
+      const imgRatio = img.width / img.height;
+      const diameter = this.displayR * 2;
+      let drawW, drawH;
+      
+      if (imgRatio > 1) {
+        // 가로가 더 긴 경우: 높이를 diameter로 고정
+        drawH = diameter;
+        drawW = imgRatio * drawH;
+      } else {
+        // 세로가 더 긴 경우: 너비를 diameter로 고정
+        drawW = diameter;
+        drawH = drawW / imgRatio;
+      }
+      
+      image(img, 0, 0, drawW, drawH);
       drawingContext.restore();
     } else {
       // 이미지가 없을 때 기본 색상 표시
