@@ -83,7 +83,7 @@ const DEFAULT_GROUP_LANGUAGES = {
        emotional: ["사랑스러움","보호","책임감","신뢰","안정"] },
   4: { visual: ["부드러운 난반사","소프트 톤","파스텔 옐로","투명한 안정감","깨끗한 정결 이미지"],
        emotional: ["평온","따뜻한 일상", "배려","온기","안정",] },
-  5: { visual: ["네온 핑크","사이버 파스텔","디지털 글로시","높은 채도","K-pop 팔레트"],
+  5: { visual: ["사이버 파스텔","높은 채도","디지털 글로시","K-pop 팔레트","네온 핑크"],
        emotional: ["자기취향 강도","통통 귀여움","흥미","아이코닉함","즉각적 몰입"] },
 };
 
@@ -372,43 +372,65 @@ class TagRenderer {
   static draw(x, y, w, h, r, isSelected = false, isHovered = false) {
     const ctx = drawingContext;
 
+    // 1) 아웃샤도우 (라벨 외곽 글로우)
     ctx.save();
-    const shadowOffsetY = isHovered ? -2 : -4;
-    roundRectPath(ctx, x, y + shadowOffsetY, w, h, r);
-    ctx.shadowBlur = isHovered ? 26 : 18;
-    ctx.shadowColor = isHovered ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.25)";
-    ctx.fillStyle = "rgba(0,0,0,0.01)";
+    roundRectPath(ctx, x, y, w, h, r);
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = "rgba(0,0,0,0.25)";
+    ctx.fillStyle = "rgba(0,0,0,0.001)"; // 내용 영향 없이 그림자만
     ctx.fill();
     ctx.restore();
 
+    // 2) 클립 후, 배경을 다시 그리면서 필터 적용 → 백드롭 블러 효과
     ctx.save();
     roundRectPath(ctx, x, y, w, h, r);
     ctx.clip();
 
-    const frostGradient = ctx.createLinearGradient(x, y, x, y + h);
-    frostGradient.addColorStop(0, "rgba(255,255,255,0.2)");
-    frostGradient.addColorStop(1, "rgba(255,255,255,0.08)");
-    ctx.fillStyle = frostGradient;
-    ctx.globalAlpha = this.LOW_QUALITY_MODE ? 0.85 : 1.0;
+    // 배경 이미지가 있으면 블러 효과 적용
+    if (app && app.assets && app.assets.bg && app.assets.bg.width > 2) {
+      const bg = app.assets.bg;
+      const canvasRatio = width / height;
+      const imgRatio = bg.width / bg.height;
+
+      let dw, dh;
+      if (imgRatio > canvasRatio) {
+        dh = height;
+        dw = height * imgRatio;
+      } else {
+        dw = width;
+        dh = width / imgRatio;
+      }
+
+      const bgX = width / 2;
+      const bgY = height / 2;
+
+      // 유리감: 블러 + 채도↑ (반투명하게)
+      ctx.filter = "blur(16px) saturate(140%)";
+      const src = bg.canvas || bg.elt;
+      ctx.drawImage(src, bgX - dw / 2, bgY - dh / 2, dw, dh);
+      ctx.filter = "none";
+    }
+
+    // 3) 미묘한 어두운 오버레이 (반투명 효과)
+    ctx.fillStyle = "rgba(0,0,0,0.05)";
     ctx.fillRect(x, y, w, h);
 
-    const highlight = this._getGradient("highlight", w, h, x, y);
-    ctx.globalAlpha = 1.0;
-    ctx.fillStyle = highlight;
-    ctx.fillRect(x, y, w, h * 0.55);
+    // 4) 유리 틴트(상→하 미묘한 그라디언트)
+    const tint = ctx.createLinearGradient(x, y, x, y + h);
+    tint.addColorStop(0, "rgba(255,255,255,0.15)");
+    tint.addColorStop(1, "rgba(255,255,255,0.08)");
+    ctx.fillStyle = tint;
+    ctx.fillRect(x, y, w, h);
 
     ctx.restore();
 
+    // 5) 유리 테두리(대각선 그라디언트 하이라이트)
     ctx.save();
-    const edgeGradient = this._getGradient(
-      isSelected ? "edgeSelected" : isHovered ? "edgeHovered" : "edgeNormal",
-      w,
-      h,
-      x,
-      y
-    );
-    ctx.lineWidth = isSelected ? 3 : isHovered ? 2.4 : 1.6;
-    ctx.strokeStyle = edgeGradient;
+    const edge = ctx.createLinearGradient(x, y, x + w, y + h);
+    edge.addColorStop(0, "rgba(255,255,255,0.75)");
+    edge.addColorStop(1, "rgba(255,255,255,0.05)");
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = 1.5;
     roundRectPath(ctx, x, y, w, h, r);
     ctx.stroke();
     ctx.restore();
