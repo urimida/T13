@@ -14,6 +14,7 @@ const PATHS = {
   uiImgs: "../public/assets/public-imgs/",         // UI png 폴더
   font: "../public/assets/fonts/PretendardVariable.ttf",
   navBar: "../public/assets/public-imgs/navigation-bar.png", // 익스플로어와 동일
+  bubblePopSound: "../circle-to-capture/assets/music/ding.mp3", // 버블 터지는 소리
 };
 
 const DEV = {
@@ -71,7 +72,7 @@ const ARC_SPREAD_RAD = (150 * Math.PI) / 180; // 간격 줄이기 위해 180도 
 const ARC_MIN_R = 50; // 버블 최소 반지름 (양 끝, 적당한 크기)
 const ARC_MAX_R = 130; // 버블 최대 반지름(주변 버블용)
 const ARC_HERO_R = 180; // 주인공 버블 최대 반지름(중앙 버블만)
-const ARC_DAMP = 0.85; // 관성 감쇠 (더 빠르게 멈춤)
+const ARC_DAMP = 0.75; // 관성 감쇠 (더 빠르게 멈춤, 중앙 정렬 강화)
 const ARC_DRAG_SENSE = 0.008; // 드래그 감도(좌우 스와이프 → 각도)
 const ARC_SNAP_THRESHOLD = 0.3; // 스냅 임계값 (라디안)
 
@@ -151,6 +152,9 @@ let fullscreenExitAnim = 0; // 나갈 때 역방향 애니메이션 (1 -> 0)
 let fontPretendard = null;
 let uiImages = {};
 let uiHitboxes = []; // {id,x,y,w,h}
+
+// sound
+let bubblePopSound = null; // 버블 터지는 소리
 
 // filtering
 let tagList = [];
@@ -500,6 +504,14 @@ function preload() {
   uiImages["navigation-bar.png"] = loadImage(PATHS.navBar); // navigation-bar.png 사용
   uiImages["bg.png"] = loadImage(PATHS.uiImgs + "bg.png");
   uiImages["bubble-cap.png"] = loadImage(PATHS.uiImgs + "bubble-cap.png");
+
+  // 버블 터지는 소리 로드
+  try {
+    bubblePopSound = loadSound(PATHS.bubblePopSound);
+  } catch (e) {
+    console.warn("버블 터지는 소리 로드 실패:", e);
+    bubblePopSound = null;
+  }
 }
 
 function setup() {
@@ -945,6 +957,18 @@ function updateCarouselPhysics() {
       
       // 속도 감쇠 (갑자기 0으로 만들지 않음, dt 적용)
       arcVel *= Math.pow(ARC_DAMP, dt);
+      
+      // 관성이 작아지면 자동으로 가장 가까운 정수 인덱스로 스냅 (중앙 정렬 강화)
+      if (Math.abs(arcVel) < 0.01) {
+        const nearestIndex = Math.round(arcTargetIndex);
+        const distToNearest = Math.abs(shortestIndexDelta(arcTargetIndex, nearestIndex, arcSrcCount));
+        // 가까운 인덱스로 자동 스냅 (0.1 이내면 즉시 스냅)
+        if (distToNearest < 0.1) {
+          arcTargetIndex = nearestIndex;
+          arcVel = 0;
+        }
+      }
+      
       lastActiveTime = millis();
     }
   }
@@ -1901,7 +1925,7 @@ function drawInstructionText() {
   if (fontPretendard) {
     textFont(fontPretendard);
   }
-  const textY = height / 2 + 30 * responsiveScale - 100; // 화면 중앙 약간 아래쪽에서 100픽셀 위로
+  const textY = height / 2 + 30 * responsiveScale - 150; // 화면 중앙 약간 아래쪽에서 150픽셀 위로 (50픽셀 추가 상승)
 
   // LED 글로우 효과를 위한 여러 레이어 그리기
   // 1단계: 뿌연 글로우 레이어들
@@ -2308,6 +2332,16 @@ function enterFullscreen(idx) {
   fullscreenExitAnim = 0; // 들어갈 때는 0으로 초기화
   mode = 1;
   
+  // 버블 터지는 소리 재생
+  if (bubblePopSound && bubblePopSound.isLoaded()) {
+    try {
+      bubblePopSound.setVolume(0.5); // 볼륨 설정 (0.0 ~ 1.0)
+      bubblePopSound.play();
+    } catch (e) {
+      console.warn("버블 터지는 소리 재생 실패:", e);
+    }
+  }
+  
   // 버블의 원래 위치와 크기 저장 (아크 캐러셀에서 중앙 버블 찾기)
   const centerBubble = arcBubbleHitboxes.find(hb => hb.slotIndex === 0);
   if (centerBubble && centerBubble.bubble) {
@@ -2476,7 +2510,7 @@ function getArcMetrics() {
   const arcRadius = Math.min(width, height) * 0.65 * responsiveScale; // 0.28 → 0.8로 증가 (훨씬 큰 원)
   // 원의 윗부분만 보이도록 중심을 더 아래로 이동 (더 큰 원이므로 더 아래로)
   // 원의 상단이 화면 중앙 근처에 오도록, 하단은 화면 밖으로
-  const arcCenterY = height + arcRadius * 0.25; // 중심을 더 아래로 내려서 평평한 아크 만들기
+  const arcCenterY = height + arcRadius * 0.25 - 50; // 중심을 더 아래로 내려서 평평한 아크 만들기 (50픽셀 위로 올림)
   const arcTopY = arcCenterY - arcRadius; // 아크 상단 y
   const arcBottomY = arcCenterY + arcRadius * 0.1; // 아래쪽(실제 보이는 범위)
   return { arcCenterX, arcCenterY, arcRadius, arcTopY, arcBottomY };
