@@ -100,6 +100,8 @@ const arcRadii  = new Float32Array(ARC_SLOTS);
 function initArcSlotItems() {
   for (let i = 0; i < ARC_SLOTS; i++) {
     arcSlotItems[i] = { x: 0, y: 0, r: 0, bi: 0, slotIndex: 0, ySort: 0 };
+    // ✅ hitbox 객체도 미리 만들어 재사용 (GC 제거)
+    arcBubbleHitboxes[i] = { x:0, y:0, r:0, bubble:null, slotIndex:0, ySort:0 };
   }
 }
 
@@ -147,6 +149,9 @@ let fullscreenAnim = 0; // 0 -> 1
 let fullscreenTagLayout = []; // 태그 레이아웃 (랜덤 배치)
 let fullscreenStartPos = { x: 0, y: 0, r: 0 }; // 버블의 원래 위치와 크기 (확대 애니메이션용)
 let fullscreenExitAnim = 0; // 나갈 때 역방향 애니메이션 (1 -> 0)
+let selectedTag = null; // 선택된 태그 (null이면 선택 안됨)
+let recommendedBubbles = []; // 선택된 태그와 연관된 버블 3개 [{bubble, index}]
+let recommendedBubblesAnim = 0; // 연관 버블 애니메이션 (0 -> 1)
 
 // UI managers
 let fontPretendard = null;
@@ -159,6 +164,13 @@ let bubblePopSound = null; // 버블 터지는 소리
 // filtering
 let tagList = [];
 let activeTag = null;
+
+// ----- RELATED / RECOMMENDATION -----
+const RECO_COUNT = 3;
+let tagIndexMap = Object.create(null); // tag -> [bubbleIndices]
+let defaultTag = null;                // 초기 화면 기본 태그 (ex. "온기")
+
+let recommendedHitboxes = []; // VR 추천버블 클릭용 [{x,y,r,index}]
 
 // carousel (원본 스케치와 동일한 변수명 사용)
 // arcScroll, arcVel, arcDragging 등은 위에서 이미 정의됨
@@ -586,9 +598,11 @@ function initData(raw) {
 
   tagList = DATA_SCHEMA_ADAPTER.collectTags(norm);
   
-  // "온기" 카테고리가 있으면 기본 선택
   const warmthTag = tagList.find(tag => tag === "온기");
-  activeTag = warmthTag || null;
+  defaultTag = warmthTag || null;   // ✅ 초기화면 태그 저장
+  activeTag = defaultTag;
+
+  buildTagIndex();                  // ✅ 태그->버블 역색인 생성
 
   // ✅ 캐러셀 소스 캐싱
   rebuildArcSource();
@@ -612,6 +626,27 @@ function initData(raw) {
   
   // 데이터 로드 후 월드 초기화 (이미 setup에서 호출되었을 수 있으므로 조건부)
   // 버블 이미지 지연 로딩은 ImageLoader가 자동으로 처리
+}
+
+function buildTagIndex() {
+  tagIndexMap = Object.create(null);
+  if (!bubbles) return;
+
+  for (let i = 0; i < bubbleCount; i++) {
+    const b = bubbles[i];
+    if (!b) continue;
+    const vs = b.visualTags || [];
+    const es = b.emotionalTags || [];
+
+    for (let j = 0; j < vs.length; j++) {
+      const t = vs[j];
+      (tagIndexMap[t] || (tagIndexMap[t] = [])).push(i);
+    }
+    for (let j = 0; j < es.length; j++) {
+      const t = es[j];
+      (tagIndexMap[t] || (tagIndexMap[t] = [])).push(i);
+    }
+  }
 }
 
 function initBackground() {
@@ -754,26 +789,10 @@ function drawArcCarousel() {
   const bubbleScale = Math.max(0.7, s);
   const EDGE_GAP = 20 * s;
 
-  // 드래그 중이 아닐 때: 매우 작은 관성 또는 즉시 이동
+  // 드래그 중이 아닐 때만 목표 인덱스로 즉시 이동 (관성 없음)
   if (!arcDragging) {
-    // 매우 작은 관성이 있으면 적용, 없으면 즉시 이동
-    if (Math.abs(arcVel) > 0.0001) {
-      // 매우 빠른 감쇠로 관성 적용
-      arcCurrentIndex += arcVel;
-      // 인덱스 범위 정규화 (순환)
-      while (arcCurrentIndex < 0) arcCurrentIndex += arcSrcCount;
-      while (arcCurrentIndex >= arcSrcCount) arcCurrentIndex -= arcSrcCount;
-      // 매우 빠른 감쇠 (0.3 = 매우 빠르게 멈춤)
-      arcVel *= 0.3;
-      // 관성이 거의 없으면 목표로 스냅
-      if (Math.abs(arcVel) < 0.001) {
-        arcCurrentIndex = arcTargetIndex;
-        arcVel = 0;
-      }
-    } else {
-      // 관성 없으면 즉시 목표로 이동
-      arcCurrentIndex = arcTargetIndex;
-    }
+    // 관성 없이 즉시 목표 인덱스로 이동
+    arcCurrentIndex = arcTargetIndex;
   }
   // 드래그 중에는 arcCurrentIndex를 건드리지 않음 (pointerMove에서만 업데이트)
 
@@ -818,8 +837,8 @@ function drawArcCarousel() {
   const indexOffset = arcCurrentIndex - Math.floor(arcCurrentIndex);
   arcScroll = -indexOffset * step;
 
-  // 히트박스 재사용 (길이만 조정, 객체 재사용)
-  arcBubbleHitboxes.length = ARC_SLOTS;
+  // ✅ 길이 조정/새 객체 생성 제거
+  // arcBubbleHitboxes.length = ARC_SLOTS;  // 삭제
 
   // --- 4) 슬롯 아이템 채우기(객체 7개만 재사용) ---
   const baseIndex = Math.floor(arcCurrentIndex);
@@ -844,8 +863,14 @@ function drawArcCarousel() {
     it.slotIndex = slot;
     it.ySort = y;
 
-    // 히트박스도 같은 객체 재사용
-    arcBubbleHitboxes[slotIdx] = { x, y, r, bubble: b, slotIndex: slot, ySort: y };
+    // ✅ 히트박스 재사용 (GC 제거)
+    const hb = arcBubbleHitboxes[slotIdx];
+    hb.x = x;
+    hb.y = y;
+    hb.r = r;
+    hb.bubble = b;
+    hb.slotIndex = slot;
+    hb.ySort = y;
   }
 
   // --- 5) 드로우(정렬 제거, 고정 order) ---
@@ -933,20 +958,36 @@ function drawCenterBubbleInfo(centerCandidate, s) {
 }
 
 function updateCarouselPhysics() {
-  // 매우 작은 관성 처리 (거의 미미하게)
-  // 드래그 중이 아니고 관성이 매우 작을 때만 처리
-  if (!arcDragging && Math.abs(arcVel) > 0.0001 && arcVel < 0.01) {
+  // 아크 캐러셀 물리 업데이트는 drawArcCarousel 내부에서 처리됨
+  // 여기서는 관성 감쇠만 처리 (속도 완화 + deltaTime 보정)
+  if (!arcDragging && Math.abs(arcVel) > 0.0005) {
     if (arcSrcCount > 0) {
-      // deltaTime 보정
+      // deltaTime 보정 (태블릿 FPS 흔들림 대응)
       const dt = Math.min(33, deltaTime || 16.666) / 16.666;
       
-      // 매우 빠른 감쇠 (0.2 = 매우 빠르게 멈춤)
-      arcVel *= Math.pow(0.2, dt);
+      // 인덱스 순환 고려하여 최단 거리로 이동 (dt 적용)
+      const currentTarget = arcTargetIndex;
+      arcTargetIndex = currentTarget - arcVel * dt;
       
-      // 관성이 거의 없으면 0으로
-      if (Math.abs(arcVel) < 0.0001) {
-        arcVel = 0;
+      // 인덱스 범위 정규화 (순환)
+      if (arcTargetIndex < 0) arcTargetIndex += arcSrcCount;
+      if (arcTargetIndex >= arcSrcCount) arcTargetIndex -= arcSrcCount;
+      
+      // 속도 감쇠 (갑자기 0으로 만들지 않음, dt 적용)
+      arcVel *= Math.pow(ARC_DAMP, dt);
+      
+      // 관성이 작아지면 자동으로 가장 가까운 정수 인덱스로 스냅 (중앙 정렬 강화)
+      if (Math.abs(arcVel) < 0.01) {
+        const nearestIndex = Math.round(arcTargetIndex);
+        const distToNearest = Math.abs(shortestIndexDelta(arcTargetIndex, nearestIndex, arcSrcCount));
+        // 가까운 인덱스로 자동 스냅 (0.1 이내면 즉시 스냅)
+        if (distToNearest < 0.1) {
+          arcTargetIndex = nearestIndex;
+          arcVel = 0;
+        }
       }
+      
+      lastActiveTime = millis();
     }
   }
 }
@@ -1277,6 +1318,22 @@ function generateRandomTagLayout(tags, imageRadius, visualTags = [], emotionalTa
    11. FULLSCREEN MODE
 ========================= */
 
+function resetToInitialView() {
+  activeTag = defaultTag;
+  rebuildArcSource();
+
+  arcTargetIndex = 0;
+  arcCurrentIndex = 0;
+  arcVel = 0;
+
+  selectedTag = null;
+  recommendedBubbles.length = 0;
+  recommendedHitboxes.length = 0;
+  recommendedBubblesAnim = 0;
+
+  showInstructionText = true;
+}
+
 function updateFullscreen() {
   if (fullscreenExitAnim > 0) {
     // 나가는 애니메이션 (1 -> 0) - 더 부드럽고 천천히
@@ -1288,8 +1345,9 @@ function updateFullscreen() {
       fullscreenIndex = -1;
       fullscreenAnim = 0;
       fullscreenTagLayout = [];
-      // VR 모드에서 나왔을 때 안내 텍스트 다시 표시
-      showInstructionText = true;
+
+      // ✅ 무조건 초기 화면 리셋
+      resetToInitialView();
     }
   } else {
     // 들어가는 애니메이션 (0 -> 1)
@@ -1458,6 +1516,231 @@ function drawFullscreen() {
     const tagAlpha = isExiting ? (anim - tagThreshold) / (1 - tagThreshold) : anim;
     drawFullscreenTags(tagAlpha, isExiting);
   }
+  
+  // 연관 버블 표시 (태그가 선택되었을 때만)
+  if (selectedTag !== null && recommendedBubbles.length > 0 && anim > 0.5) {
+    // 어두운 오버레이 추가
+    const overlayAlpha = recommendedBubblesAnim * 0.6; // 추천 버블 애니메이션과 동기화
+    push();
+    fill(0, overlayAlpha * 255);
+    rect(0, 0, width, height);
+    pop();
+    
+    drawRecommendedBubbles(anim, isExiting);
+  }
+}
+
+function selectTag(tag) {
+  if (!tag) return;
+
+  if (selectedTag === tag) {
+    // 같은 태그 다시 누르면 추천 숨김
+    selectedTag = null;
+    recommendedBubbles.length = 0;
+    recommendedHitboxes.length = 0;
+    return;
+  }
+
+  selectedTag = tag;
+  computeRecommendedBubbles(tag);
+  
+  // 추천 버블 이미지 미리 로딩 요청
+  if (imageLoader && recommendedBubbles.length > 0) {
+    for (let i = 0; i < recommendedBubbles.length; i++) {
+      const b = recommendedBubbles[i].bubble;
+      if (b && b.imgPath) {
+        imageLoader.request(b.imgPath);
+        imageLoader.markVisible(b.imgPath);
+      }
+    }
+  }
+  
+  recommendedBubblesAnim = 0;
+  lastActiveTime = millis();
+}
+
+function computeRecommendedBubbles(tag) {
+  recommendedBubbles.length = 0;
+  recommendedHitboxes.length = 0;
+  if (!bubbles || bubbleCount === 0 || fullscreenIndex < 0) return;
+
+  const curr = bubbles[fullscreenIndex];
+  const currTags = (curr && curr.tags) ? curr.tags : [];
+  const cand = tagIndexMap[tag] || [];
+
+  // top-3 유지 (작은 삽입 정렬)
+  const topIdx = [-1, -1, -1];
+  const topScore = [-1, -1, -1];
+
+  for (let k = 0; k < cand.length; k++) {
+    const ci = cand[k];
+    if (ci === fullscreenIndex) continue;
+    const cb = bubbles[ci];
+    if (!cb) continue;
+
+    // 유사도: 현재 버블과 태그 겹침 수
+    let s = 0;
+    const ctags = cb.tags || [];
+    for (let a = 0; a < ctags.length; a++) {
+      const t = ctags[a];
+      for (let bti = 0; bti < currTags.length; bti++) {
+        if (t === currTags[bti]) { s++; break; }
+      }
+    }
+    if (s === 0) s = 0.1; // 최소 점수
+
+    for (let pos = 0; pos < RECO_COUNT; pos++) {
+      if (s > topScore[pos]) {
+        for (let sh = RECO_COUNT - 1; sh > pos; sh--) {
+          topScore[sh] = topScore[sh - 1];
+          topIdx[sh] = topIdx[sh - 1];
+        }
+        topScore[pos] = s;
+        topIdx[pos] = ci;
+        break;
+      }
+    }
+  }
+
+  for (let i = 0; i < RECO_COUNT; i++) {
+    if (topIdx[i] !== -1 && bubbles[topIdx[i]]) {
+      recommendedBubbles.push({ index: topIdx[i], bubble: bubbles[topIdx[i]] });
+    }
+  }
+
+  // 3개가 안 채워지면 주변에서 채움(결정적 규칙)
+  if (recommendedBubbles.length < RECO_COUNT) {
+    let step = 13, tries = 0, seed = fullscreenIndex + 7;
+    while (recommendedBubbles.length < RECO_COUNT && tries < bubbleCount) {
+      const idx = (seed + tries * step) % bubbleCount;
+      if (idx !== fullscreenIndex && bubbles[idx]) {
+        let exists = false;
+        for (let r = 0; r < recommendedBubbles.length; r++) {
+          if (recommendedBubbles[r].index === idx) { exists = true; break; }
+        }
+        if (!exists) recommendedBubbles.push({ index: idx, bubble: bubbles[idx] });
+      }
+      tries++;
+    }
+  }
+}
+
+function drawRecommendedBubbles(anim, isExiting=false) {
+  if (!recommendedBubbles || recommendedBubbles.length === 0) return;
+
+  const s = getResponsiveScale();
+  const n = recommendedBubbles.length;
+
+  // 등장 애니메이션
+  if (!isExiting) {
+    recommendedBubblesAnim += (1 - recommendedBubblesAnim) * 0.12;
+  }
+  const a = isExiting ? anim : (recommendedBubblesAnim * anim);
+
+  const baseY = height - 170 * s;
+  const gap = 170 * s;
+  const r = 70 * s;
+
+  const startX = width * 0.5 - gap * (n - 1) * 0.5;
+
+  recommendedHitboxes.length = n;
+
+  push();
+  for (let i = 0; i < n; i++) {
+    const rec = recommendedBubbles[i];
+    const b = rec.bubble;
+    if (!b) continue;
+
+    const x = startX + i * gap;
+    const y = baseY;
+
+    // 이미지 요청 (지연 로딩)
+    if (b.imgPath && imageLoader) {
+      imageLoader.request(b.imgPath);
+      imageLoader.markVisible(b.imgPath);
+    }
+
+    // alpha 적용
+    const prevAlpha = b.alpha;
+    b.alpha = a;
+    b.r = r;
+
+    b.drawAt(x, y);
+
+    b.alpha = prevAlpha;
+
+    recommendedHitboxes[i] = { x, y, r, index: rec.index };
+  }
+  pop();
+
+  // 이미지 로더 업데이트 (이미지 로딩 진행)
+  if (imageLoader) {
+    imageLoader.update(performance.now());
+  }
+
+  // 추천 버블 위에 텍스트 표시 (LED 글로우 효과)
+  if (selectedTag && a > 0.1) {
+    const textY = baseY - r - 40 * s - 20; // 20픽셀 위로 올림
+    const particle = getKoreanParticle(selectedTag); // 받침 유무에 따라 "와"/"과" 선택
+    const tagText = `#${selectedTag}${particle} 유사한 레퍼런스를 가져왔어요`;
+    
+    // LED 펄스 효과
+    const pulseTime = millis() * 0.001;
+    const pulse = (Math.sin(pulseTime * 2) + 1) * 0.5; // 0~1 사이 값
+    const textAlpha = a * (0.7 + pulse * 0.3); // 0.7~1.0 사이로 펄스
+
+    push();
+    const ctx = drawingContext;
+    ctx.save();
+
+    // 텍스트 설정
+    textAlign(CENTER, CENTER);
+    textSize(60 * s); // 3배 크게 (20 * 3 = 60)
+    if (fontPretendard) {
+      textFont(fontPretendard);
+    }
+
+    // LED 글로우 효과를 위한 여러 레이어 그리기
+    // 1단계: 뿌연 글로우 레이어들
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = `rgba(255, 255, 255, ${textAlpha * 0.3})`;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    fill(255, 255, 255, textAlpha * 0.2 * 255);
+    text(tagText, width / 2, textY);
+
+    // 2단계: 중간 글로우 레이어
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = `rgba(255, 255, 255, ${textAlpha * 0.5})`;
+    fill(255, 255, 255, textAlpha * 0.4 * 255);
+    text(tagText, width / 2, textY);
+
+    // 3단계: 메인 LED 텍스트
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = `rgba(255, 255, 255, ${textAlpha * 0.8})`;
+    fill(255, 255, 255, textAlpha * 255);
+    text(tagText, width / 2, textY);
+
+    // 그림자 리셋
+    ctx.shadowBlur = 0;
+    ctx.shadowColor = "transparent";
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+
+    ctx.restore();
+    pop();
+  }
+}
+
+function checkRecommendedBubbleClick(x, y) {
+  if (!recommendedHitboxes || recommendedHitboxes.length === 0) return -1;
+  for (let i = 0; i < recommendedHitboxes.length; i++) {
+    const hb = recommendedHitboxes[i];
+    const dx = x - hb.x;
+    const dy = y - hb.y;
+    if (dx*dx + dy*dy <= hb.r*hb.r) return hb.index;
+  }
+  return -1;
 }
 
 // VR모드 나가기 버튼 그리기 (태그와 동일한 스타일)
@@ -1716,6 +1999,9 @@ function roundedRect(x, y, w, h, r) {
 ========================= */
 
 function drawUI() {
+  // ✅ 일반 모드 hitbox 누적 방지
+  uiHitboxes.length = 0;
+
   // 익스플로어와 동일한 scaleAll 계산
   const baseW = 1920, baseH = 1080;
   const s = Math.min(width / baseW, height / baseH);
@@ -1963,10 +2249,9 @@ function pointerStart(x, y, id) {
     return;
   }
 
-  // 풀스크린 모드일 때는 여기서 종료
+  // 풀스크린 모드일 때는 pointerDown만 설정하고 나머지는 pointerEnd에서 처리
   if (mode === 1) {
-    pointerDown = false;
-    pointerId = -1;
+    // pointerDown은 true로 유지하여 pointerEnd에서 태그 클릭 처리 가능하도록
     return;
   }
 
@@ -1982,18 +2267,8 @@ function pointerStart(x, y, id) {
     // 버블을 직접 눌렀다면 그 인덱스 저장 (클릭 확대용)
     clickedBubbleAtPress = hitArc;
 
-    // 현재 필터링된 버블 목록 가져오기
-    const src = activeTag !== null 
-      ? bubbles.filter((b) => {
-          if (!b) return false;
-          const hasVisualTag = b.visualTags && b.visualTags.includes(activeTag);
-          const hasEmotionalTag = b.emotionalTags && b.emotionalTags.includes(activeTag);
-          return hasVisualTag || hasEmotionalTag;
-        })
-      : bubbles;
     arcDragStartIndex = arcCurrentIndex;
     arcTargetIndex = arcCurrentIndex;
-    arcVel = 0; // 드래그 시작할 때 관성 완전 제거
   } else {
     // 상단 영역 드래그 비활성화 유지
     dragMode = 0;
@@ -2023,28 +2298,12 @@ function pointerMove(x, y) {
 
   if (dragging) {
     if (dragMode === 2) {
-      // 아크 캐러셀 드래그 (원본 스케치와 동일)
-      const src = activeTag !== null 
-        ? bubbles.filter((b) => {
-            if (!b) return false;
-            const hasVisualTag = b.visualTags && b.visualTags.includes(activeTag);
-            const hasEmotionalTag = b.emotionalTags && b.emotionalTags.includes(activeTag);
-            return hasVisualTag || hasEmotionalTag;
-          })
-        : bubbles;
-      
-      if (src.length > 0) {
+      if (arcSrcCount > 0) {
         const step = ARC_SPREAD_RAD / Math.max(1, ARC_VISIBLE_COUNT - 1);
         const dragAngle = (x - arcDragStartX) * ARC_DRAG_SENSE;
         const indexChange = dragAngle / step;
-        // 드래그 시작 시점의 arcDragStartIndex를 기준으로 계산
-        const newCurrentIndex = arcDragStartIndex - indexChange;
-        // 드래그 중에는 즉시 반응하도록 arcCurrentIndex 업데이트 (정규화하지 않음, 소수점 허용)
-        arcCurrentIndex = newCurrentIndex;
-        // arcTargetIndex는 사용하지 않음 (드래그 중에는 arcCurrentIndex만 사용)
-        // 매우 작은 관성: 마지막 움직임의 5%만 적용
-        const lastMove = (x - lastX) * ARC_DRAG_SENSE / step;
-        arcVel = lastMove * 0.05; // 매우 작은 관성 (5%)
+        arcCurrentIndex = arcDragStartIndex - indexChange;
+        arcVel = 0;
       }
       lastActiveTime = millis();
     }
@@ -2053,10 +2312,58 @@ function pointerMove(x, y) {
   lastX = x; lastY = y;
 }
 
+function checkTagClick(x, y) {
+  // 1) VR 나가기 버튼 (uiHitboxes에 vr_exit 저장됨)
+  for (let i = 0; i < uiHitboxes.length; i++) {
+    const hb = uiHitboxes[i];
+    if (hb.id === "vr_exit") {
+      if (x >= hb.x && x <= hb.x + hb.w && y >= hb.y && y <= hb.y + hb.h) {
+        return "VR_EXIT";
+      }
+    }
+  }
+
+  // 2) 태그들
+  if (!fullscreenTagLayout) return null;
+  for (let i = 0; i < fullscreenTagLayout.length; i++) {
+    const L = fullscreenTagLayout[i];
+    const rx = L.x - L.w / 2;
+    const ry = L.baseY - L.h / 2;
+    if (x >= rx && x <= rx + L.w && y >= ry && y <= ry + L.h) {
+      return L.tag;
+    }
+  }
+  return null;
+}
+
 function pointerEnd(x, y) {
   if (!pointerDown) return;
   pointerDown = false;
   pointerId = -1;
+
+  // 전체 화면 모드에서 태그/연관 버블 클릭 처리
+  if (mode === 1 && !dragging) {
+    // VR 나가기 버튼 클릭 확인
+    const clickedTag = checkTagClick(x, y);
+    if (clickedTag === "VR_EXIT") {
+      exitFullscreen();
+      return;
+    }
+    
+    // 태그 클릭 확인
+    if (clickedTag !== null) {
+      selectTag(clickedTag);
+      return;
+    }
+    
+    // 연관 버블 클릭 확인
+    const clickedBubbleIdx = checkRecommendedBubbleClick(x, y);
+    if (clickedBubbleIdx !== -1) {
+      // 선택된 연관 버블로 이동
+      enterFullscreen(clickedBubbleIdx);
+      return;
+    }
+  }
 
   // drag end snap
   if (dragMode === 2) {
@@ -2064,7 +2371,7 @@ function pointerEnd(x, y) {
     
     if (arcSrcCount > 0) {
       // 드래그 중에 이미 업데이트된 arcCurrentIndex를 정규화한 후 가장 가까운 정수 인덱스로 스냅
-      // 매우 작은 관성 유지
+      // 관성 없이 즉시 멈춤
       // arcCurrentIndex를 먼저 정규화 (순환)
       let normalizedIndex = arcCurrentIndex;
       while (normalizedIndex < 0) normalizedIndex += arcSrcCount;
@@ -2073,12 +2380,8 @@ function pointerEnd(x, y) {
       arcTargetIndex = Math.round(normalizedIndex);
       if (arcTargetIndex >= arcSrcCount) arcTargetIndex = 0;
       if (arcTargetIndex < 0) arcTargetIndex = arcSrcCount - 1;
-      // arcVel이 매우 작으면 즉시 멈춤, 아니면 작은 관성 유지
-      if (Math.abs(arcVel) < 0.001) {
-        arcCurrentIndex = arcTargetIndex;
-        arcVel = 0;
-      }
-      // arcVel은 그대로 유지 (매우 작은 값)
+      arcCurrentIndex = arcTargetIndex; // 즉시 목표로 이동 (관성 없음)
+      arcVel = 0; // 관성 완전 제거
     }
     
     // 아크 드래그가 없었고, 버블을 클릭했으면 확대
@@ -2305,6 +2608,11 @@ function enterFullscreen(idx) {
   fullscreenExitAnim = 0; // 들어갈 때는 0으로 초기화
   mode = 1;
   
+  // 선택된 태그와 연관 버블 초기화 (새 버블로 이동할 때)
+  selectedTag = null;
+  recommendedBubbles = [];
+  recommendedBubblesAnim = 0;
+  
   // 버블 터지는 소리 재생
   if (bubblePopSound && bubblePopSound.isLoaded()) {
     try {
@@ -2349,6 +2657,12 @@ function exitFullscreen() {
   fullscreenExitAnim = 1;
   fullscreenAnim = 1; // 현재 상태 유지
   // 애니메이션이 완료되면 모드 전환 (updateFullscreen에서 처리)
+  
+  // 초기 상태로 리셋 (VR 모드 나가기 시)
+  selectedTag = null;
+  recommendedBubbles = [];
+  recommendedBubblesAnim = 0;
+  
   lastActiveTime = millis();
 }
 
@@ -2496,6 +2810,25 @@ function mod(a, m) {
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// 한글 조사 처리: 받침 유무에 따라 "와"/"과" 선택
+function getKoreanParticle(word) {
+  if (!word || word.length === 0) return "와";
+  
+  // 마지막 글자 확인
+  const lastChar = word[word.length - 1];
+  const charCode = lastChar.charCodeAt(0);
+  
+  // 한글 유니코드 범위 확인 (가-힣)
+  if (charCode >= 0xAC00 && charCode <= 0xD7A3) {
+    // 받침 유무 확인: (문자코드 - 0xAC00) % 28이 0이면 받침 없음
+    const hasBatchim = (charCode - 0xAC00) % 28 !== 0;
+    return hasBatchim ? "과" : "와";
+  }
+  
+  // 한글이 아니면 기본값 "와" 반환
+  return "와";
 }
 
 // cover-fit 계산 헬퍼 (반복되는 cover 계산 통합)
