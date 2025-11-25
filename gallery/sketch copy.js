@@ -754,35 +754,28 @@ function drawArcCarousel() {
   const bubbleScale = Math.max(0.7, s);
   const EDGE_GAP = 20 * s;
 
-  // --- 1) 목표 인덱스 애니메이션 (최단 거리 보정 + 속도 완화 + deltaTime 보정) ---
+  // 드래그 중이 아닐 때: 매우 작은 관성 또는 즉시 이동
   if (!arcDragging) {
-    const INDEX_EPS = 0.0008;
-    const VEL_EPS = 0.0008;
-    
-    // deltaTime 보정 (태블릿 FPS 흔들림 대응)
-    const dt = Math.min(33, deltaTime || 16.666) / 16.666; // 60fps 기준 배율
-    
-    const diff = shortestIndexDelta(arcCurrentIndex, arcTargetIndex, arcSrcCount);
-    
-    // 스냅은 하되, 속도를 갑자기 0 만들지 말고 감쇠로 자연스럽게
-    if (Math.abs(diff) > INDEX_EPS) {
-      arcCurrentIndex = lerpIndex(arcCurrentIndex, arcTargetIndex, 0.2 * dt, arcSrcCount);
-      // 스냅 중에는 속도도 조금 더 강하게 감쇠 (dt 적용)
-      arcVel *= Math.pow(0.92, dt);
-    } else {
-      // 완전히 가까워졌고 속도도 충분히 작을 때만 완전히 고정
-      if (Math.abs(arcVel) < VEL_EPS) {
+    // 매우 작은 관성이 있으면 적용, 없으면 즉시 이동
+    if (Math.abs(arcVel) > 0.0001) {
+      // 매우 빠른 감쇠로 관성 적용
+      arcCurrentIndex += arcVel;
+      // 인덱스 범위 정규화 (순환)
+      while (arcCurrentIndex < 0) arcCurrentIndex += arcSrcCount;
+      while (arcCurrentIndex >= arcSrcCount) arcCurrentIndex -= arcSrcCount;
+      // 매우 빠른 감쇠 (0.3 = 매우 빠르게 멈춤)
+      arcVel *= 0.3;
+      // 관성이 거의 없으면 목표로 스냅
+      if (Math.abs(arcVel) < 0.001) {
         arcCurrentIndex = arcTargetIndex;
         arcVel = 0;
-      } else {
-        // 아직 속도가 있으면 계속 감쇠 (dt 적용)
-        arcCurrentIndex = lerpIndex(arcCurrentIndex, arcTargetIndex, 0.2 * dt, arcSrcCount);
-        arcVel *= Math.pow(0.92, dt);
       }
+    } else {
+      // 관성 없으면 즉시 목표로 이동
+      arcCurrentIndex = arcTargetIndex;
     }
-  } else {
-    arcCurrentIndex = arcTargetIndex;
   }
+  // 드래그 중에는 arcCurrentIndex를 건드리지 않음 (pointerMove에서만 업데이트)
 
   const mid = (ARC_VISIBLE_COUNT >> 1); // 3
   const angleBase = -Math.PI / 2;
@@ -940,36 +933,20 @@ function drawCenterBubbleInfo(centerCandidate, s) {
 }
 
 function updateCarouselPhysics() {
-  // 아크 캐러셀 물리 업데이트는 drawArcCarousel 내부에서 처리됨
-  // 여기서는 관성 감쇠만 처리 (속도 완화 + deltaTime 보정)
-  if (!arcDragging && Math.abs(arcVel) > 0.0005) {
+  // 매우 작은 관성 처리 (거의 미미하게)
+  // 드래그 중이 아니고 관성이 매우 작을 때만 처리
+  if (!arcDragging && Math.abs(arcVel) > 0.0001 && arcVel < 0.01) {
     if (arcSrcCount > 0) {
-      // deltaTime 보정 (태블릿 FPS 흔들림 대응)
+      // deltaTime 보정
       const dt = Math.min(33, deltaTime || 16.666) / 16.666;
       
-      // 인덱스 순환 고려하여 최단 거리로 이동 (dt 적용)
-      const currentTarget = arcTargetIndex;
-      arcTargetIndex = currentTarget - arcVel * dt;
+      // 매우 빠른 감쇠 (0.2 = 매우 빠르게 멈춤)
+      arcVel *= Math.pow(0.2, dt);
       
-      // 인덱스 범위 정규화 (순환)
-      if (arcTargetIndex < 0) arcTargetIndex += arcSrcCount;
-      if (arcTargetIndex >= arcSrcCount) arcTargetIndex -= arcSrcCount;
-      
-      // 속도 감쇠 (갑자기 0으로 만들지 않음, dt 적용)
-      arcVel *= Math.pow(ARC_DAMP, dt);
-      
-      // 관성이 작아지면 자동으로 가장 가까운 정수 인덱스로 스냅 (중앙 정렬 강화)
-      if (Math.abs(arcVel) < 0.01) {
-        const nearestIndex = Math.round(arcTargetIndex);
-        const distToNearest = Math.abs(shortestIndexDelta(arcTargetIndex, nearestIndex, arcSrcCount));
-        // 가까운 인덱스로 자동 스냅 (0.1 이내면 즉시 스냅)
-        if (distToNearest < 0.1) {
-          arcTargetIndex = nearestIndex;
-          arcVel = 0;
-        }
+      // 관성이 거의 없으면 0으로
+      if (Math.abs(arcVel) < 0.0001) {
+        arcVel = 0;
       }
-      
-      lastActiveTime = millis();
     }
   }
 }
@@ -2016,6 +1993,7 @@ function pointerStart(x, y, id) {
       : bubbles;
     arcDragStartIndex = arcCurrentIndex;
     arcTargetIndex = arcCurrentIndex;
+    arcVel = 0; // 드래그 시작할 때 관성 완전 제거
   } else {
     // 상단 영역 드래그 비활성화 유지
     dragMode = 0;
@@ -2056,10 +2034,17 @@ function pointerMove(x, y) {
         : bubbles;
       
       if (src.length > 0) {
-        const dragDelta = (x - arcDragStartX) * ARC_DRAG_SENSE;
-        arcTargetIndex = arcDragStartIndex - dragDelta;
-        arcCurrentIndex = arcTargetIndex; // 드래그 중에는 즉시 반응
-        arcVel = -dragDelta * 0.6;
+        const step = ARC_SPREAD_RAD / Math.max(1, ARC_VISIBLE_COUNT - 1);
+        const dragAngle = (x - arcDragStartX) * ARC_DRAG_SENSE;
+        const indexChange = dragAngle / step;
+        // 드래그 시작 시점의 arcDragStartIndex를 기준으로 계산
+        const newCurrentIndex = arcDragStartIndex - indexChange;
+        // 드래그 중에는 즉시 반응하도록 arcCurrentIndex 업데이트 (정규화하지 않음, 소수점 허용)
+        arcCurrentIndex = newCurrentIndex;
+        // arcTargetIndex는 사용하지 않음 (드래그 중에는 arcCurrentIndex만 사용)
+        // 매우 작은 관성: 마지막 움직임의 5%만 적용
+        const lastMove = (x - lastX) * ARC_DRAG_SENSE / step;
+        arcVel = lastMove * 0.05; // 매우 작은 관성 (5%)
       }
       lastActiveTime = millis();
     }
@@ -2078,34 +2063,22 @@ function pointerEnd(x, y) {
     arcDragging = false;
     
     if (arcSrcCount > 0) {
-      // 현재 위치에서 가장 가까운 정수 인덱스 계산 (최단 거리 고려)
-      let nearestIndex = Math.round(arcCurrentIndex);
-      
-      // 속도가 있으면 속도 방향으로 약간 보정 (더 자연스러운 스냅)
-      if (Math.abs(arcVel) > 0.01) {
-        // 속도 방향으로 다음/이전 인덱스 고려
-        const velocityDirection = arcVel > 0 ? 1 : -1;
-        const nextIndex = nearestIndex + velocityDirection;
-        
-        // 현재 위치와 다음 인덱스의 거리 비교
-        const distToNearest = Math.abs(shortestIndexDelta(arcCurrentIndex, nearestIndex, arcSrcCount));
-        const distToNext = Math.abs(shortestIndexDelta(arcCurrentIndex, nextIndex, arcSrcCount));
-        
-        // 다음 인덱스가 더 가까우면 그것으로 변경
-        if (distToNext < distToNearest) {
-          nearestIndex = nextIndex;
-        }
+      // 드래그 중에 이미 업데이트된 arcCurrentIndex를 정규화한 후 가장 가까운 정수 인덱스로 스냅
+      // 매우 작은 관성 유지
+      // arcCurrentIndex를 먼저 정규화 (순환)
+      let normalizedIndex = arcCurrentIndex;
+      while (normalizedIndex < 0) normalizedIndex += arcSrcCount;
+      while (normalizedIndex >= arcSrcCount) normalizedIndex -= arcSrcCount;
+      // 가장 가까운 정수 인덱스로 반올림
+      arcTargetIndex = Math.round(normalizedIndex);
+      if (arcTargetIndex >= arcSrcCount) arcTargetIndex = 0;
+      if (arcTargetIndex < 0) arcTargetIndex = arcSrcCount - 1;
+      // arcVel이 매우 작으면 즉시 멈춤, 아니면 작은 관성 유지
+      if (Math.abs(arcVel) < 0.001) {
+        arcCurrentIndex = arcTargetIndex;
+        arcVel = 0;
       }
-      
-      // 최단 거리로 목표 인덱스 설정
-      arcTargetIndex = nearestIndex;
-      
-      // 인덱스를 범위 내로 정규화 (순환)
-      if (arcTargetIndex < 0) arcTargetIndex += arcSrcCount;
-      if (arcTargetIndex >= arcSrcCount) arcTargetIndex -= arcSrcCount;
-      
-      // 속도는 자연스럽게 감쇠되도록 유지 (갑자기 0으로 만들지 않음)
-      // drawArcCarousel의 애니메이션 로직이 자연스럽게 처리함
+      // arcVel은 그대로 유지 (매우 작은 값)
     }
     
     // 아크 드래그가 없었고, 버블을 클릭했으면 확대
