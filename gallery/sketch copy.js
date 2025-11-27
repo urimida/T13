@@ -813,7 +813,7 @@ function setup() {
 // 익스플로어와 동일한 레이아웃 계산 함수
 function recalcLayout() {
   centerX = width * 0.5;
-  centerY = height * 0.55;
+  centerY = height * 0.5; // 정 중앙으로 변경
   maxDist = Math.sqrt(width * width + height * height) / 2;
   
   // responsive scale
@@ -2085,7 +2085,7 @@ function drawInstructionText() {
   if (fontPretendard) {
     textFont(fontPretendard);
   }
-  const textY = height / 2 + 30 * responsiveScale - 150; // 화면 중앙 약간 아래쪽에서 150픽셀 위로 (50픽셀 추가 상승)
+  const textY = height / 2 + 30 * responsiveScale - 150 - height * 0.05; // 주인공 버블이 올라간 만큼 위로 조정
 
   // LED 글로우 효과를 위한 여러 레이어 그리기
   // 1단계: 뿌연 글로우 레이어들
