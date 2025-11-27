@@ -369,7 +369,7 @@ class TagRenderer {
     return gradient;
   }
 
-  static draw(x, y, w, h, r, isSelected = false, isHovered = false) {
+  static draw(x, y, w, h, r, isSelected = false, isHovered = false, tintColor = null) {
     const ctx = drawingContext;
 
     // 1) 아웃샤도우 (라벨 외곽 글로우)
@@ -415,10 +415,19 @@ class TagRenderer {
     ctx.fillStyle = "rgba(0,0,0,0.05)";
     ctx.fillRect(x, y, w, h);
 
-    // 4) 유리 틴트(상→하 미묘한 그라디언트)
+    // 4) 유리 틴트(상→하 미묘한 그라디언트) + 색상 틴트
     const tint = ctx.createLinearGradient(x, y, x, y + h);
-    tint.addColorStop(0, "rgba(255,255,255,0.15)");
-    tint.addColorStop(1, "rgba(255,255,255,0.08)");
+    if (tintColor) {
+      // 색상 틴트 적용
+      const [r, g, b, a] = tintColor;
+      tint.addColorStop(0, `rgba(${r},${g},${b},${a * 0.3})`);
+      tint.addColorStop(0.5, `rgba(${r},${g},${b},${a * 0.2})`);
+      tint.addColorStop(1, `rgba(${r},${g},${b},${a * 0.1})`);
+    } else {
+      // 기본 흰색 틴트
+      tint.addColorStop(0, "rgba(255,255,255,0.15)");
+      tint.addColorStop(1, "rgba(255,255,255,0.08)");
+    }
     ctx.fillStyle = tint;
     ctx.fillRect(x, y, w, h);
 
@@ -448,8 +457,8 @@ class TagRenderer {
   }
 }
 
-function drawGlassTag(x, y, w, h, r, isSelected = false, isHovered = false){
-  TagRenderer.draw(x, y, w, h, r, isSelected, isHovered);
+function drawGlassTag(x, y, w, h, r, isSelected = false, isHovered = false, tintColor = null){
+  TagRenderer.draw(x, y, w, h, r, isSelected, isHovered, tintColor);
 }
 
 /* =========================
@@ -905,21 +914,22 @@ class UIStateManager {
   constructor(app){
     this.app = app;
 
-    this.activeGroup = 0;   // 0 = all
-    this.activeTag = null;  // string
+    this.activeGroup = 2;   // 2 = 20대 여성 (초기값)
+    // 초기에는 태그 선택하지 않은 상태
+    this.activeTag = null;
     this.searchQuery = "";
 
     this.infoBubble = null; // bubble currently showing info
     this.showInfoUntil = 0;
 
     // group mode orbit (RotationController 사용)
-    this.groupMode = false;
+    this.groupMode = false;  // 초기에는 태그가 선택되지 않았으므로 그룹 모드 비활성화
 
     // category selection mode
     this.showCategorySelection = false;
     
     // group view (중간 단계: 대표 이미지와 태그들이 둥둥 떠다니는 화면)
-    this.showGroupView = false;
+    this.showGroupView = true;  // 초기에 그룹 뷰 표시
   }
 
   setGroup(g){
@@ -927,56 +937,18 @@ class UIStateManager {
     this.infoBubble = null;
     this.showCategorySelection = false; // 카테고리 선택 후 모드 종료
     
-    // 전체 보기(0) 선택 시 최초 화면으로 리셋
-    if (g === 0) {
-      this.activeTag = null;
-      this.searchQuery = "";
-      this.showGroupView = false;
-      this.groupMode = false;
-      // 카메라를 그리드 중심으로 부드럽게 이동 (스냅 타겟만 설정)
-      if (this.app && this.app.bubbleManager && this.app.pan) {
-        const bm = this.app.bubbleManager;
-        const spacing = RENDER_CONFIG.hexSpacing;
-        const fallbackGrid = Math.ceil(Math.sqrt(RENDER_CONFIG.totalBubbles));
-        const fallbackCenterGridX = Math.floor(fallbackGrid / 2);
-        const fallbackCenterGridY = Math.floor(fallbackGrid / 2);
-        const fallbackX = fallbackCenterGridX * spacing * 1.5;
-        const fallbackY = fallbackCenterGridY * spacing * SQRT3 + 
-                          ((fallbackCenterGridX % 2) * spacing * SQRT3) / 2;
-        const centerPos = (bm && typeof bm.getCenterHexPosition === "function")
-          ? bm.getCenterHexPosition()
-          : { x: fallbackX, y: fallbackY };
-        const centerHexX = centerPos.x;
-        const centerHexY = centerPos.y;
-        
-        // 현재 카메라 위치에서 가장 가까운 torus wrap된 타겟 위치 계산
-        const currentCamX = this.app.pan.camX;
-        const currentCamY = this.app.pan.camY;
-        
-        // wrapDelta를 사용하여 가장 가까운 타겟 위치 찾기
-        const targetX = currentCamX + wrapDelta(centerHexX - currentCamX, bm.worldW);
-        const targetY = currentCamY + wrapDelta(centerHexY - currentCamY, bm.worldH);
-        
-        // 부드럽게 이동하기 위해 스냅 타겟만 설정 (즉시 이동하지 않음)
-        this.app.pan.velX = 0;
-        this.app.pan.velY = 0;
-        this.app.pan.snapTargetX = targetX;
-        this.app.pan.snapTargetY = targetY;
-      }
-    } else {
-      // 카테고리 선택 시 중간 단계 화면으로 이동 (태그 선택 화면)
-      this.showGroupView = true;
-      this.activeTag = null;
-      this.groupMode = false; // 태그 선택 전까지는 행성 모드 아님
-      this.infoBubble = null; // 그룹 뷰에서는 정보 표시하지 않음
-    }
+    // 카테고리 선택 시 중간 단계 화면으로 이동 (태그 선택 화면)
+    this.showGroupView = true;
+    this.activeTag = null;
+    this.groupMode = false; // 태그 선택 전까지는 행성 모드 아님
+    this.infoBubble = null; // 그룹 뷰에서는 정보 표시하지 않음
   }
 
   setTag(tag){
     this.activeTag = tag;
     this.infoBubble = null;
     // 태그 선택 시 행성 모드로 전환
-    if (this.activeTag && this.activeGroup !== 0) {
+    if (this.activeTag) {
       this.groupMode = true;
       // showGroupView는 유지 (태그 선택을 자유롭게 할 수 있도록)
     }
@@ -1082,9 +1054,9 @@ class Bubble {
   }
 
   matchesFilter(ui){
-    if (ui.activeGroup !== 0) {
-      if (!this.attributes.includes(ui.activeGroup)) return false;
-    }
+    // 항상 그룹 필터링 적용 (전체보기 제거됨)
+    if (!this.attributes.includes(ui.activeGroup)) return false;
+    
     if (ui.activeTag) {
       const key = normTag(ui.activeTag);
       if (!this._normTagSet || !this._normTagSet.has(key)) return false;
@@ -1413,7 +1385,7 @@ class BubbleManager {
     for (let i=0; i<this.bubbles.length; i++){
       const b = this.bubbles[i];
       // 그룹 필터링
-      if (ui.activeGroup !== 0 && !b.attributes.includes(ui.activeGroup)) continue;
+      if (!b.attributes.includes(ui.activeGroup)) continue;
       // 태그 필터링 (정규화된 태그로 정확 매칭)
       if (ui.activeTag) {
         const key = normTag(ui.activeTag);
@@ -1581,65 +1553,8 @@ class UIRenderer {
     const app = this.app;
     const s = app.scaleAll;
 
-    // nav bar
-    if (app.assets.navBar){
-      push();
-      drawingContext.save();
-      drawingContext.imageSmoothingEnabled = false;
-      imageMode(CENTER);
-      const navW = app.assets.navBar.width * 0.455 * s;
-      const navH = app.assets.navBar.height * 0.455 * s;
-      image(app.assets.navBar, width*0.5, 20 + navH*0.5, navW, navH);
-      drawingContext.restore();
-      pop();
-    }
-
-    // top buttons
-    if (app.assets.captureBtn){
-      push();
-      drawingContext.save();
-      drawingContext.imageSmoothingEnabled = false;
-      const w = app.assets.captureBtn.width * UI_CONFIG.searchWRatio * s;
-      const h = app.assets.captureBtn.height * UI_CONFIG.searchWRatio * s;
-      image(app.assets.captureBtn, 30*s + w*0.5, 30*s + h*0.5, w, h);
-      drawingContext.restore();
-      pop();
-    }
-    if (app.assets.workroomBtn){
-      push();
-      drawingContext.save();
-      drawingContext.imageSmoothingEnabled = false;
-      const w = app.assets.workroomBtn.width * UI_CONFIG.searchWRatio * s;
-      const h = app.assets.workroomBtn.height * UI_CONFIG.searchWRatio * s;
-      image(app.assets.workroomBtn, width - (30*s + w*0.5), 30*s + h*0.5, w, h);
-      drawingContext.restore();
-      pop();
-    }
-
-    // mic icon below nav bar
-    if (app.assets.mic){
-      const navBarTop = 20;
-      const navBarH = app.assets.navBar ? app.assets.navBar.height * 0.455 * s : 80;
-      const navBarBottom = navBarTop + navBarH;
-      const micW = app.assets.mic.width * 0.6 * s;
-      const micH = app.assets.mic.height * 0.6 * s;
-      const micY = navBarBottom + 20*s + micH*0.5;
-      push();
-      drawingContext.save();
-      drawingContext.imageSmoothingEnabled = false;
-      imageMode(CENTER);
-      image(app.assets.mic, width*0.5, micY, micW, micH);
-      drawingContext.restore();
-      pop();
-      
-      // 마이크 히트박스 저장
-      app._micHit = {
-        x: width*0.5,
-        y: micY,
-        w: micW,
-        h: micH
-      };
-    }
+    // 마이크 토글 버튼 (태그 스타일)
+    this.drawMicToggle();
 
     // 카테고리 선택 모드일 때만 토글 표시
     if (app.ui.showCategorySelection) {
@@ -1654,13 +1569,114 @@ class UIRenderer {
     // drawInfo는 App.draw()에서 배경 다음에 호출되므로 여기서는 호출하지 않음
   }
 
+  drawMicToggle(){
+    const app = this.app;
+    const ui = app.ui;
+    const s = app.scaleAll;
+
+    // 카테고리가 선택되지 않았을 때는 표시하지 않음
+    if (!ui.activeGroup || ui.activeGroup === 0) {
+      return;
+    }
+
+    // 카테고리 이름 매핑
+    const categoryNames = {
+      1: "여행자의 취향만",
+      2: "20대 여성의 취향만",
+      3: "50대 남성의 취향만",
+      4: "주부들의 취향만",
+      5: "10대 여성의 취향만"
+    };
+
+    // 선택된 카테고리 이름 (태그가 없어도 activeGroup이 있으면 표시)
+    const categoryName = (ui.activeGroup && categoryNames[ui.activeGroup]) 
+      ? categoryNames[ui.activeGroup] 
+      : "카테고리";
+    
+    const fontSize = 16 * 1.4 * s * 1.3;
+    const padding = 28 * s * 1.3;
+    const tagH = 56 * s * 1.3;
+    const tagR = tagH / 2;
+    
+    textSize(fontSize);
+    const labelText = `#${categoryName}`;
+    const textW = textWidth(labelText);
+    
+    // 화살표 아이콘 크기
+    const arrowSize = 12 * s;
+    const gap = 3; // 텍스트와 화살표 사이 간격
+    
+    // 전체 태그 너비 계산 (텍스트 + 간격 + 화살표)
+    const tagW = textW + gap + arrowSize + padding * 2;
+    
+    // 화면 가운데에 배치
+    const centerX = width * 0.5;
+    const tagX = centerX;
+    const tagY = 30 * s + tagH * 0.5 + 50; // 50픽셀 아래로
+    
+    const isOpen = ui.showCategorySelection;
+    
+    // 그룹별 색상 정의 (더 진하게)
+    const groupColors = {
+      1: [160, 120, 80, 0.6],    // 여행자: 갈색빛
+      2: [255, 150, 200, 0.6],   // 20대 여성: 핑크빛
+      3: [100, 150, 255, 0.6],   // 50대 남성: 파란빛
+      4: [255, 220, 100, 0.6],   // 주부: 노랑빛
+      5: [200, 150, 255, 0.6]    // 10대 여성: 보랏빛
+    };
+    const tintColor = ui.activeGroup ? groupColors[ui.activeGroup] : null;
+    
+    // 하나의 통합 태그 배경 그리기
+    drawGlassTag(tagX - tagW / 2, tagY - tagH / 2, tagW, tagH, tagR, isOpen, false, tintColor);
+    
+    // 카테고리 이름 텍스트 그리기 (중앙 정렬, 화살표를 고려한 위치)
+    this.withTextRendering(() => {
+      drawingContext.textBaseline = "middle";
+      drawingContext.textAlign = "center";
+      drawingContext.imageSmoothingEnabled = true;
+      drawingContext.imageSmoothingQuality = "high";
+      fill(255, isOpen ? 255 : 225);
+      textSize(fontSize);
+      drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
+      drawingContext.shadowBlur = isOpen ? 18 : 10;
+      drawingContext.shadowColor = isOpen ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.25)";
+      // 텍스트를 화살표를 고려하여 약간 왼쪽으로 이동 (컴포넌트 가운데에 오도록)
+      const textOffset = (gap + arrowSize) / 2;
+      text(labelText, tagX - textOffset, tagY - 2);
+      drawingContext.shadowBlur = 0;
+    });
+    
+    // 화살표 벡터 그리기 (텍스트와 3픽셀 간격을 두고 배치)
+    const arrowX = tagX + textW / 2 + gap + arrowSize / 2;
+    push();
+    translate(arrowX, tagY);
+    noStroke();
+    fill(255, isOpen ? 255 : 225);
+    
+    if (isOpen) {
+      // 닫기: v (아래쪽 화살표)
+      triangle(0, -arrowSize * 0.5, arrowSize * 0.5, arrowSize * 0.5, -arrowSize * 0.5, arrowSize * 0.5);
+    } else {
+      // 열기: ^ (위쪽 화살표)
+      triangle(0, arrowSize * 0.5, arrowSize * 0.5, -arrowSize * 0.5, -arrowSize * 0.5, -arrowSize * 0.5);
+    }
+    pop();
+    
+    // 히트박스 저장 (전체 태그가 하나의 클릭 영역)
+    app._micHit = {
+      x: tagX,
+      y: tagY,
+      w: tagW,
+      h: tagH
+    };
+  }
+
   drawToggles(){
     const app = this.app;
     const ui = app.ui;
     const s = app.scaleAll;
 
     const labels = [
-      "전체 보기",
       "여행자의 취향만",
       "20대 여성의 취향만",
       "50대 남성의 취향만",
@@ -1668,48 +1684,82 @@ class UIRenderer {
       "10대 여성의 취향만",
     ];
 
-    // 글자 크기가 2배로 커졌으므로 버튼도 크게 조정
-    const btnW = 300*s * 1.5;
-    const btnH = 50*s * 1.5;
-    const gap = 60*s * 1.5;
+    // 태그 스타일로 변경
+    const fontSize = 16 * 1.4 * s * 1.3;
+    const padding = 28 * s * 1.3;
+    const tagH = 56 * s * 1.3;
+    const tagR = tagH / 2;
+    
+    textSize(fontSize);
+    
+    // 각 라벨의 너비 계산
+    const tagWidths = labels.map(label => {
+      const labelText = `#${label}`;
+      return textWidth(labelText) + padding * 2;
+    });
+    const maxTagW = Math.max(...tagWidths);
     
     // 화면 중앙 기준으로 정렬
-    const totalHeight = (labels.length - 1) * gap;
+    const gap = 20 * s; // 태그 간 간격
+    const totalHeight = labels.length * tagH + (labels.length - 1) * gap;
     const startY = height * 0.5 - totalHeight * 0.5;
+
+    // 히트박스 저장용 배열 초기화
+    app._toggleHit.tags = [];
 
     for (let i=0; i<labels.length; i++){
       const x = width*0.5;
-      const y = startY + i*gap;
+      const y = startY + i*(tagH + gap) + tagH * 0.5;
 
-      const isActive = (ui.activeGroup === i);
-      const rectX = x - btnW * 0.5;
-      const rectY = y - btnH * 0.5;
+      // 인덱스 i는 0~4, 그룹 번호는 1~5로 매핑
+      const groupNum = i + 1;
+      const isActive = (ui.activeGroup === groupNum);
+      
+      // 그룹별 색상 정의 (RGBA, 더 진하게)
+      const groupColors = {
+        1: [160, 120, 80, 0.6],    // 여행자: 갈색빛
+        2: [255, 150, 200, 0.6],   // 20대 여성: 핑크빛
+        3: [100, 150, 255, 0.6],   // 50대 남성: 파란빛
+        4: [255, 220, 100, 0.6],   // 주부: 노랑빛
+        5: [200, 150, 255, 0.6]    // 10대 여성: 보랏빛
+      };
+      
+      const tagW = tagWidths[i];
+      const rectX = x - tagW / 2;
+      const rectY = y - tagH / 2;
 
-      // 버튼 크기가 커졌으므로 모서리 반경도 비례해서 증가
-      drawGlassToggleButton(rectX, rectY, btnW, btnH, 16*s * 1.5, { active: isActive });
+      // 태그 스타일로 그리기 (색상 틴트 적용)
+      const tintColor = groupColors[groupNum] || null;
+      drawGlassTag(rectX, rectY, tagW, tagH, tagR, isActive, false, tintColor);
 
+      // 텍스트 그리기
       this.withTextRendering(() => {
-        drawingContext.shadowBlur = isActive ? 8 : 4;
-        drawingContext.shadowColor = isActive ? "rgba(255, 255, 255, 0.2)" : "rgba(255, 255, 255, 0.1)";
-        drawingContext.shadowOffsetY = 0;
-        fill(255, isActive ? 180 : 140);
-        // 글자 크기 2배로 증가 및 볼드체 적용
-        const fontSize = 16 * s * 2;
+        drawingContext.textBaseline = "middle";
+        drawingContext.textAlign = "center";
+        drawingContext.imageSmoothingEnabled = true;
+        drawingContext.imageSmoothingQuality = "high";
+        fill(255, isActive ? 255 : 225);
         textSize(fontSize);
         drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
-        // 글자 위치 3픽셀 위로 올림
-        text(labels[i], x, y - 3);
+        drawingContext.shadowBlur = isActive ? 18 : 10;
+        drawingContext.shadowColor = isActive ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.25)";
+        const labelText = `#${labels[i]}`;
+        text(labelText, x, y - 2);
         drawingContext.shadowBlur = 0;
+      });
+      
+      // 히트박스 저장
+      app._toggleHit.tags.push({
+        x: x,
+        y: y,
+        w: tagW,
+        h: tagH,
+        groupNum: groupNum
       });
     }
 
     // store toggle hit boxes for click
-    app._toggleHit.startY = startY;
-    app._toggleHit.btnW = btnW;
-    app._toggleHit.btnH = btnH;
-    app._toggleHit.gap = gap;
     app._toggleHit.count = labels.length;
-    app._toggleHit.cx = width*0.5;
   }
 
   drawInfo(){
@@ -2091,7 +2141,6 @@ class App {
 
   drawGroupCenterImage(){
     const g = this.ui.activeGroup;
-    if (g === 0) return;
     const img = this.assets[`group_${g}`];
     if (!img || img.width <= 2) return;
 
@@ -2105,7 +2154,6 @@ class App {
 
   drawGroupView(){
     const g = this.ui.activeGroup;
-    if (g === 0) return;
     
     this._tagHitBoxes = []; // 매 프레임 새로
     
@@ -2135,6 +2183,57 @@ class App {
       }
     }
     
+    // 태그가 선택되지 않은 경우 안내 문구 표시 (LED 반짝임 효과)
+    if (!this.ui.activeTag) {
+      const t = millis() * 0.001;
+      // LED 펄스 효과 (시간 기반)
+      const pulse = (Math.sin(t * 2) + 1) * 0.5; // 0~1 사이 값
+      const alpha = 0.3 + pulse * 0.7; // 0.3~1.0 사이로 펄스
+      
+      const guideText = "카테고리와 태그를 선택해 다양한 감각을 얻어보세요.";
+      const textY = centerY + imageRadius + 80 * s;
+      const guideFontSize = 28 * s; // 더 크게
+      
+      push();
+      const ctx = drawingContext;
+      ctx.save();
+      
+      // 텍스트 설정
+      textAlign(CENTER, CENTER);
+      textSize(guideFontSize);
+      if (this.font) textFont(this.font);
+      
+      // LED 글로우 효과를 위한 여러 레이어 그리기
+      // 1단계: 뿌연 글로우 레이어들
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.3})`;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      fill(255, 255, 255, alpha * 0.2 * 255);
+      text(guideText, centerX, textY);
+      
+      // 2단계: 중간 글로우 레이어
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.5})`;
+      fill(255, 255, 255, alpha * 0.4 * 255);
+      text(guideText, centerX, textY);
+      
+      // 3단계: 메인 LED 텍스트
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.8})`;
+      fill(255, 255, 255, alpha * 255);
+      text(guideText, centerX, textY);
+      
+      // 그림자 리셋
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      
+      ctx.restore();
+      pop();
+    }
+    
     // 태그 레이아웃 1번 계산
     if (this.font) textFont(this.font);
     textAlign(CENTER, CENTER);
@@ -2151,7 +2250,18 @@ class App {
       
       const isSelected = this.ui.activeTag === L.tag;
       
-      drawGlassTag(rectX, rectY, L.w, L.h, L.r, isSelected, false);
+      // 선택된 태그는 해당 카테고리의 색상 적용
+      const g = this.ui.activeGroup;
+      const groupColors = {
+        1: [160, 120, 80, 0.6],    // 여행자: 갈색빛
+        2: [255, 150, 200, 0.6],   // 20대 여성: 핑크빛
+        3: [100, 150, 255, 0.6],   // 50대 남성: 파란빛
+        4: [255, 220, 100, 0.6],   // 주부: 노랑빛
+        5: [200, 150, 255, 0.6]    // 10대 여성: 보랏빛
+      };
+      const tagTintColor = (isSelected && g) ? groupColors[g] : null;
+      
+      drawGlassTag(rectX, rectY, L.w, L.h, L.r, isSelected, false, tagTintColor);
       
       push();
       drawingContext.save();
@@ -2164,7 +2274,7 @@ class App {
       drawingContext.font = `700 ${L.fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
       drawingContext.shadowBlur = isSelected ? 18 : 10;
       drawingContext.shadowColor = isSelected ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.25)";
-      text(L.label, L.x, y);
+      text(L.label, L.x, y - 2);
       drawingContext.shadowBlur = 0;
       drawingContext.restore();
       pop();
@@ -2256,7 +2366,7 @@ class App {
 
   onPointerUp(x, y, dt, isClick){
     // 그룹 뷰에서 태그 클릭 체크 (원본과 동일하게 onPointerUp에서 처리)
-    if (this.ui.showGroupView && this.ui.activeGroup !== 0) {
+    if (this.ui.showGroupView) {
       const clickedTag = this.checkTagClick(x, y);
       if (clickedTag) {
         // 태그 선택 시 회전 제어 상태 초기화 (자동 회전 유지)
@@ -2323,9 +2433,11 @@ class App {
     const h = this._micHit;
     if (!h) return false;
     
-    const dx = abs(x - h.x);
-    const dy = abs(y - h.y);
-    return (dx <= h.w*0.5 && dy <= h.h*0.5);
+    // 통합된 태그 전체 영역 클릭 체크
+    return (
+      x >= h.x - h.w / 2 && x <= h.x + h.w / 2 &&
+      y >= h.y - h.h / 2 && y <= h.y + h.h / 2
+    );
   }
 
   checkTagClick(x, y){
@@ -2343,18 +2455,18 @@ class App {
 
   checkToggleHit(x,y){
     const h = this._toggleHit;
-    if (!h.count) return false;
+    if (!h.tags || h.tags.length === 0) return false;
     
     // 카테고리 선택 모드가 아닐 때는 클릭 불가
     if (!this.ui.showCategorySelection) return false;
 
-    const dx = abs(x - h.cx);
-    if (dx > h.btnW*0.5) return false;
-
-    for (let i=0;i<h.count;i++){
-      const by = h.startY + i*h.gap;
-      if (abs(y - by) <= h.btnH*0.5){
-        this.ui.setGroup(i);
+    // 태그 히트박스 체크
+    for (const tag of h.tags) {
+      if (
+        x >= tag.x - tag.w / 2 && x <= tag.x + tag.w / 2 &&
+        y >= tag.y - tag.h / 2 && y <= tag.y + tag.h / 2
+      ) {
+        this.ui.setGroup(tag.groupNum);
         return true;
       }
     }

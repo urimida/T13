@@ -1,12 +1,5 @@
 let bgImg;
 
-// UI 요소 이미지
-let workroomImg;
-let galleryImg;
-let clockImg;
-let illuminationImg;
-let gatheringImg;
-
 // Pretendard 폰트
 let pretendardFont;
 
@@ -275,11 +268,6 @@ function computeCoverFit(imgW, imgH, viewW, viewH) {
 
 function preload() {
   bgImg = loadImage("assets/img/background.jpg");
-  workroomImg = loadImage("assets/img/workroom.png");
-  galleryImg = loadImage("assets/img/gallery.png");
-  clockImg = loadImage("assets/img/digital-clock.png");
-  illuminationImg = loadImage("assets/img/Illumination-display.png");
-  gatheringImg = loadImage("assets/img/gathering.png");
 
   // Pretendard 폰트 로드
   pretendardFont = loadFont("assets/fonts/PretendardVariable.ttf");
@@ -1288,9 +1276,6 @@ function draw() {
     // 마지막에 overlay를 합성
     if (overlay) image(overlay, 0, 0);
 
-    // UI 요소 그리기 (overlay 위에)
-    drawUI();
-
     // 안내 텍스트 그리기 (LED 깜빡임 효과)
     // 저장/삭제 애니메이션이 없고, 캡쳐 화면이 아니고, 그리기 중이 아니고, 렌즈가 없을 때만 표시
     if (
@@ -1311,125 +1296,20 @@ function draw() {
   }
 }
 
-// 갤러리 아이콘 중심 좌표 계산 (drawUI와 동일 수식 사용)
+// 갤러리 아이콘 중심 좌표 계산 (기본 위치 반환)
 function getGalleryIconCenter() {
   const responsiveScale = getResponsiveScale();
-  const baseHeight = 48 * 2.2 * responsiveScale;
   const margin = 16 * responsiveScale;
-  const verticalGap = -baseHeight * 0.3;
-
-  if (!galleryImg || galleryImg.width === 0) {
-    // 안전장치: 대략적인 위치(좌상단)에 둠
-    return {
-      x: margin + 40 * responsiveScale,
-      y: margin + baseHeight + verticalGap + baseHeight / 2,
-    };
-  }
-
-  const galleryRatio = galleryImg.width / galleryImg.height;
-  const galleryW = baseHeight * galleryRatio;
-
-  const x = margin + galleryW / 2;
-  const y = margin + baseHeight + verticalGap + baseHeight / 2;
-  return { x, y };
+  // 기본 위치(좌상단) 반환
+  return {
+    x: margin + 40 * responsiveScale,
+    y: margin + 40 * responsiveScale,
+  };
 }
 
-// UI 요소 그리기 함수
+// UI 요소 그리기 함수 (제거됨)
 function drawUI() {
-  // 반응형 스케일 계산
-  const responsiveScale = getResponsiveScale();
-
-  // 기본 크기를 1.5배 * 2배 * 0.8 = 2.4배로 조정하고 반응형 적용
-  const baseHeight = 48 * 2.2 * responsiveScale; // 기준 높이 (2.4배 + 반응형)
-  const margin = 16 * responsiveScale; // 상단 마진 (반응형)
-  const gap = 8 * responsiveScale; // 아이콘 간 간격 (반응형)
-  const verticalGap = -baseHeight * 0.3; // 작업실과 갤러리 사이 간격 (겹치도록 음수 값)
-
-  imageMode(CORNER);
-
-  // 왼쪽 끝: 작업실과 갤러리 세로 묶음
-  if (workroomImg && workroomImg.width > 0 && workroomImg.height > 0) {
-    const workroomRatio = workroomImg.width / workroomImg.height;
-    const workroomW = baseHeight * workroomRatio;
-    image(workroomImg, margin, margin, workroomW, baseHeight);
-  }
-  if (galleryImg && galleryImg.width > 0 && galleryImg.height > 0) {
-    const galleryRatio = galleryImg.width / galleryImg.height;
-    const galleryW = baseHeight * galleryRatio;
-    image(
-      galleryImg,
-      margin,
-      margin + baseHeight + verticalGap,
-      galleryW,
-      baseHeight
-    );
-  }
-
-  // 중간: 시계와 조도표 가로 묶음
-  const centerGroupY = margin;
-  let centerGroupStartX = width / 2;
-  let totalCenterWidth = 0;
-
-  // 시계와 조도표의 실제 크기 계산
-  let clockW = 0;
-  let clockH = 0;
-  let illuminationW = 0;
-  let illuminationH = 0;
-
-  if (clockImg && clockImg.width > 0 && clockImg.height > 0) {
-    const clockRatio = clockImg.width / clockImg.height;
-    clockH = baseHeight;
-    clockW = clockH * clockRatio;
-    totalCenterWidth += clockW;
-  }
-
-  if (
-    illuminationImg &&
-    illuminationImg.width > 0 &&
-    illuminationImg.height > 0
-  ) {
-    const illuminationRatio = illuminationImg.width / illuminationImg.height;
-    illuminationH = baseHeight;
-    illuminationW = illuminationH * illuminationRatio;
-    totalCenterWidth += illuminationW + gap;
-  }
-
-  // 중앙 그룹 시작 위치 계산
-  centerGroupStartX = width / 2 - totalCenterWidth / 2;
-
-  // 시계 그리기
-  if (clockImg && clockImg.width > 0 && clockImg.height > 0) {
-    image(clockImg, centerGroupStartX, centerGroupY, clockW, clockH);
-  }
-
-  // 조도표 그리기
-  if (
-    illuminationImg &&
-    illuminationImg.width > 0 &&
-    illuminationImg.height > 0
-  ) {
-    image(
-      illuminationImg,
-      centerGroupStartX + clockW + gap,
-      centerGroupY,
-      illuminationW,
-      illuminationH
-    );
-  }
-
-  // 오른쪽 끝: 개더링 단일
-  if (gatheringImg && gatheringImg.width > 0 && gatheringImg.height > 0) {
-    const gatheringRatio = gatheringImg.width / gatheringImg.height;
-    const gatheringH = baseHeight;
-    const gatheringW = gatheringH * gatheringRatio;
-    image(
-      gatheringImg,
-      width - margin - gatheringW,
-      margin,
-      gatheringW,
-      gatheringH
-    );
-  }
+  // UI 이미지 제거됨
 }
 
 // 안내 텍스트 그리기 (LED 깜빡임 효과)
@@ -1484,133 +1364,9 @@ function drawInstructionText() {
   pop();
 }
 
-// UI 요소 클릭 확인 함수
+// UI 요소 클릭 확인 함수 (UI 이미지 제거됨)
 function checkUIClick(x, y) {
-  // 반응형 스케일 계산
-  const responsiveScale = getResponsiveScale();
-
-  // 기본 크기를 1.5배 * 2배 * 0.8 = 2.4배로 조정하고 반응형 적용
-  const baseHeight = 48 * 1.5 * 2 * 0.8 * responsiveScale; // 기준 높이 (2.4배 + 반응형)
-  const margin = 16 * responsiveScale; // 상단 마진 (반응형)
-  const gap = 8 * responsiveScale; // 아이콘 간 간격 (반응형)
-  const verticalGap = 0; // 작업실과 갤러리 사이 간격 (0으로 설정하여 최소화)
-
-  // 왼쪽: 작업실과 갤러리
-  if (workroomImg && workroomImg.width > 0 && workroomImg.height > 0) {
-    const workroomRatio = workroomImg.width / workroomImg.height;
-    const workroomW = baseHeight * workroomRatio;
-    if (
-      x >= margin &&
-      x <= margin + workroomW &&
-      y >= margin &&
-      y <= margin + baseHeight
-    ) {
-      showModal = true;
-      modalOpacity = 0;
-      modalJustOpened = true; // 모달이 방금 열렸음을 표시
-      modalOpenTime = 0; // 시간 초기화
-      return true;
-    }
-  }
-
-  if (galleryImg && galleryImg.width > 0 && galleryImg.height > 0) {
-    const galleryRatio = galleryImg.width / galleryImg.height;
-    const galleryW = baseHeight * galleryRatio;
-    if (
-      x >= margin &&
-      x <= margin + galleryW &&
-      y >= margin + baseHeight + verticalGap &&
-      y <= margin + baseHeight + verticalGap + baseHeight
-    ) {
-      showModal = true;
-      modalOpacity = 0;
-      modalJustOpened = true; // 모달이 방금 열렸음을 표시
-      modalOpenTime = 0; // 시간 초기화
-      return true;
-    }
-  }
-
-  // 중간: 시계와 조도표
-  let centerGroupStartX = width / 2;
-  let totalCenterWidth = 0;
-  let clockW = 0;
-  let clockH = 0;
-  let illuminationW = 0;
-  let illuminationH = 0;
-
-  if (clockImg && clockImg.width > 0 && clockImg.height > 0) {
-    const clockRatio = clockImg.width / clockImg.height;
-    clockH = baseHeight;
-    clockW = clockH * clockRatio;
-    totalCenterWidth += clockW;
-  }
-
-  if (
-    illuminationImg &&
-    illuminationImg.width > 0 &&
-    illuminationImg.height > 0
-  ) {
-    const illuminationRatio = illuminationImg.width / illuminationImg.height;
-    illuminationH = baseHeight;
-    illuminationW = illuminationH * illuminationRatio;
-    totalCenterWidth += illuminationW + gap;
-  }
-
-  centerGroupStartX = width / 2 - totalCenterWidth / 2;
-
-  if (clockImg && clockImg.width > 0 && clockImg.height > 0) {
-    if (
-      x >= centerGroupStartX &&
-      x <= centerGroupStartX + clockW &&
-      y >= margin &&
-      y <= margin + clockH
-    ) {
-      showModal = true;
-      modalOpacity = 0;
-      modalJustOpened = true; // 모달이 방금 열렸음을 표시
-      modalOpenTime = 0; // 시간 초기화
-      return true;
-    }
-  }
-
-  if (
-    illuminationImg &&
-    illuminationImg.width > 0 &&
-    illuminationImg.height > 0
-  ) {
-    if (
-      x >= centerGroupStartX + clockW + gap &&
-      x <= centerGroupStartX + clockW + gap + illuminationW &&
-      y >= margin &&
-      y <= margin + illuminationH
-    ) {
-      showModal = true;
-      modalOpacity = 0;
-      modalJustOpened = true; // 모달이 방금 열렸음을 표시
-      modalOpenTime = 0; // 시간 초기화
-      return true;
-    }
-  }
-
-  // 오른쪽: 개더링
-  if (gatheringImg && gatheringImg.width > 0 && gatheringImg.height > 0) {
-    const gatheringRatio = gatheringImg.width / gatheringImg.height;
-    const gatheringH = baseHeight;
-    const gatheringW = gatheringH * gatheringRatio;
-    if (
-      x >= width - margin - gatheringW &&
-      x <= width - margin &&
-      y >= margin &&
-      y <= margin + gatheringH
-    ) {
-      showModal = true;
-      modalOpacity = 0;
-      modalJustOpened = true; // 모달이 방금 열렸음을 표시
-      modalOpenTime = 0; // 시간 초기화
-      return true;
-    }
-  }
-
+  // UI 이미지가 제거되어 항상 false 반환
   return false;
 }
 
@@ -1771,7 +1527,7 @@ function drawModal() {
   };
 }
 
-// 캡쳐 화면 버튼 그리기
+// 캡쳐 화면 버튼 그리기 (태그 스타일 + 초록색 배경)
 function drawCaptureButtons() {
   const responsiveScale = getResponsiveScale();
   const centerX = width / 2;
@@ -1779,19 +1535,19 @@ function drawCaptureButtons() {
   const buttonY =
     centerY + (captureAnimation.targetRadius || 200) + 40 * responsiveScale;
 
-  const buttonHeight = 50 * responsiveScale;
-  const buttonPaddingX = 30 * responsiveScale;
-  const buttonPaddingY = 20 * responsiveScale;
+  // 태그와 동일한 스타일 사용
+  const padX = 28 * responsiveScale * 1.3; // 라벨 마진 (태그와 동일)
+  const labelH = 56 * responsiveScale * 1.3; // 라벨 높이 (태그와 동일)
+  const radius = 79 * responsiveScale; // 둥근 모서리 반지름 (태그와 동일)
   const buttonGap = 10 * responsiveScale;
-  const borderRadius = 30 * responsiveScale;
 
   const buttons = [
     { text: "저장하기", action: "save" },
     { text: "삭제하기", action: "delete" },
   ];
 
-  // 버튼 텍스트 크기 측정 및 배치
-  textSize(16 * responsiveScale);
+  // 버튼 텍스트 크기 측정 및 배치 (태그와 동일)
+  textSize(16 * 1.4 * responsiveScale * 1.3);
   if (pretendardFont) {
     textFont(pretendardFont);
   }
@@ -1802,7 +1558,7 @@ function drawCaptureButtons() {
 
   for (let btn of buttons) {
     const textW = textWidth(btn.text);
-    const btnW = textW + buttonPaddingX * 2;
+    const btnW = textW + padX * 2;
     buttonWidths.push(btnW);
     totalWidth += btnW;
     if (buttons.indexOf(btn) < buttons.length - 1) {
@@ -1812,51 +1568,39 @@ function drawCaptureButtons() {
 
   let currentX = centerX - totalWidth / 2;
 
-  push();
-  const ctx = drawingContext;
-
   for (let i = 0; i < buttons.length; i++) {
     const btn = buttons[i];
     const btnW = buttonWidths[i];
     const btnX = currentX;
     const btnY = buttonY;
 
-    // 버튼 배경 (글래스모피즘 스타일)
-    ctx.save();
-    ctx.fillStyle = "rgba(165, 242, 221, 0.30)";
-    ctx.shadowBlur = 30;
-    ctx.shadowColor = "rgba(128, 128, 128, 0.30)";
-    ctx.shadowOffsetX = 7;
-    ctx.shadowOffsetY = 7;
+    // 태그 스타일의 글래스 라벨 그리기
+    drawGlassLabel(btnX, btnY, btnW, labelH, radius);
 
-    // 둥근 사각형
-    ctx.beginPath();
-    ctx.moveTo(btnX + borderRadius, btnY);
-    ctx.lineTo(btnX + btnW - borderRadius, btnY);
-    ctx.quadraticCurveTo(btnX + btnW, btnY, btnX + btnW, btnY + borderRadius);
-    ctx.lineTo(btnX + btnW, btnY + buttonHeight - borderRadius);
-    ctx.quadraticCurveTo(
-      btnX + btnW,
-      btnY + buttonHeight,
-      btnX + btnW - borderRadius,
-      btnY + buttonHeight
-    );
-    ctx.lineTo(btnX + borderRadius, btnY + buttonHeight);
-    ctx.quadraticCurveTo(
-      btnX,
-      btnY + buttonHeight,
-      btnX,
-      btnY + buttonHeight - borderRadius
-    );
-    ctx.lineTo(btnX, btnY + borderRadius);
-    ctx.quadraticCurveTo(btnX, btnY, btnX + borderRadius, btnY);
-    ctx.closePath();
-    ctx.fill();
+    // 초록색 오버레이 추가
+    const ctx = drawingContext;
+    ctx.save();
+    roundRectPath(ctx, btnX, btnY, btnW, labelH, radius);
+    ctx.clip();
+    
+    // 초록색 그라디언트 (상→하, 반투명)
+    const greenGradient = ctx.createLinearGradient(btnX, btnY, btnX, btnY + labelH);
+    greenGradient.addColorStop(0, "rgba(76, 175, 80, 0.25)"); // 밝은 초록 (반투명)
+    greenGradient.addColorStop(1, "rgba(56, 142, 60, 0.3)"); // 어두운 초록 (반투명)
+    ctx.fillStyle = greenGradient;
+    ctx.fillRect(btnX, btnY, btnW, labelH);
+    
     ctx.restore();
 
-    // 버튼 텍스트
-    fill(255, 255, 255, 255);
-    text(btn.text, btnX + btnW / 2, btnY + buttonHeight / 2);
+    // 버튼 텍스트 (태그와 동일한 스타일, 2픽셀 위로)
+    push();
+    fill(255);
+    drawingContext.shadowBlur = 4;
+    drawingContext.shadowColor = "rgba(0,0,0,0.25)";
+    drawingContext.shadowOffsetX = 0;
+    drawingContext.shadowOffsetY = 2;
+    text(btn.text, btnX + btnW / 2, btnY + labelH / 2 - 2);
+    pop();
 
     // 버튼 영역 저장 (클릭 감지용)
     if (!window.captureButtons) window.captureButtons = [];
@@ -1864,14 +1608,12 @@ function drawCaptureButtons() {
       x: btnX,
       y: btnY,
       w: btnW,
-      h: buttonHeight,
+      h: labelH,
       action: btn.action,
     };
 
     currentX += btnW + buttonGap;
   }
-
-  pop();
 }
 
 // 둥근 사각형 경로 헬퍼
@@ -2008,7 +1750,7 @@ function drawFeatureLabels() {
 
         // 버튼 영역 계산 (버튼이 표시되는 영역 피하기)
         const buttonY = centerY + lensR + 40 * responsiveScale;
-        const buttonHeight = 50 * responsiveScale;
+        const buttonHeight = 56 * responsiveScale * 1.3; // 태그와 동일한 높이
         const buttonAreaTop = buttonY - 20 * responsiveScale; // 버튼 위 여유 공간
         const buttonAreaBottom = buttonY + buttonHeight + 20 * responsiveScale; // 버튼 아래 여유 공간
 
@@ -2087,14 +1829,14 @@ function drawFeatureLabels() {
     // 글래스 라벨(백드롭 블러+유리 표현)
     drawGlassLabel(x, y, labelW, labelH, radius);
 
-    // C) 텍스트 (미세한 그림자로 가독성 ↑, # 추가)
+    // C) 텍스트 (미세한 그림자로 가독성 ↑, # 추가, 2픽셀 위로)
     push();
     fill(255);
     drawingContext.shadowBlur = 4;
     drawingContext.shadowColor = "rgba(0,0,0,0.25)";
     drawingContext.shadowOffsetX = 0;
     drawingContext.shadowOffsetY = 2;
-    text("# " + feature, pos.x, pos.y);
+    text("# " + feature, pos.x, pos.y - 2);
     pop();
   }
 }
