@@ -1865,11 +1865,11 @@ function drawGlassLabelFullscreen(x, y, w, h, r, anim, tagType = null) {
   // 태그 타입에 따른 색상 설정 (배경 틴트에만 적용, 테두리는 흰색 유지)
   let tintColor = null;
   if (tagType === "visual") {
-    // 비주얼 태그: 붉은 빛 (약하게)
-    tintColor = { r: 255, g: 200, b: 200, alpha: 0.1 }; // 약한 빨간 틴트
+    // 비주얼 태그: 붉은 빛 (더 진하게)
+    tintColor = { r: 255, g: 150, b: 150, alpha: 0.2 }; // 진한 핑크 틴트
   } else if (tagType === "emotional") {
-    // 감정 태그: 초록빛 (약하게)
-    tintColor = { r: 200, g: 255, b: 200, alpha: 0.1 }; // 약한 초록 틴트
+    // 감정 태그: 초록빛 (더 진하게)
+    tintColor = { r: 150, g: 255, b: 150, alpha: 0.2 }; // 진한 초록 틴트
   }
 
   // 1) 아웃샤도우 (라벨 외곽 글로우)
