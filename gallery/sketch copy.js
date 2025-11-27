@@ -73,8 +73,6 @@ const PERFORMANCE_CONFIG = {
   maxSimulImageLoads: 2,
 };
 
-// 그리드 레이아웃에서 클릭 판정을 위한 히트박스 배열
-let arcBubbleHitboxes = []; // 현재 화면에 그려진 버블의 히트박스 정보 [{x, y, r, bubble, slotIndex}]
 
 // 버블 이미지 배열 (원본 스케치와 동일)
 let bubbleImages = []; // 버블 이미지들 (지연 로딩)
@@ -112,7 +110,7 @@ let scaleAll = 1; // 반응형 스케일
 let appTime = 0; // 앱 시간 (초)
 
 // modes
-let mode = 0; // 0 normal, 1 fullscreen
+let mode = 0; // 0 normal, 1 fullscreen, 2 name input modal, 3 analysis result
 let fullscreenIndex = -1;
 let fullscreenAnim = 0; // 0 -> 1
 let fullscreenTagLayout = []; // 태그 레이아웃 (랜덤 배치)
@@ -153,6 +151,12 @@ let lastDrawTime = 0;
 // 안내 텍스트 관련 변수
 let showInstructionText = true; // 안내 텍스트 표시 여부
 let instructionPulseTime = 0; // LED 펄스 애니메이션 시간
+
+// 취향 분석 기능 관련 변수
+let userName = ""; // 사용자 이름
+let favoriteBubbles = []; // 선택한 버블 인덱스 배열
+let nameInputElement = null; // HTML input 요소 (한글 입력 지원)
+let analysisResult = null; // 분석 결과 {topVisualTags, topEmotionalTags, commonTags}
 
 /* =========================
    2. UTILS (익스플로어와 동일)
@@ -807,6 +811,12 @@ function setup() {
   // Pointer Events API 설정 (익스플로어와 동일, 태블릿 지원)
   setupPointerEvents();
 
+  // 이름 입력 input 요소 생성 (한글 입력 지원)
+  createNameInputElement();
+
+  // 초기 모드를 이름 입력 모달로 설정
+  mode = 2;
+
   lastActiveTime = millis();
 }
 
@@ -1010,6 +1020,26 @@ function draw() {
     drawFullscreen();
   }
 
+  // 이름 입력 모달
+  if (mode === 2) {
+    drawNameInputModal();
+  } else {
+    // 모달이 아닐 때는 input 숨김
+    if (nameInputElement) {
+      nameInputElement.style("display", "none");
+    }
+  }
+
+  // 분석 결과 화면
+  if (mode === 3) {
+    drawAnalysisResult();
+  }
+
+  // 감각 알아보기 버튼 (일반 모드에서만, 이름이 입력된 경우)
+  if (mode === 0 && userName) {
+    drawTasteAnalysisButton();
+  }
+
   if (DEV.showFPS) drawFPS?.();
 
   // --- GC 관리 (하루 종일 안정성 강화) ---
@@ -1056,24 +1086,6 @@ function drawGridLayout() {
   
   // BubbleManager 업데이트 및 그리기 (버블 위치 계산 + 그리기)
   bubbleManager.updateAndDraw(panController);
-  
-  // 히트박스 업데이트 (클릭 감지용)
-  if (!arcBubbleHitboxes) arcBubbleHitboxes = [];
-  arcBubbleHitboxes.length = 0;
-  
-  for (let i = 0; i < bubbleManager.bubbles.length; i++) {
-    const b = bubbleManager.bubbles[i];
-    if (b.visible) {
-      arcBubbleHitboxes.push({
-        x: b.displayX,
-        y: b.displayY,
-        r: b.displayR,
-        bubble: b,
-        slotIndex: b.id,
-        ySort: b.displayY
-      });
-    }
-  }
 }
 
 // 중앙 버블 정보 표시 (익스플로어 스타일)
@@ -1555,6 +1567,17 @@ function drawFullscreen() {
     drawRecommendedBubbles(anim, isExiting);
   }
 
+  // 하트 버튼 (좋아요) - 풀스크린 모드에서만 표시
+  if (fullscreenIndex >= 0) {
+    drawHeartButton(anim);
+    
+    // 하트 버튼을 누르기 전까지 안내 텍스트 표시
+    const currentBubbleIsFavorite = favoriteBubbles.includes(fullscreenIndex);
+    if (!currentBubbleIsFavorite && !dragging && anim > 0.5) {
+      drawFullscreenInstructionText(anim);
+    }
+  }
+
   // VR모드 나가기 버튼 (가운데 위쪽) - 가장 앞쪽 레이어에 표시
   drawVRExitButton(anim);
 }
@@ -1654,7 +1677,7 @@ function computeRecommendedBubbles(tag) {
   }
 }
 
-function drawRecommendedBubbles(anim, isExiting=false) {
+function drawRecommendedBubbles(anim, isExiting = false) {
   if (!recommendedBubbles || recommendedBubbles.length === 0) return;
 
   const s = getResponsiveScale();
@@ -1668,9 +1691,9 @@ function drawRecommendedBubbles(anim, isExiting=false) {
 
   const baseY = height - 170 * s;
   const gap = 170 * s;
-  
-  // 고정 반지름 사용 (반응형 스케일 적용)
-  const r = RECOMM_BUBBLE_CONFIG.radius * s;
+
+  // ✅ 고정 반지름 (화면 비율만 반영)
+  const fixedR = RECOMM_BUBBLE_CONFIG.radius * s;
 
   const startX = width * 0.5 - gap * (n - 1) * 0.5;
 
@@ -1686,61 +1709,56 @@ function drawRecommendedBubbles(anim, isExiting=false) {
     const y = baseY;
 
     // 이미지 요청 (지연 로딩)
-    // ✅ 연관 버블 이미지도 항상 visible로 표시 (GC 방지)
     if (b.imgPath && imageLoader) {
       imageLoader.request(b.imgPath);
       imageLoader.markVisible(b.imgPath);
     }
 
-    // alpha 및 크기 적용, 후광 제거를 위해 isCenter를 false로 설정
+    // ✅ 원래 상태 백업
     const prevAlpha = b.alpha;
     const prevIsCenter = b.isCenter;
     const prevDisplayR = b.displayR;
+
+    // ✅ 추천 버블은 완전 고정 크기 & 후광 없음
     b.alpha = a;
-    b.r = r;
-    b.displayR = r;
-    b.isCenter = false; // 후광 제거
+    b.displayR = fixedR;
+    b.isCenter = false;
 
     b.drawAt(x, y);
 
-    // 원래 상태 복원
+    // ✅ 원래 상태 복구
     b.alpha = prevAlpha;
     b.isCenter = prevIsCenter;
     b.displayR = prevDisplayR;
 
-    recommendedHitboxes[i] = { x, y, r, index: rec.index };
+    // ✅ 히트박스도 고정 반지름 기준
+    recommendedHitboxes[i] = { x, y, r: fixedR, index: rec.index };
   }
   pop();
 
-  // 이미지 로더 업데이트 (이미지 로딩 진행)
+  // 이미지 로더 업데이트
   if (imageLoader) {
     imageLoader.update(performance.now());
   }
 
-  // 추천 버블 위에 텍스트 표시 (LED 글로우 효과)
+  // 아래 LED 텍스트 부분은 기존 코드 그대로 유지
   if (selectedTag && a > 0.1) {
-    const textY = baseY - r - 40 * s - 20; // 20픽셀 위로 올림
-    const particle = getKoreanParticle(selectedTag); // 받침 유무에 따라 "와"/"과" 선택
+    const textY = baseY - fixedR - 40 * s - 20;
+    const particle = getKoreanParticle(selectedTag);
     const tagText = `#${selectedTag}${particle} 유사한 레퍼런스를 가져왔어요`;
-    
-    // LED 펄스 효과
+
     const pulseTime = millis() * 0.001;
-    const pulse = (Math.sin(pulseTime * 2) + 1) * 0.5; // 0~1 사이 값
-    const textAlpha = a * (0.7 + pulse * 0.3); // 0.7~1.0 사이로 펄스
+    const pulse = (Math.sin(pulseTime * 2) + 1) * 0.5;
+    const textAlpha = a * (0.7 + pulse * 0.3);
 
     push();
     const ctx = drawingContext;
     ctx.save();
 
-    // 텍스트 설정
     textAlign(CENTER, CENTER);
-    textSize(30 * s); // 반으로 줄임 (60 / 2 = 30)
-    if (fontPretendard) {
-      textFont(fontPretendard);
-    }
+    textSize(30 * s);
+    if (fontPretendard) textFont(fontPretendard);
 
-    // LED 글로우 효과를 위한 여러 레이어 그리기
-    // 1단계: 뿌연 글로우 레이어들
     ctx.shadowBlur = 15;
     ctx.shadowColor = `rgba(255, 255, 255, ${textAlpha * 0.3})`;
     ctx.shadowOffsetX = 0;
@@ -1748,19 +1766,16 @@ function drawRecommendedBubbles(anim, isExiting=false) {
     fill(255, 255, 255, textAlpha * 0.2 * 255);
     text(tagText, width / 2, textY);
 
-    // 2단계: 중간 글로우 레이어
     ctx.shadowBlur = 10;
     ctx.shadowColor = `rgba(255, 255, 255, ${textAlpha * 0.5})`;
     fill(255, 255, 255, textAlpha * 0.4 * 255);
     text(tagText, width / 2, textY);
 
-    // 3단계: 메인 LED 텍스트
     ctx.shadowBlur = 8;
     ctx.shadowColor = `rgba(255, 255, 255, ${textAlpha * 0.8})`;
     fill(255, 255, 255, textAlpha * 255);
     text(tagText, width / 2, textY);
 
-    // 그림자 리셋
     ctx.shadowBlur = 0;
     ctx.shadowColor = "transparent";
     ctx.shadowOffsetX = 0;
@@ -1780,18 +1795,108 @@ function pointInCircle(px, py, cx, cy, r) {
 
 function checkRecommendedBubbleClick(x, y) {
   if (!recommendedHitboxes || recommendedHitboxes.length === 0) return -1;
-  
-  const s = getResponsiveScale();
-  const fixedR = RECOMM_BUBBLE_CONFIG.radius * s; // 그릴 때와 동일한 고정 반지름 사용
-  
+
   for (let i = 0; i < recommendedHitboxes.length; i++) {
     const hb = recommendedHitboxes[i];
-    // 그릴 때와 동일한 좌표와 반지름으로 히트 테스트
-    if (pointInCircle(x, y, hb.x, hb.y, fixedR)) {
+    if (pointInCircle(x, y, hb.x, hb.y, hb.r)) {
       return hb.index;
     }
   }
   return -1;
+}
+
+// 하트 버튼 그리기 (풀스크린 모드) - VR 나가기 버튼 옆에 배치
+function drawHeartButton(anim) {
+  const responsiveScale = getResponsiveScale();
+  const buttonSize = 60 * responsiveScale;
+  
+  // VR 나가기 버튼 위치 계산 (drawVRExitButton과 동일한 로직)
+  const centerX = width / 2;
+  const topY = 60 * responsiveScale;
+  const fontSize = 16 * 1.4 * responsiveScale * 1.3;
+  const padding = 28 * responsiveScale * 1.3;
+  const tagH = 56 * responsiveScale * 1.3;
+  
+  textSize(fontSize);
+  if (fontPretendard) textFont(fontPretendard);
+  textStyle(BOLD);
+  const buttonText = "<   VR모드 나가기";
+  const textW = textWidth(buttonText);
+  const vrButtonWidth = textW + padding * 2;
+  const vrButtonX = centerX - vrButtonWidth / 2;
+  
+  // VR 나가기 버튼 바로 옆에 배치
+  const buttonX = vrButtonX + vrButtonWidth + 15 * responsiveScale; // 15px 간격
+  const buttonY = topY + 4; // 2픽셀 아래로
+  
+  const isFavorite = favoriteBubbles.includes(fullscreenIndex);
+  
+  // 하트 아이콘 그리기 (간단한 원형 버튼)
+  push();
+  drawingContext.save();
+  
+  // 배경 원
+  drawingContext.beginPath();
+  drawingContext.arc(buttonX + buttonSize / 2, buttonY + buttonSize / 2, buttonSize / 2, 0, Math.PI * 2);
+  drawingContext.clip();
+  
+  // 글래스 효과 배경
+  const bgImg = uiImages["bg.png"];
+  if (bgImg && bgImg.width > 0) {
+    drawingContext.filter = "blur(10px)";
+    drawingContext.globalAlpha = 0.2 * anim;
+    const cover = coverRect(bgImg.width, bgImg.height, width, height);
+    drawingContext.drawImage(
+      bgImg.canvas || bgImg.elt,
+      0, 0, bgImg.width, bgImg.height,
+      cover.x, cover.y, cover.w, cover.h
+    );
+    drawingContext.filter = "none";
+  }
+  
+  drawingContext.globalAlpha = (isFavorite ? 0.8 : 0.5) * anim;
+  drawingContext.fillStyle = isFavorite ? "rgba(255,100,100,0.8)" : "rgba(0,0,0,0.6)";
+  drawingContext.fillRect(buttonX, buttonY, buttonSize, buttonSize);
+  
+  const tint = drawingContext.createLinearGradient(buttonX, buttonY, buttonX, buttonY + buttonSize);
+  tint.addColorStop(0, "rgba(255,255,255,0.2)");
+  tint.addColorStop(1, "rgba(255,255,255,0.05)");
+  drawingContext.fillStyle = tint;
+  drawingContext.fillRect(buttonX, buttonY, buttonSize, buttonSize);
+  
+  drawingContext.restore();
+  pop();
+  
+  // 테두리
+  push();
+  drawingContext.save();
+  drawingContext.strokeStyle = isFavorite ? "rgba(255,150,150,0.9)" : "rgba(255,255,255,0.5)";
+  drawingContext.lineWidth = 2;
+  drawingContext.globalAlpha = anim;
+  drawingContext.beginPath();
+  drawingContext.arc(buttonX + buttonSize / 2, buttonY + buttonSize / 2, buttonSize / 2 - 1, 0, Math.PI * 2);
+  drawingContext.stroke();
+  drawingContext.restore();
+  pop();
+  
+  // 하트 아이콘 (간단한 텍스트로 표현)
+  push();
+  textAlign(CENTER, CENTER);
+  textSize(30 * responsiveScale);
+  if (fontPretendard) textFont(fontPretendard);
+  fill(255, 255 * anim);
+  const heartSymbol = isFavorite ? "♥" : "♡";
+  text(heartSymbol, buttonX + buttonSize / 2, buttonY + buttonSize / 2 - 1); // 1픽셀 위로
+  pop();
+  
+  // 히트박스 저장
+  uiHitboxes.push({
+    id: "heart_button",
+    x: buttonX,
+    y: buttonY,
+    w: buttonSize,
+    h: buttonSize
+  });
 }
 
 // VR모드 나가기 버튼 그리기 (태그와 동일한 스타일)
@@ -1886,12 +1991,12 @@ function drawGlassLabelFullscreen(x, y, w, h, r, anim, tagType = null) {
   roundRectPath(ctx, x, y, w, h, r);
   ctx.clip();
 
-  // 배경 이미지 가져오기 (실제 확대된 이미지 사용)
+  // 배경 이미지 가져오기 (확대 모드일 때는 확대된 이미지, 아니면 기본 배경)
   const b = bubbles && fullscreenIndex >= 0 ? bubbles[fullscreenIndex] : null;
   const img = b && b.imgPath && imageLoader ? imageLoader.get(b.imgPath) : null;
   
-  if (img && img.width > 0) {
-    // 확대된 이미지의 cover fit 계산 (drawFullscreen과 동일)
+  if (img && img.width > 0 && mode === 1) {
+    // 확대 모드: 확대된 이미지의 cover fit 계산 (drawFullscreen과 동일)
     const imgRatio = img.width / img.height;
     const screenRatio = width / height;
     
@@ -1924,6 +2029,20 @@ function drawGlassLabelFullscreen(x, y, w, h, r, anim, tagType = null) {
       drawH
     );
     ctx.filter = "none";
+  } else {
+    // 분석 결과 화면 등: 기본 배경 이미지 사용
+    const bgImg = uiImages["bg.png"];
+    if (bgImg && bgImg.width > 0) {
+      ctx.filter = "blur(16px) saturate(140%)";
+      ctx.globalAlpha = anim * 0.3;
+      const cover = coverRect(bgImg.width, bgImg.height, width, height);
+      ctx.drawImage(
+        bgImg.canvas || bgImg.elt,
+        0, 0, bgImg.width, bgImg.height,
+        cover.x, cover.y, cover.w, cover.h
+      );
+      ctx.filter = "none";
+    }
   }
 
   // 3) 미묘한 어두운 오버레이 (반투명 효과) - 검은색 5% 추가
@@ -2070,8 +2189,8 @@ function drawUI() {
 function drawInstructionText() {
   const responsiveScale = getResponsiveScale();
 
-  // LED 펄스 효과 (시간 기반)
-  instructionPulseTime += 0.1;
+  // LED 펄스 효과 (시간 기반) - 속도 줄임
+  instructionPulseTime += 0.05; // 0.1 -> 0.05 (속도 절반으로)
   const pulse = (Math.sin(instructionPulseTime) + 1) * 0.5; // 0~1 사이 값
   const alpha = 0.3 + pulse * 0.7; // 0.3~1.0 사이로 펄스 (살짝 보였다가 사라졌다가)
 
@@ -2118,6 +2237,64 @@ function drawInstructionText() {
   pop();
 }
 
+// 풀스크린 모드 안내 텍스트 그리기 (LED 깜빡임 효과)
+function drawFullscreenInstructionText(anim) {
+  const responsiveScale = getResponsiveScale();
+  
+  // LED 펄스 효과 (시간 기반) - 속도 줄임
+  instructionPulseTime += 0.05; // 0.1 -> 0.05 (속도 절반으로)
+  const pulse = (Math.sin(instructionPulseTime) + 1) * 0.5; // 0~1 사이 값
+  const alpha = (0.3 + pulse * 0.7) * anim; // 0.3~1.0 사이로 펄스, 애니메이션과 곱함
+
+  push();
+  const ctx = drawingContext;
+  ctx.save();
+
+  // 텍스트 설정
+  textAlign(CENTER, CENTER);
+  textSize(24 * responsiveScale);
+  if (fontPretendard) {
+    textFont(fontPretendard);
+  }
+  
+  // VR 나가기 버튼 아래에 배치
+  const topY = 60 * responsiveScale;
+  const tagH = 56 * responsiveScale * 1.3;
+  const buttonHeight = tagH;
+  const vrButtonBottom = topY + buttonHeight;
+  const textY = vrButtonBottom + 40 * responsiveScale; // VR 버튼 아래 40px
+
+  // LED 글로우 효과를 위한 여러 레이어 그리기
+  // 1단계: 뿌연 글로우 레이어들
+  ctx.shadowBlur = 15;
+  ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.3})`;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  fill(255, 255, 255, alpha * 0.2 * 255);
+  text("좋아하는 사진에는 하트를 눌러 내 감각을 분석해보세요.", width / 2, textY);
+
+  // 2단계: 중간 글로우 레이어
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.5})`;
+  fill(255, 255, 255, alpha * 0.4 * 255);
+  text("좋아하는 사진에는 하트를 눌러 내 감각을 분석해보세요.", width / 2, textY);
+
+  // 3단계: 메인 LED 텍스트
+  ctx.shadowBlur = 8;
+  ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.8})`;
+  fill(255, 255, 255, alpha * 255);
+  text("좋아하는 사진에는 하트를 눌러 내 감각을 분석해보세요.", width / 2, textY);
+
+  // 그림자 리셋
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = "transparent";
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+
+  ctx.restore();
+  pop();
+}
+
 /* =========================
    12. INPUT HANDLING (Unified)
 ========================= */
@@ -2133,9 +2310,32 @@ function pointerStart(x, y, id) {
   lastT = millis();
   dragging = false;
   dragMode = 0;
+
+  // 이름 입력 모달 또는 분석 결과 화면에서 UI 클릭 처리
+  if (mode === 2 || mode === 3) {
+    const hit = hitTestUI(x, y);
+    if (hit) {
+      handleUI(hit);
+      pointerDown = false;
+      pointerId = -1;
+      return;
+    }
+    // 모달 외부 클릭은 무시
+    pointerDown = false;
+    pointerId = -1;
+    return;
+  }
   
-  // 상호작용 시작 시 안내 텍스트 숨김
-  showInstructionText = false;
+  // 일반 모드에서 감각 알아보기 버튼 클릭 처리
+  if (mode === 0) {
+    const hit = hitTestUI(x, y);
+    if (hit === "taste_analysis") {
+      handleUI(hit);
+      pointerDown = false;
+      pointerId = -1;
+      return;
+    }
+  }
 
   // UI hit test (풀스크린 모드에서도 작동)
   const hit = hitTestUI(x, y);
@@ -2286,6 +2486,13 @@ function pointerEnd(x, y) {
   if (mode === 1) {
     // 탭으로 판정된 경우에만 클릭 처리
     if (isTap) {
+      // 하트 버튼 클릭 확인 (가장 우선순위)
+      const hit = hitTestUI(x, y);
+      if (hit === "heart_button") {
+        toggleFavoriteBubble();
+        return;
+      }
+      
       // VR 나가기 버튼 클릭 확인
       const clickedTag = checkTagClick(x, y);
       if (clickedTag === "VR_EXIT") {
@@ -2293,19 +2500,39 @@ function pointerEnd(x, y) {
         return;
       }
       
-      // 태그 클릭 확인
-      if (clickedTag !== null) {
-        selectTag(clickedTag);
-        return;
-      }
-      
-      // 연관 버블 클릭 확인 (탭일 때만)
+      // ✅ 추천 버블 클릭을 먼저 확인 (태그보다 우선순위 높음)
       const clickedBubbleIdx = checkRecommendedBubbleClick(x, y);
       if (clickedBubbleIdx !== -1) {
         // 선택된 연관 버블로 이동
         enterFullscreen(clickedBubbleIdx);
         return;
       }
+      
+      // 태그 클릭 확인 (추천 버블이 클릭되지 않았을 때만)
+      if (clickedTag !== null) {
+        selectTag(clickedTag);
+        return;
+      }
+    }
+  }
+  
+  // 이름 입력 모달 또는 분석 결과 화면에서 클릭 처리
+  if (mode === 2 || mode === 3) {
+    if (isTap) {
+      const hit = hitTestUI(x, y);
+      if (hit) {
+        handleUI(hit);
+        return;
+      }
+    }
+  }
+  
+  // 일반 모드에서 감각 알아보기 버튼 클릭
+  if (mode === 0 && isTap) {
+    const hit = hitTestUI(x, y);
+    if (hit === "taste_analysis") {
+      handleUI(hit);
+      return;
     }
   }
 
@@ -2395,24 +2622,39 @@ function setupPointerEvents() {
   // 캔버스 내부에서는 처리하지 않도록 체크
   const handleDocumentPointerMove = (e) => {
     if (!pointerDown || e.pointerId !== pointerId) return;
-    // 캔버스 내부에서는 캔버스 이벤트가 처리하므로 스킵
+
+    // 캔버스의 실제 렌더 영역
     const rect = c.getBoundingClientRect();
+
+    // 캔버스 안쪽이면 캔버스 이벤트에 맡기고 패스
     if (e.clientX >= rect.left && e.clientX <= rect.right &&
         e.clientY >= rect.top && e.clientY <= rect.bottom) {
-      return; // 캔버스 내부는 스킵
+      return;
     }
-    // 캔버스 밖에서만 처리
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    pointerMove(x, y);
+
+    // ✅ 캔버스 밖에서도 동일한 스케일/클램핑 로직 사용
+    const scaleX = width / rect.width;
+    const scaleY = height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    const clampedX = Math.max(0, Math.min(width, x));
+    const clampedY = Math.max(0, Math.min(height, y));
+
+    pointerMove(clampedX, clampedY);
   };
 
   const handleDocumentPointerUp = (e) => {
     if (!pointerDown || e.pointerId !== pointerId) return;
+
     const rect = c.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    pointerEnd(x, y);
+    const scaleX = width / rect.width;
+    const scaleY = height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    const clampedX = Math.max(0, Math.min(width, x));
+    const clampedY = Math.max(0, Math.min(height, y));
+
+    pointerEnd(clampedX, clampedY);
   };
 
   document.addEventListener("pointermove", handleDocumentPointerMove, { passive: false });
@@ -2465,12 +2707,54 @@ function hitTestUI(x, y) {
 
 function handleUI(id) {
   if (mode === 1) {
+    // 풀스크린 모드
     if (id === "back_full" || id === "vr_exit") {
       exitFullscreen();
+    } else if (id === "heart_button") {
+      // 하트 버튼 클릭
+      toggleFavoriteBubble();
+    }
+    return;
+  } else if (mode === 2) {
+    // 이름 입력 모달
+    if (id === "name_input") {
+      // input 요소에 포커스
+      if (nameInputElement) {
+        nameInputElement.elt.focus();
+      }
+    } else if (id === "name_confirm") {
+      confirmNameInput();
+    }
+    return;
+  } else if (mode === 3) {
+    // 분석 결과 화면
+    if (id === "restart") {
+      // 다시 시작
+      userName = "";
+      favoriteBubbles = [];
+      analysisResult = null;
+      mode = 2; // 이름 입력 모달로
+      if (nameInputElement) {
+        nameInputElement.style("display", "block");
+        nameInputElement.elt.focus();
+      }
+      resetToInitialView();
+    }
+    return;
+  } else if (mode === 0) {
+    // 일반 모드
+    if (id === "taste_analysis") {
+      // 감각 알아보기 버튼 클릭
+      if (favoriteBubbles.length > 0) {
+        analysisResult = analyzeFavoriteTags();
+        mode = 3; // 분석 결과 화면으로
+      } else {
+        // 선택한 버블이 없으면 알림 (간단히 콘솔에만)
+        console.log("먼저 하트 버튼으로 좋아하는 사진을 선택해주세요!");
+      }
     }
     return;
   }
-  // UI 요소 제거됨 (네비게이션 바, 카메라 버튼, 작업대 버튼)
 }
 
 /* =========================
@@ -2592,10 +2876,6 @@ function hitTestGridBubble(x, y) {
   return -1;
 }
 
-// 아크 캐러셀 버블 클릭 감지 (deprecated)
-function hitTestCenterBubble(x, y, ignoreZoneCheck = false) {
-  return hitTestGridBubble(x, y);
-}
 
 /* =========================
    16. HELPERS (NO ALLOC)
@@ -2617,10 +2897,6 @@ function normalizeIndex(i, n) {
 
 // 아크 캐러셀 관련 함수 제거됨 (그리드 레이아웃 사용)
 
-// 원본 스케치와 동일한 positiveMod 함수
-function positiveMod(n, m) {
-  return ((n % m) + m) % m;
-}
 
 // 원본 스케치와 동일한 getResponsiveScale 함수
 function getResponsiveScale() {
@@ -2634,32 +2910,6 @@ function getResponsiveScale() {
   return Math.max(minScale, Math.min(maxScale, scale));
 }
 
-// 검색창 제거됨 - 아크 메트릭 계산용 헬퍼 함수
-function getSearchMetrics() {
-  const responsiveScale = getResponsiveScale();
-  const NAV_Y = 20;
-  const NAV_H = 0; // 네비게이션 바 제거됨
-  const NAV_BOTTOM = NAV_Y + NAV_H;
-  // 검색창이 없으므로 네비게이션 바 아래 위치 반환
-  const Y = NAV_BOTTOM + 20 * responsiveScale;
-  return { W: 0, H: 0, X: 0, Y, bottom: Y };
-}
-
-// 원본 스케치와 동일한 getArcMetrics 함수
-function getArcMetrics() {
-  const responsiveScale = getResponsiveScale();
-  const { bottom: SEARCH_BOTTOM } = getSearchMetrics();
-
-  const arcCenterX = width * 0.5;
-  // 더 큰 원의 일부처럼 보이도록 반지름을 크게 증가
-  const arcRadius = Math.min(width, height) * 0.65 * responsiveScale; // 0.28 → 0.8로 증가 (훨씬 큰 원)
-  // 원의 윗부분만 보이도록 중심을 더 아래로 이동 (더 큰 원이므로 더 아래로)
-  // 원의 상단이 화면 중앙 근처에 오도록, 하단은 화면 밖으로
-  const arcCenterY = height + arcRadius * 0.25 - 50; // 중심을 더 아래로 내려서 평평한 아크 만들기 (50픽셀 위로 올림)
-  const arcTopY = arcCenterY - arcRadius; // 아크 상단 y
-  const arcBottomY = arcCenterY + arcRadius * 0.1; // 아래쪽(실제 보이는 범위)
-  return { arcCenterX, arcCenterY, arcRadius, arcTopY, arcBottomY };
-}
 
 function mod(a, m) {
   a %= m;
@@ -2745,4 +2995,495 @@ function windowResized() {
   pixelDensity(isHiDpi ? 2 : 1);
   recalcLayout(); // 익스플로어와 동일
   initBackground();
+  
+  // 이름 입력 input 요소는 CSS transform으로 중앙 고정되어 있어서 위치 업데이트 불필요
+}
+
+/* =========================
+   18. TASTE ANALYSIS FEATURES
+========================= */
+
+// 이름 입력 HTML input 요소 생성
+function createNameInputElement() {
+  // 기존 요소 있으면 제거
+  if (nameInputElement) {
+    try {
+      nameInputElement.remove();
+    } catch (e) {}
+  }
+
+  // p5 input 생성
+  nameInputElement = createInput("");
+  nameInputElement.attribute("placeholder", "이름을 입력해 주세요");
+
+  // 기본 p5 스타일 제거용
+  nameInputElement.addClass("gallery-name-input");
+
+  // 실제 DOM 엘리먼트
+  const el = nameInputElement.elt;
+
+  // 화면 중앙 고정 배치 (캔버스 전체 화면이니까 viewport 기준)
+  el.style.position = "absolute";
+  el.style.left = "50%";
+  el.style.top = "50%";
+  el.style.transform = "translate(-50%, -50%)";
+
+  // 🔹 폭: 너무 길지 않게 고정 + 반응형
+  el.style.width = "min(320px, 80vw)";  // 최대 320px, 너무 작은 화면은 80vw
+
+  // 안쪽 여백 & 박스 정리
+  el.style.padding = "12px 18px";
+  el.style.boxSizing = "border-box";
+  el.style.borderRadius = "999px";
+  el.style.border = "1px solid rgba(255,255,255,0.4)";
+  el.style.background = "rgba(0,0,0,0.45)";
+  el.style.backdropFilter = "blur(12px)";
+  el.style.outline = "none";
+
+  // 🔹 텍스트 가운데 정렬
+  el.style.textAlign = "center";
+
+  // 폰트 맞추기 (Pretendard 기준)
+  el.style.fontFamily = `"Pretendard Variable", Pretendard, -apple-system, system-ui, sans-serif`;
+  el.style.fontSize = "16px";
+  el.style.color = "#ffffff";
+
+  // placeholder 색도 살짝 연하게
+  el.style.setProperty("--placeholder-color", "rgba(255,255,255,0.5)");
+
+  // p5에서 show/hide 컨트롤할 수 있도록 기본은 block
+  nameInputElement.style("display", "block");
+  
+  // 엔터 키로 확인
+  nameInputElement.elt.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      confirmNameInput();
+      e.preventDefault();
+    }
+  });
+  
+  // 포커스 이벤트
+  nameInputElement.elt.addEventListener("focus", () => {
+    el.style.border = "1px solid rgba(255,255,255,0.8)";
+  });
+  
+  nameInputElement.elt.addEventListener("blur", () => {
+    el.style.border = "1px solid rgba(255,255,255,0.4)";
+  });
+}
+
+// 이름 입력 확인
+function confirmNameInput() {
+  if (nameInputElement && nameInputElement.value().trim().length > 0) {
+    userName = nameInputElement.value().trim();
+    nameInputElement.value("");
+    nameInputElement.style("display", "none");
+    mode = 0; // 일반 모드로 전환
+  }
+}
+
+// 이름 입력 모달 그리기
+function drawNameInputModal() {
+  const s = getResponsiveScale();
+  
+  // input 요소 표시/숨김 관리 (CSS transform으로 중앙 고정되어 있어서 위치 업데이트 불필요)
+  if (nameInputElement) {
+    nameInputElement.style("display", "block");
+  }
+  
+  // 어두운 배경 오버레이
+  push();
+  fill(0, 0, 0, 200);
+  rect(0, 0, width, height);
+  pop();
+  
+  // 모달 박스 - 좌우로 더 길게
+  const modalW = 750 * s; // 600 -> 750 (더 길게)
+  const modalH = 300 * s;
+  const modalX = width / 2 - modalW / 2;
+  const modalY = height / 2 - modalH / 2;
+  
+  // 글래스 효과 모달
+  push();
+  drawingContext.save();
+  roundRectPath(drawingContext, modalX, modalY, modalW, modalH, 50 * s);
+  drawingContext.clip();
+  
+  // 배경 블러 효과
+  const bgImg = uiImages["bg.png"];
+  if (bgImg && bgImg.width > 0) {
+    drawingContext.filter = "blur(20px)";
+    drawingContext.globalAlpha = 0.3;
+    const cover = coverRect(bgImg.width, bgImg.height, width, height);
+    drawingContext.drawImage(
+      bgImg.canvas || bgImg.elt,
+      0, 0, bgImg.width, bgImg.height,
+      cover.x, cover.y, cover.w, cover.h
+    );
+    drawingContext.filter = "none";
+  }
+  
+  // 어두운 오버레이
+  drawingContext.globalAlpha = 0.7;
+  drawingContext.fillStyle = "rgba(0,0,0,0.8)";
+  drawingContext.fillRect(modalX, modalY, modalW, modalH);
+  
+  // 유리 틴트
+  const tint = drawingContext.createLinearGradient(modalX, modalY, modalX, modalY + modalH);
+  tint.addColorStop(0, "rgba(255,255,255,0.1)");
+  tint.addColorStop(1, "rgba(255,255,255,0.05)");
+  drawingContext.fillStyle = tint;
+  drawingContext.fillRect(modalX, modalY, modalW, modalH);
+  
+  drawingContext.restore();
+  pop();
+  
+  // 테두리
+  push();
+  drawingContext.save();
+  const edge = drawingContext.createLinearGradient(modalX, modalY, modalX + modalW, modalY + modalH);
+  edge.addColorStop(0, "rgba(255,255,255,0.5)");
+  edge.addColorStop(1, "rgba(255,255,255,0.1)");
+  drawingContext.strokeStyle = edge;
+  drawingContext.lineWidth = 2;
+  drawingContext.globalAlpha = 1;
+  roundRectPath(drawingContext, modalX, modalY, modalW, modalH, 50 * s);
+  drawingContext.stroke();
+  drawingContext.restore();
+  pop();
+  
+  // 제목
+  push();
+  textAlign(CENTER, CENTER);
+  textSize(32 * s);
+  if (fontPretendard) textFont(fontPretendard);
+  fill(255, 255);
+  text("당신의 이름을 입력해주세요", width / 2, modalY + 60 * s);
+  pop();
+  
+  // 입력 필드 (HTML input이 그려지므로 배경만 그림) - 패딩 늘림
+  const inputW = modalW - 250 * s; // 200 -> 250 (패딩 늘림)
+  const inputH = 60 * s;
+  const inputX = modalX + (modalW - inputW) / 2; // 중앙 정렬
+  const inputY = modalY + 120 * s;
+  
+  // 확인 버튼
+  const buttonW = 200 * s;
+  const buttonH = 50 * s;
+  const buttonX = width / 2 - buttonW / 2;
+  const buttonY = modalY + modalH - 80 * s;
+  
+  // 버튼 배경
+  const inputValue = nameInputElement ? nameInputElement.value().trim() : "";
+  push();
+  fill(255, 255, 255, inputValue.length > 0 ? 100 : 30);
+  roundRectPath(drawingContext, buttonX, buttonY, buttonW, buttonH, 30 * s); // 10 -> 50
+  drawingContext.fill();
+  pop();
+  
+  // 버튼 텍스트
+  push();
+  textAlign(CENTER, CENTER);
+  textSize(26 * s); // 20 -> 26 (더 크게)
+  if (fontPretendard) textFont(fontPretendard);
+  fill(255, inputValue.length > 0 ? 255 : 100);
+  text("확인", width / 2, buttonY + buttonH / 2 - 2); // 2픽셀 위로 이동
+  pop();
+  
+  // 히트박스 저장
+  uiHitboxes.push(
+    { id: "name_input", x: inputX, y: inputY, w: inputW, h: inputH },
+    { id: "name_confirm", x: buttonX, y: buttonY, w: buttonW, h: buttonH }
+  );
+}
+
+// 감각 알아보기 버튼 그리기 (오른쪽) - 태그 버튼 스타일 적용
+function drawTasteAnalysisButton() {
+  const s = getResponsiveScale();
+  const buttonW = 360 * s; // 280 -> 360 (더 크게)
+  const buttonH = 75 * s; // 60 -> 75 (더 크게)
+  const buttonX = width - buttonW - 30 * s;
+  const buttonY = 30 * s;
+  const buttonR = buttonH / 2; // 둥근 모서리 반지름
+  
+  const hasFavorites = favoriteBubbles.length > 0;
+  const anim = 1.0; // 항상 표시
+  
+  // 태그 버튼 스타일 적용 (drawGlassLabelFullscreen 사용)
+  push();
+  drawingContext.save();
+  drawGlassLabelFullscreen(buttonX, buttonY, buttonW, buttonH, buttonR, anim, null);
+  drawingContext.restore();
+  pop();
+  
+  // 반투명한 노란색 오버레이 추가
+  push();
+  drawingContext.save();
+  roundRectPath(drawingContext, buttonX, buttonY, buttonW, buttonH, buttonR);
+  drawingContext.clip();
+  drawingContext.globalAlpha = anim * 0.3; // 반투명
+  drawingContext.fillStyle = "rgba(255, 235, 150, 0.4)"; // 노란색 틴트
+  drawingContext.fillRect(buttonX, buttonY, buttonW, buttonH);
+  drawingContext.restore();
+  pop();
+  
+  // 버튼 텍스트 (태그 스타일과 동일)
+  push();
+  drawingContext.save();
+  drawingContext.textBaseline = "middle";
+  drawingContext.textAlign = "center";
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  drawingContext.globalAlpha = anim;
+  fill(255, 255); // 완전히 하얀색
+  textSize(26 * s); // 22 -> 26 (더 크게)
+  if (fontPretendard) textFont(fontPretendard);
+  drawingContext.font = `600 ${26 * s}px "Pretendard Variable", Pretendard, sans-serif`; // 세미볼드
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowOffsetX = 0;
+  drawingContext.shadowOffsetY = 0;
+  const buttonText = hasFavorites 
+    ? `${userName}님의 감각 알아보기 (${favoriteBubbles.length})`
+    : `${userName}님의 감각 알아보기`;
+  const textY = buttonY + buttonH / 2 - 2; // 텍스트를 2픽셀 위로 이동
+  text(buttonText, buttonX + buttonW / 2, textY);
+  drawingContext.restore();
+  pop();
+  
+  // 히트박스 저장
+  uiHitboxes.push({ id: "taste_analysis", x: buttonX, y: buttonY, w: buttonW, h: buttonH });
+}
+
+// 분석 결과 화면 그리기
+function drawAnalysisResult() {
+  if (!analysisResult) return;
+  
+  const s = getResponsiveScale();
+  
+  // 어두운 배경
+  push();
+  fill(0, 0, 0, 220);
+  rect(0, 0, width, height);
+  pop();
+  
+  // 결과 박스
+  const resultW = Math.min(800 * s, width - 60 * s);
+  const resultH = Math.min(760 * s, height - 60 * s); // 700 -> 760 (위아래 30픽셀씩 추가)
+  const resultX = width / 2 - resultW / 2;
+  const resultY = height / 2 - resultH / 2;
+  
+  // 글래스 효과
+  push();
+  drawingContext.save();
+  roundRectPath(drawingContext, resultX, resultY, resultW, resultH, 50 * s); // 20 -> 50
+  drawingContext.clip();
+  
+  const bgImg = uiImages["bg.png"];
+  if (bgImg && bgImg.width > 0) {
+    drawingContext.filter = "blur(20px)";
+    drawingContext.globalAlpha = 0.3;
+    const cover = coverRect(bgImg.width, bgImg.height, width, height);
+    drawingContext.drawImage(
+      bgImg.canvas || bgImg.elt,
+      0, 0, bgImg.width, bgImg.height,
+      cover.x, cover.y, cover.w, cover.h
+    );
+    drawingContext.filter = "none";
+  }
+  
+  drawingContext.globalAlpha = 0.7;
+  drawingContext.fillStyle = "rgba(0,0,0,0.8)";
+  drawingContext.fillRect(resultX, resultY, resultW, resultH);
+  
+  const tint = drawingContext.createLinearGradient(resultX, resultY, resultX, resultY + resultH);
+  tint.addColorStop(0, "rgba(255,255,255,0.1)");
+  tint.addColorStop(1, "rgba(255,255,255,0.05)");
+  drawingContext.fillStyle = tint;
+  drawingContext.fillRect(resultX, resultY, resultW, resultH);
+  
+  drawingContext.restore();
+  pop();
+  
+  // 테두리
+  push();
+  drawingContext.save();
+  const edge = drawingContext.createLinearGradient(resultX, resultY, resultX + resultW, resultY + resultH);
+  edge.addColorStop(0, "rgba(255,255,255,0.5)");
+  edge.addColorStop(1, "rgba(255,255,255,0.1)");
+  drawingContext.strokeStyle = edge;
+  drawingContext.lineWidth = 2;
+  roundRectPath(drawingContext, resultX, resultY, resultW, resultH, 50 * s); // 20 -> 50
+  drawingContext.stroke();
+  drawingContext.restore();
+  pop();
+  
+  // 제목
+  push();
+  textAlign(CENTER, CENTER);
+  textSize(36 * s);
+  if (fontPretendard) textFont(fontPretendard);
+  fill(255, 255);
+  text(`${userName}님은 이런 태그를 좋아합니다`, width / 2, resultY + 60 * s); // 50 -> 60 (10픽셀 아래로)
+  pop();
+  
+  // 태그 컴포넌트 표시 (확대 모드 스타일)
+  if (analysisResult.topTags && analysisResult.topTags.length > 0) {
+    const responsiveScale = getResponsiveScale();
+    const fontSize = 16 * 1.4 * responsiveScale * 1.3;
+    const padding = 28 * responsiveScale * 1.3;
+    const tagH = 56 * responsiveScale * 1.3;
+    const tagR = tagH / 2;
+    const tagSpacing = 20 * responsiveScale; // 태그 간 간격
+    
+    textSize(fontSize);
+    if (fontPretendard) textFont(fontPretendard);
+    
+    let startY = resultY + 150 * s; // 120 -> 150 (위쪽 패딩 30픽셀 추가)
+    const centerX = width / 2;
+    
+    // 태그들을 세로로 배치
+    analysisResult.topTags.forEach((tagData, idx) => {
+      const tag = tagData.tag;
+      const count = tagData.count;
+      const tagType = tagData.tagType;
+      const label = `#${tag}`;
+      const textW = textWidth(label);
+      const tagW = textW + padding * 2;
+      const tagX = centerX - tagW / 2;
+      const tagY = startY + idx * (tagH + tagSpacing);
+      
+      // 태그 컴포넌트 그리기 (확대 모드 스타일)
+      push();
+      drawingContext.save();
+      drawGlassLabelFullscreen(tagX, tagY, tagW, tagH, tagR, 1.0, tagType);
+      drawingContext.restore();
+      pop();
+      
+      // 순위 표시 (1위, 2위 등) - 2배 크게
+      push();
+      textAlign(LEFT, CENTER);
+      textSize(36 * responsiveScale); // 18 -> 36 (2배)
+      if (fontPretendard) textFont(fontPretendard);
+      fill(255, 180);
+      text(`${idx + 1}위`, tagX - 66 * responsiveScale, tagY + tagH / 2); // 51 -> 66 (15픽셀 간격 추가)
+      pop();
+      
+      // 태그 텍스트
+      push();
+      drawingContext.save();
+      drawingContext.textBaseline = "middle";
+      drawingContext.textAlign = "center";
+      drawingContext.imageSmoothingEnabled = true;
+      drawingContext.imageSmoothingQuality = "high";
+      drawingContext.globalAlpha = 1.0;
+      fill(255, 255);
+      textSize(fontSize);
+      if (fontPretendard) textFont(fontPretendard);
+      drawingContext.font = `600 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
+      drawingContext.shadowBlur = 0;
+      drawingContext.shadowOffsetX = 0;
+      drawingContext.shadowOffsetY = 0;
+      const textY = tagY + tagH / 2 - 2;
+      text(label, centerX, textY);
+      drawingContext.restore();
+      pop();
+      
+      // 횟수 표시 (태그 오른쪽에 붙임) - 2배 크게
+      push();
+      textAlign(LEFT, CENTER);
+      textSize(24 * responsiveScale); // 12 -> 24 (2배)
+      if (fontPretendard) textFont(fontPretendard);
+      fill(255, 150);
+      const tagRightX = tagX + tagW; // 태그 오른쪽 끝
+      const countText = `(${count}회)`;
+      text(countText, tagRightX + 10 * responsiveScale, tagY + tagH / 2); // 태그 오른쪽에 10px 간격
+      pop();
+    });
+  }
+  
+  // 다시 시작하기 버튼
+  const buttonW = 300 * s;
+  const buttonH = 60 * s;
+  const buttonX = width / 2 - buttonW / 2;
+  const buttonY = resultY + resultH - 130 * s; // 100 -> 130 (아래쪽 패딩 30픽셀 추가)
+  
+  // 버튼 배경
+  push();
+  fill(255, 255, 255, 100);
+  roundRectPath(drawingContext, buttonX, buttonY, buttonW, buttonH, 30 * s); // 15 -> 30
+  drawingContext.fill();
+  pop();
+  
+  // 버튼 텍스트
+  push();
+  textAlign(CENTER, CENTER);
+  textSize(22 * s);
+  if (fontPretendard) textFont(fontPretendard);
+  fill(255, 255);
+  text("다시 시작 화면으로 돌아가기", width / 2, buttonY + buttonH / 2);
+  pop();
+  
+  // 히트박스 저장
+  uiHitboxes.push({ id: "restart", x: buttonX, y: buttonY, w: buttonW, h: buttonH });
+}
+
+// 하트 버튼 토글 (좋아요 추가/제거)
+function toggleFavoriteBubble() {
+  if (fullscreenIndex < 0) return;
+  
+  const idx = favoriteBubbles.indexOf(fullscreenIndex);
+  if (idx >= 0) {
+    // 이미 선택되어 있으면 제거
+    favoriteBubbles.splice(idx, 1);
+  } else {
+    // 선택되어 있지 않으면 추가
+    favoriteBubbles.push(fullscreenIndex);
+  }
+}
+
+// 태그 분석 수행
+function analyzeFavoriteTags() {
+  if (!bubbles || favoriteBubbles.length === 0) return null;
+  
+  const tagCounts = {}; // {tag: {count, tagType}}
+  
+  // 선택한 버블들의 태그 수집
+  favoriteBubbles.forEach(bubbleIdx => {
+    const bubble = bubbles[bubbleIdx];
+    if (!bubble) return;
+    
+    // 비주얼 태그
+    (bubble.visualTags || []).forEach(tag => {
+      if (!tagCounts[tag]) {
+        tagCounts[tag] = { count: 0, tagType: "visual" };
+      }
+      tagCounts[tag].count++;
+    });
+    
+    // 감정 태그
+    (bubble.emotionalTags || []).forEach(tag => {
+      if (!tagCounts[tag]) {
+        tagCounts[tag] = { count: 0, tagType: "emotional" };
+      } else {
+        // 이미 비주얼 태그로 존재하면 타입을 둘 다로 표시하지 않고, 더 많이 나온 타입으로 결정
+        // 여기서는 단순히 감정 태그로 덮어쓰지 않고 카운트만 증가
+      }
+      tagCounts[tag].count++;
+    });
+  });
+  
+  // Top 5 태그 추출 (비주얼/감정 구분 없이 통합)
+  const topTags = Object.entries(tagCounts)
+    .map(([tag, data]) => ({ 
+      tag, 
+      count: data.count, 
+      tagType: data.tagType 
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+  
+  return {
+    topTags,
+    totalSelected: favoriteBubbles.length
+  };
 }

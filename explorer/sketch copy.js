@@ -259,141 +259,32 @@ function roundRectPath(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawGlassToggleButton(x, y, w, h, r, { active = false } = {}){
-  const ctx = drawingContext;
-
-  // 외곽 글로우
-  ctx.save();
-  roundRectPath(ctx, x, y, w, h, r);
-  ctx.shadowBlur = active ? 30 : 20;
-  ctx.shadowColor = active ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.3)";
-  ctx.shadowOffsetY = active ? -2 : -3;
-  ctx.fillStyle = "rgba(0,0,0,0.02)";
-  ctx.fill();
-  ctx.restore();
-
-  // 글래스 본체
-  ctx.save();
-  roundRectPath(ctx, x, y, w, h, r);
-  ctx.clip();
-
-  // 기본 서리 레이어
-  ctx.fillStyle = active ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.08)";
-  ctx.fillRect(x, y, w, h);
-
-  // 메인 그라디언트 (더 부드러운 변화)
-  const gradient = ctx.createLinearGradient(x, y, x, y + h);
-  gradient.addColorStop(0, active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.18)");
-  gradient.addColorStop(0.3, active ? "rgba(255,255,255,0.20)" : "rgba(255,255,255,0.12)");
-  gradient.addColorStop(0.7, active ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.08)");
-  gradient.addColorStop(1, active ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.05)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(x, y, w, h);
-
-  // 상단 하이라이트 (더 부드럽고 자연스럽게)
-  const highlight = ctx.createLinearGradient(x, y, x, y + h * 0.4);
-  highlight.addColorStop(0, "rgba(255,255,255,0.25)");
-  highlight.addColorStop(0.5, "rgba(255,255,255,0.12)");
-  highlight.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = highlight;
-  ctx.globalAlpha = 1.0;
-  ctx.fillRect(x, y, w, h * 0.4);
-  ctx.restore();
-
-  // 테두리 (더 부드럽게)
-  ctx.save();
-  ctx.lineWidth = active ? 2.0 : 1.5;
-  ctx.strokeStyle = active ? "rgba(255,255,255,0.65)" : "rgba(255,255,255,0.40)";
-  roundRectPath(ctx, x, y, w, h, r);
-  ctx.stroke();
-  ctx.restore();
-}
-
 class TagRenderer {
-  static gradientCache = {
-    glass: null,
-    highlight: null,
-    edgeNormal: null,
-    edgeHovered: null,
-    edgeSelected: null,
-  };
-
-  static lastTagSize = { w: 0, h: 0 };
-  static LOW_QUALITY_MODE = false;
-
-  static _getGradient(type, w, h, x = 0, y = 0) {
-    const needsUpdate = this.lastTagSize.w !== w || this.lastTagSize.h !== h;
-    if (needsUpdate) {
-      this.gradientCache = {
-        glass: null,
-        highlight: null,
-        edgeNormal: null,
-        edgeHovered: null,
-        edgeSelected: null,
-      };
-      this.lastTagSize = { w, h };
-    }
-
-    if (this.gradientCache[type]) return this.gradientCache[type];
-
-    const ctx = drawingContext;
-    let gradient = null;
-
-    switch (type) {
-      case "glass":
-        gradient = ctx.createLinearGradient(x, y, x, y + h);
-        gradient.addColorStop(0, "rgba(15, 16, 22, 0.35)");
-        gradient.addColorStop(1, "rgba(15, 16, 22, 0.55)");
-        break;
-      case "highlight":
-        gradient = ctx.createLinearGradient(x, y, x, y + h * 0.6);
-        gradient.addColorStop(0, "rgba(255, 255, 255, 0.35)");
-        gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-        break;
-      case "edgeNormal":
-        gradient = ctx.createLinearGradient(x, y, x + w, y + h);
-        gradient.addColorStop(0, "rgba(255,255,255,0.65)");
-        gradient.addColorStop(1, "rgba(255,255,255,0.2)");
-        break;
-      case "edgeHovered":
-        gradient = ctx.createLinearGradient(x, y, x + w, y + h);
-        gradient.addColorStop(0, "rgba(255,255,255,0.85)");
-        gradient.addColorStop(0.5, "rgba(255,255,255,0.55)");
-        gradient.addColorStop(1, "rgba(255,255,255,0.35)");
-        break;
-      case "edgeSelected":
-        gradient = ctx.createLinearGradient(x, y, x + w, y + h);
-        gradient.addColorStop(0, "rgba(255,255,255,0.95)");
-        gradient.addColorStop(0.5, "rgba(255,255,255,0.75)");
-        gradient.addColorStop(1, "rgba(255,255,255,0.4)");
-        break;
-      default:
-        break;
-    }
-
-    this.gradientCache[type] = gradient;
-    return gradient;
-  }
+  static LOW_QUALITY_MODE = false; // tablet 에서 true 로 세팅됨
 
   static draw(x, y, w, h, r, isSelected = false, isHovered = false, tintColor = null) {
     const ctx = drawingContext;
 
-    // 1) 아웃샤도우 (라벨 외곽 글로우)
+    // -------------------------
+    // 1) 아웃샤도우 (공통, 가벼운 레벨)
+    // -------------------------
     ctx.save();
     roundRectPath(ctx, x, y, w, h, r);
-    ctx.shadowBlur = 18;
+    ctx.shadowBlur = isSelected ? 14 : 10;
     ctx.shadowColor = "rgba(0,0,0,0.25)";
-    ctx.fillStyle = "rgba(0,0,0,0.001)"; // 내용 영향 없이 그림자만
+    ctx.fillStyle = "rgba(0,0,0,0.001)";
     ctx.fill();
     ctx.restore();
 
-    // 2) 클립 후, 배경을 다시 그리면서 필터 적용 → 백드롭 블러 효과
+    // -------------------------
+    // 2) 본체: LOW_QUALITY_MODE이면 가벼운 버전
+    // -------------------------
     ctx.save();
     roundRectPath(ctx, x, y, w, h, r);
     ctx.clip();
 
-    // 배경 이미지가 있으면 블러 효과 적용
-    if (app && app.assets && app.assets.bg && app.assets.bg.width > 2) {
+    if (!TagRenderer.LOW_QUALITY_MODE && app && app.assets && app.assets.bg && app.assets.bg.width > 2) {
+      // ===== 고품질 모드: 기존처럼 배경 블러 + 글라스 =====
       const bg = app.assets.bg;
       const canvasRatio = width / height;
       const imgRatio = bg.width / bg.height;
@@ -410,56 +301,70 @@ class TagRenderer {
       const bgX = width / 2;
       const bgY = height / 2;
 
-      // 유리감: 블러 + 채도↑ (반투명하게)
       ctx.filter = "blur(16px) saturate(140%)";
       const src = bg.canvas || bg.elt;
       ctx.drawImage(src, bgX - dw / 2, bgY - dh / 2, dw, dh);
       ctx.filter = "none";
+
+      // 살짝 어둡게
+      ctx.fillStyle = "rgba(0,0,0,0.05)";
+      ctx.fillRect(x, y, w, h);
+    } else {
+      // ===== 저품질 모드: 단순 반투명 박스 =====
+      // (배경 이미지를 다시 그리지 않음 → 매우 가벼움)
+      ctx.fillStyle = "rgba(10, 12, 18, 0.65)";
+      ctx.fillRect(x, y, w, h);
     }
 
-    // 3) 미묘한 어두운 오버레이 (반투명 효과)
-    ctx.fillStyle = "rgba(0,0,0,0.05)";
-    ctx.fillRect(x, y, w, h);
-
-    // 4) 유리 틴트(상→하 미묘한 그라디언트) + 색상 틴트
+    // -------------------------
+    // 3) 유리 틴트 + 색상 틴트
+    // -------------------------
     const tint = ctx.createLinearGradient(x, y, x, y + h);
     if (tintColor) {
-      // 색상 틴트 적용
-      const [r, g, b, a] = tintColor;
-      tint.addColorStop(0, `rgba(${r},${g},${b},${a * 0.3})`);
-      tint.addColorStop(0.5, `rgba(${r},${g},${b},${a * 0.2})`);
-      tint.addColorStop(1, `rgba(${r},${g},${b},${a * 0.1})`);
+      const [rr, gg, bb, aa] = tintColor;
+      tint.addColorStop(0, `rgba(${rr},${gg},${bb},${aa * 0.4})`);
+      tint.addColorStop(0.5, `rgba(${rr},${gg},${bb},${aa * 0.25})`);
+      tint.addColorStop(1, `rgba(${rr},${gg},${bb},${aa * 0.15})`);
     } else {
-      // 기본 흰색 틴트
-      tint.addColorStop(0, "rgba(255,255,255,0.15)");
+      tint.addColorStop(0, "rgba(255,255,255,0.18)");
       tint.addColorStop(1, "rgba(255,255,255,0.08)");
     }
     ctx.fillStyle = tint;
     ctx.fillRect(x, y, w, h);
 
+    // 상단 하이라이트(가벼운 버전)
+    const highlight = ctx.createLinearGradient(x, y, x, y + h * 0.45);
+    highlight.addColorStop(0, "rgba(255,255,255,0.28)");
+    highlight.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = highlight;
+    ctx.fillRect(x, y, w, h * 0.45);
+
     ctx.restore();
 
-    // 5) 유리 테두리(대각선 그라디언트 하이라이트)
+    // -------------------------
+    // 4) 테두리
+    // -------------------------
     ctx.save();
     const edge = ctx.createLinearGradient(x, y, x + w, y + h);
-    edge.addColorStop(0, "rgba(255,255,255,0.75)");
-    edge.addColorStop(1, "rgba(255,255,255,0.05)");
+    if (isSelected) {
+      edge.addColorStop(0, "rgba(255,255,255,0.95)");
+      edge.addColorStop(1, "rgba(255,255,255,0.4)");
+    } else if (isHovered) {
+      edge.addColorStop(0, "rgba(255,255,255,0.85)");
+      edge.addColorStop(1, "rgba(255,255,255,0.35)");
+    } else {
+      edge.addColorStop(0, "rgba(255,255,255,0.65)");
+      edge.addColorStop(1, "rgba(255,255,255,0.2)");
+    }
     ctx.strokeStyle = edge;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = isSelected ? 2 : 1.5;
     roundRectPath(ctx, x, y, w, h, r);
     ctx.stroke();
     ctx.restore();
   }
 
   static invalidateCache() {
-    this.gradientCache = {
-      glass: null,
-      highlight: null,
-      edgeNormal: null,
-      edgeHovered: null,
-      edgeSelected: null,
-    };
-    this.lastTagSize = { w: 0, h: 0 };
+    // 현재는 캐시 사용 안 함
   }
 }
 
@@ -589,11 +494,16 @@ class ImageLoader {
   }
 
   gc(visibleSet) {
-    // LRU 방식: 최근 60초 안 본 것만 삭제
     const now = millis();
+    // 태블릿은 더 공격적으로 정리, 데스크탑은 조금 여유
+    const maxAge = isTablet ? 45000 : 90000; // 45초 / 90초
+
     for (const [path] of this.cache) {
+      // 지금 프레임에서 화면에 보이는 이미지라면 절대 지우지 않음
+      if (visibleSet && visibleSet.has(path)) continue;
+
       const seen = this.lastSeen.get(path) || 0;
-      if (now - seen > 60000) { // 60초 미가시 = 삭제
+      if (now - seen > maxAge) {
         this.cache.delete(path);
         this.lastSeen.delete(path);
       }
@@ -2309,26 +2219,30 @@ class App {
   watchdog(){
     const now = millis();
 
-    // fps EMA(부드러운 평균) 추적
+    // fps EMA
     const fps = frameRate();
     this._avgFps = lerp(this._avgFps, fps, 0.05);
 
-    // 프레임 스톨 감지: draw 호출 간격이 너무 길어지면
+    // draw 호출 간격
     const dt = now - this._lastFrameAt;
     this._lastFrameAt = now;
 
-    // 2초 이상 draw가 멈춘 걸 감지하면 리로드
-    if (dt > 2000) {
-      console.warn("STALL DETECTED, reloading...");
+    // 10초 이상 완전히 멈추면 (진짜로 죽은 것 같을 때만)
+    if (dt > 10000) {
+      console.warn("HARD STALL DETECTED (>10s). Reloading page for safety.");
       location.reload();
+      return;
     }
 
-    // 평균 fps가 8 이하로 5초 이상 지속되면 리로드(스로틀링/메모리 누수 대응)
-    if (this._avgFps < 8) {
+    // fps가 5 이하로 30초 이상 유지되면
+    if (this._avgFps < 5) {
       if (!this._stallStart) this._stallStart = now;
-      if (now - this._stallStart > 5000) {
-        console.warn("LOW FPS TOO LONG, reloading...");
-        location.reload();
+      if (now - this._stallStart > 30000) {
+        console.warn("VERY LOW FPS for 30s. Doing soft reset (no page reload).");
+        // 페이지 리로드 대신 이미지 로더만 리셋 + GC
+        this.imageLoader.softReset();
+        this.imageLoader.gc(this.bubbleManager.visibleImgSet);
+        this._stallStart = null;
       }
     } else {
       this._stallStart = null;
