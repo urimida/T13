@@ -112,6 +112,11 @@ let onboardingImages = [];
 let onboardingCurrentPage = 0; // 현재 페이지 인덱스 (0부터 시작)
 let onboardingDragStartX = 0, onboardingLastDragX = 0;
 let onboardingIsDragging = false;
+let onboardingOffsetX = 0; // 스와이프 오프셋
+let onboardingTargetPage = 0; // 목표 페이지
+let onboardingAnimProgress = 0; // 애니메이션 진행도 (0~1)
+let onboardingIsAnimating = false; // 애니메이션 중인지
+let onboardingDragStartTime = null; // 스와이프 시작 시간
 let bgBuffer = null;
 let spriteCache = null;
 let fpsSmoother = 60;
@@ -2328,30 +2333,8 @@ function pointerStart(x, y, id) {
       return;
     }
     
-    // 화면 좌우 터치 감지
-    const screenLeft = width * 0.3; // 왼쪽 30% 영역
-    const screenRight = width * 0.7; // 오른쪽 30% 영역
-    
-    if (x < screenLeft) {
-      // 왼쪽 터치 - 이전 페이지
-      if (onboardingCurrentPage > 0) {
-        onboardingCurrentPage--;
-      }
-      pointerDown = false;
-      pointerId = -1;
-      return;
-    } else if (x > screenRight) {
-      // 오른쪽 터치 - 다음 페이지 또는 시작 화면
-      if (onboardingCurrentPage < onboardingImages.length) {
-        onboardingCurrentPage++;
-      } else {
-        // 마지막 페이지에서 오른쪽 터치 시 시작 화면으로
-        mode = 0;
-      }
-      pointerDown = false;
-      pointerId = -1;
-      return;
-    }
+    // 터치 시작 위치 저장 (단순 터치 감지용)
+    onboardingDragStartX = x;
     
     // 스와이프 드래그 시작
     handleOnboardingPointer(x, y, "start");
@@ -2543,7 +2526,35 @@ function pointerEnd(x, y) {
   
   // 온보딩 화면 스와이프 종료 처리
   if (mode === 4) {
-    handleOnboardingPointer(x, y, "end");
+    const dx = x - onboardingDragStartX;
+    const moveThreshold = 10; // 이동 거리 임계값 (단순 터치 vs 스와이프 구분)
+    
+    // 단순 터치인 경우 (이동 거리가 작음)
+    if (Math.abs(dx) < moveThreshold && !onboardingIsAnimating) {
+      const screenLeft = width * 0.3; // 왼쪽 30% 영역
+      const screenRight = width * 0.7; // 오른쪽 30% 영역
+      
+      if (x < screenLeft) {
+        // 왼쪽 터치 - 이전 페이지 (즉시 변경)
+        if (onboardingCurrentPage > 0) {
+          onboardingCurrentPage--;
+          onboardingOffsetX = 0;
+        }
+      } else if (x > screenRight) {
+        // 오른쪽 터치 - 다음 페이지 또는 시작 화면 (즉시 변경)
+        if (onboardingCurrentPage < onboardingImages.length) {
+          onboardingCurrentPage++;
+          onboardingOffsetX = 0;
+        } else {
+          // 마지막 페이지에서 오른쪽 터치 시 시작 화면으로
+          mode = 0;
+        }
+      }
+    } else {
+      // 스와이프인 경우 (애니메이션 처리)
+      handleOnboardingPointer(x, y, "end");
+    }
+    
     if (pointerDown) {
       pointerDown = false;
       pointerId = -1;
@@ -3252,6 +3263,10 @@ function finalizeNameInput(finalName) {
   // 온보딩 화면으로 전환
   mode = 4;
   onboardingCurrentPage = 0;
+  onboardingOffsetX = 0;
+  onboardingTargetPage = 0;
+  onboardingAnimProgress = 0;
+  onboardingIsAnimating = false;
 }
 
 // 이름 입력 모달 그리기
@@ -3702,7 +3717,23 @@ function analyzeFavoriteTags() {
 ========================= */
 
 function updateOnboarding() {
-  // 페이지네이션 형식이므로 업데이트 로직 없음
+  // 스와이프 애니메이션 업데이트
+  if (onboardingIsAnimating) {
+    onboardingAnimProgress += 0.12; // 애니메이션 속도 조절 (더 부드럽게)
+    if (onboardingAnimProgress >= 1.0) {
+      // 애니메이션 완료 - 페이지 변경과 리셋을 한 번에 처리
+      onboardingCurrentPage = onboardingTargetPage;
+      onboardingOffsetX = 0;
+      onboardingAnimProgress = 0;
+      onboardingIsAnimating = false;
+    } else {
+      // easeOutQuart 함수로 더 부드러운 애니메이션 (휴대폰 갤러리 스타일)
+      const t = onboardingAnimProgress;
+      const easeProgress = 1 - Math.pow(1 - t, 4);
+      const targetOffset = (onboardingTargetPage - onboardingCurrentPage) * width;
+      onboardingOffsetX = targetOffset * (1 - easeProgress);
+    }
+  }
 }
 
 function drawOnboarding() {
@@ -3718,12 +3749,22 @@ function drawOnboarding() {
   rect(0, 0, width, height);
   pop();
   
-  // 이미지가 있는 페이지인지 확인 (마지막 페이지는 시작하기 버튼 페이지)
-  if (onboardingCurrentPage < onboardingImages.length) {
-    const currentImg = onboardingImages[onboardingCurrentPage];
-    
+  // 스와이프 오프셋 계산 (휴대폰 갤러리 방식)
+  // 오른쪽에서 왼쪽으로 끌면 음수 (다음 페이지), 왼쪽에서 오른쪽으로 끌면 양수 (이전 페이지)
+  let currentOffset = onboardingOffsetX;
+  if (onboardingIsDragging) {
+    currentOffset = onboardingLastDragX - onboardingDragStartX;
+  }
+  
+  // 현재 페이지와 이전/다음 페이지 이미지 그리기
+  push();
+  translate(currentOffset, 0);
+  
+  // 현재 페이지 이미지 (애니메이션 중이 아닐 때만 현재 페이지, 애니메이션 중에는 애니메이션에 따라 표시)
+  const displayPage = onboardingIsAnimating ? onboardingCurrentPage : onboardingCurrentPage;
+  if (displayPage < onboardingImages.length) {
+    const currentImg = onboardingImages[displayPage];
     if (currentImg && currentImg.width > 0 && currentImg.height > 0) {
-      // 이미지를 화면에 꽉 차게 표시
       push();
       imageMode(CENTER);
       
@@ -3732,23 +3773,86 @@ function drawOnboarding() {
       
       let drawW, drawH;
       if (imgRatio > screenRatio) {
-        // 이미지가 더 넓음 - 너비에 맞춤
         drawW = width;
         drawH = drawW / imgRatio;
       } else {
-        // 이미지가 더 높음 - 높이에 맞춤
         drawH = height;
         drawW = imgRatio * drawH;
       }
       
-      // 이미지 그리기 (화면 중앙)
       image(currentImg, width / 2, height / 2, drawW, drawH);
       pop();
     }
   }
   
+  // 이전 페이지 이미지 (왼쪽에서 오른쪽으로 스와이프할 때)
+  if (currentOffset > 0 && onboardingCurrentPage > 0) {
+    const prevImg = onboardingImages[onboardingCurrentPage - 1];
+    if (prevImg && prevImg.width > 0 && prevImg.height > 0) {
+      push();
+      imageMode(CENTER);
+      
+      const imgRatio = prevImg.width / prevImg.height;
+      const screenRatio = width / height;
+      
+      let drawW, drawH;
+      if (imgRatio > screenRatio) {
+        drawW = width;
+        drawH = drawW / imgRatio;
+      } else {
+        drawH = height;
+        drawW = imgRatio * drawH;
+      }
+      
+      image(prevImg, width / 2 - width, height / 2, drawW, drawH);
+      pop();
+    }
+  }
+  
+  // 다음 페이지 이미지 (오른쪽에서 왼쪽으로 스와이프할 때)
+  if (currentOffset < 0) {
+    if (onboardingCurrentPage < onboardingImages.length - 1) {
+      const nextImg = onboardingImages[onboardingCurrentPage + 1];
+      if (nextImg && nextImg.width > 0 && nextImg.height > 0) {
+        push();
+        imageMode(CENTER);
+        
+        const imgRatio = nextImg.width / nextImg.height;
+        const screenRatio = width / height;
+        
+        let drawW, drawH;
+        if (imgRatio > screenRatio) {
+          drawW = width;
+          drawH = drawW / imgRatio;
+        } else {
+          drawH = height;
+          drawW = imgRatio * drawH;
+        }
+        
+        image(nextImg, width / 2 + width, height / 2, drawW, drawH);
+        pop();
+      }
+    } else if (onboardingCurrentPage === onboardingImages.length - 1 && currentOffset < 0) {
+      // 시작하기 버튼 페이지 표시 (다음 페이지, 스와이프 중일 때만)
+      push();
+      fill(0, 0, 0, 200);
+      rect(width / 2 + width, 0, width, height);
+      pop();
+    }
+  }
+  
+  pop();
+  
+  // 시작하기 버튼 페이지 배경 (현재 페이지가 시작하기 페이지일 때, translate 밖에서)
+  if (onboardingCurrentPage === onboardingImages.length && !onboardingIsAnimating) {
+    push();
+    fill(0, 0, 0, 200);
+    rect(0, 0, width, height);
+    pop();
+  }
   
   // 시작하기 버튼 (태그 스타일) - 마지막 페이지(시작하기 페이지)에서만 화면 정중앙에 표시, 깜빡임 효과
+  // translate 밖에서 그려서 항상 화면 중앙에 고정
   if (onboardingCurrentPage === onboardingImages.length) {
     const buttonW = 280 * s * 2; // 2배 크기
     const buttonH = 64 * s * 2; // 2배 크기
@@ -3797,28 +3901,52 @@ function drawOnboarding() {
 // 온보딩 화면 포인터 이벤트 처리 (스와이프 감지)
 function handleOnboardingPointer(x, y, type) {
   if (type === "start") {
+    if (onboardingIsAnimating) return; // 애니메이션 중에는 스와이프 불가
     onboardingIsDragging = true;
     onboardingDragStartX = x;
     onboardingLastDragX = x;
+    onboardingOffsetX = 0;
+    onboardingDragStartTime = millis();
   } else if (type === "move" && onboardingIsDragging) {
     onboardingLastDragX = x;
   } else if (type === "end" && onboardingIsDragging) {
     const dx = x - onboardingDragStartX;
-    const swipeThreshold = 50; // 스와이프 감지 임계값
+    const swipeThreshold = width * 0.15; // 화면 너비의 15% 이상 스와이프해야 이동 (더 민감하게)
+    const velocityThreshold = 0.3; // 속도 임계값
     
-    if (dx > swipeThreshold && onboardingCurrentPage > 0) {
-      // 오른쪽으로 스와이프 -> 이전 페이지
-      onboardingCurrentPage--;
-    } else if (dx < -swipeThreshold) {
-      // 왼쪽으로 스와이프 -> 다음 페이지 또는 시작 화면
-      if (onboardingCurrentPage < onboardingImages.length) {
-        onboardingCurrentPage++;
+    // 스와이프 속도 계산
+    const swipeVelocity = Math.abs(dx) / (millis() - (onboardingDragStartTime || millis()));
+    
+    if (dx > swipeThreshold || (dx > 0 && swipeVelocity > velocityThreshold)) {
+      // 왼쪽에서 오른쪽으로 스와이프 -> 이전 페이지
+      if (onboardingCurrentPage > 0) {
+        onboardingTargetPage = onboardingCurrentPage - 1;
+        onboardingIsAnimating = true;
+        onboardingAnimProgress = 0;
       } else {
-        // 마지막 페이지에서 왼쪽 스와이프 시 시작 화면으로
+        // 첫 페이지에서는 원래 위치로 복귀
+        onboardingTargetPage = onboardingCurrentPage;
+        onboardingIsAnimating = true;
+        onboardingAnimProgress = 0;
+      }
+    } else if (dx < -swipeThreshold || (dx < 0 && swipeVelocity > velocityThreshold)) {
+      // 오른쪽에서 왼쪽으로 스와이프 -> 다음 페이지 또는 시작 화면
+      if (onboardingCurrentPage < onboardingImages.length) {
+        onboardingTargetPage = onboardingCurrentPage + 1;
+        onboardingIsAnimating = true;
+        onboardingAnimProgress = 0;
+      } else {
+        // 마지막 페이지에서 오른쪽에서 왼쪽으로 스와이프 시 시작 화면으로
         mode = 0;
       }
+    } else {
+      // 스와이프가 충분하지 않으면 원래 위치로 복귀
+      onboardingTargetPage = onboardingCurrentPage;
+      onboardingIsAnimating = true;
+      onboardingAnimProgress = 0;
     }
     
     onboardingIsDragging = false;
+    onboardingDragStartTime = null;
   }
 }
