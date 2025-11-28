@@ -2321,12 +2321,38 @@ function pointerStart(x, y, id) {
   // 온보딩 화면 처리
   if (mode === 4) {
     const hit = hitTestUI(x, y);
-    if (hit === "onboarding_start" || hit === "onboarding_left" || hit === "onboarding_right") {
+    if (hit === "onboarding_start") {
       handleUI(hit);
       pointerDown = false;
       pointerId = -1;
       return;
     }
+    
+    // 화면 좌우 터치 감지
+    const screenLeft = width * 0.3; // 왼쪽 30% 영역
+    const screenRight = width * 0.7; // 오른쪽 30% 영역
+    
+    if (x < screenLeft) {
+      // 왼쪽 터치 - 이전 페이지
+      if (onboardingCurrentPage > 0) {
+        onboardingCurrentPage--;
+      }
+      pointerDown = false;
+      pointerId = -1;
+      return;
+    } else if (x > screenRight) {
+      // 오른쪽 터치 - 다음 페이지 또는 시작 화면
+      if (onboardingCurrentPage < onboardingImages.length) {
+        onboardingCurrentPage++;
+      } else {
+        // 마지막 페이지에서 오른쪽 터치 시 시작 화면으로
+        mode = 0;
+      }
+      pointerDown = false;
+      pointerId = -1;
+      return;
+    }
+    
     // 스와이프 드래그 시작
     handleOnboardingPointer(x, y, "start");
     return;
@@ -2798,16 +2824,6 @@ function handleUI(id) {
     if (id === "onboarding_start") {
       // 시작하기 버튼 클릭
       mode = 0; // 일반 모드로 전환
-    } else if (id === "onboarding_left") {
-      // 왼쪽 화살표 버튼 클릭
-      if (onboardingCurrentPage > 0) {
-        onboardingCurrentPage--;
-      }
-    } else if (id === "onboarding_right") {
-      // 오른쪽 화살표 버튼 클릭
-      if (onboardingCurrentPage < onboardingImages.length) {
-        onboardingCurrentPage++;
-      }
     }
     return;
   } else if (mode === 2) {
@@ -3731,105 +3747,6 @@ function drawOnboarding() {
     }
   }
   
-  // 왼쪽 화살표 버튼 (<) - 첫 페이지가 아닐 때만 표시
-  if (onboardingCurrentPage > 0) {
-    const arrowW = 64 * s * 2; // 버튼 너비 2배
-    const arrowH = 128 * s * 2; // 버튼 높이 2배 (위아래로 더 길게)
-    const arrowR = arrowW / 2;
-    const arrowX = 100 * s; // 화면 안쪽으로 더 이동
-    const arrowY = height / 2 - 2; // 오른쪽과 동일하게 2픽셀 위로 이동
-    
-    // 버튼 뒷부분 블러 효과
-    push();
-    drawingContext.save();
-    drawingContext.filter = "blur(18px)";
-    drawingContext.globalAlpha = 0.6;
-    fill(0, 0, 0, 150);
-    roundRectPath(drawingContext, arrowX - arrowW / 2, arrowY - arrowH / 2, arrowW, arrowH, arrowR);
-    drawingContext.fill();
-    drawingContext.filter = "none";
-    drawingContext.restore();
-    pop();
-    
-    // 버튼 그리기 (태그 스타일)
-    drawGlassLabelFullscreen(arrowX - arrowW / 2, arrowY - arrowH / 2, arrowW, arrowH, arrowR, 1.0, null);
-    
-    // 벡터 화살표 그리기 (<)
-    push();
-    drawingContext.save();
-    drawingContext.imageSmoothingEnabled = true;
-    drawingContext.imageSmoothingQuality = "high";
-    noStroke();
-    fill(255, 255);
-    
-    const arrowIconW = 16 * s * 2; // 화살표 아이콘 너비 2배
-    const arrowIconH = 24 * s * 2; // 화살표 아이콘 높이 2배 (위아래로 더 길게)
-    const centerX = arrowX;
-    const centerY = arrowY;
-    
-    // 왼쪽 화살표 삼각형 그리기
-    beginShape();
-    vertex(centerX + arrowIconW / 2, centerY - arrowIconH / 2); // 오른쪽 위
-    vertex(centerX - arrowIconW / 2, centerY); // 왼쪽 중앙 (뾰족한 부분)
-    vertex(centerX + arrowIconW / 2, centerY + arrowIconH / 2); // 오른쪽 아래
-    endShape(CLOSE);
-    
-    drawingContext.restore();
-    pop();
-    
-    // 히트박스 저장
-    uiHitboxes.push({
-      id: "onboarding_left",
-      x: arrowX - arrowW / 2,
-      y: arrowY - arrowH / 2,
-      w: arrowW,
-      h: arrowH
-    });
-  }
-  
-  // 오른쪽 화살표 버튼 (>) - 시작하기 페이지가 아닐 때만 표시 (마지막 이미지 페이지에서도 표시)
-  if (onboardingCurrentPage < onboardingImages.length) {
-    const arrowW = 64 * s * 2; // 버튼 너비 2배
-    const arrowH = 128 * s * 2; // 버튼 높이 2배 (위아래로 더 길게)
-    const arrowR = arrowW / 2;
-    const arrowX = width - 100 * s; // 화면 안쪽으로 더 이동
-    const arrowY = height / 2 - 2; // 2픽셀 위로 이동
-    
-    // 버튼 그리기 (태그 스타일)
-    drawGlassLabelFullscreen(arrowX - arrowW / 2, arrowY - arrowH / 2, arrowW, arrowH, arrowR, 1.0, null);
-    
-    // 벡터 화살표 그리기 (>)
-    push();
-    drawingContext.save();
-    drawingContext.imageSmoothingEnabled = true;
-    drawingContext.imageSmoothingQuality = "high";
-    noStroke();
-    fill(255, 255);
-    
-    const arrowIconW = 16 * s * 2; // 화살표 아이콘 너비 2배
-    const arrowIconH = 24 * s * 2; // 화살표 아이콘 높이 2배 (위아래로 더 길게)
-    const centerX = arrowX;
-    const centerY = arrowY;
-    
-    // 오른쪽 화살표 삼각형 그리기
-    beginShape();
-    vertex(centerX - arrowIconW / 2, centerY - arrowIconH / 2); // 왼쪽 위
-    vertex(centerX + arrowIconW / 2, centerY); // 오른쪽 중앙 (뾰족한 부분)
-    vertex(centerX - arrowIconW / 2, centerY + arrowIconH / 2); // 왼쪽 아래
-    endShape(CLOSE);
-    
-    drawingContext.restore();
-    pop();
-    
-    // 히트박스 저장
-    uiHitboxes.push({
-      id: "onboarding_right",
-      x: arrowX - arrowW / 2,
-      y: arrowY - arrowH / 2,
-      w: arrowW,
-      h: arrowH
-    });
-  }
   
   // 시작하기 버튼 (태그 스타일) - 마지막 페이지(시작하기 페이지)에서만 화면 정중앙에 표시, 깜빡임 효과
   if (onboardingCurrentPage === onboardingImages.length) {
@@ -3892,9 +3809,14 @@ function handleOnboardingPointer(x, y, type) {
     if (dx > swipeThreshold && onboardingCurrentPage > 0) {
       // 오른쪽으로 스와이프 -> 이전 페이지
       onboardingCurrentPage--;
-    } else if (dx < -swipeThreshold && onboardingCurrentPage < onboardingImages.length) {
-      // 왼쪽으로 스와이프 -> 다음 페이지 (시작하기 페이지까지)
-      onboardingCurrentPage++;
+    } else if (dx < -swipeThreshold) {
+      // 왼쪽으로 스와이프 -> 다음 페이지 또는 시작 화면
+      if (onboardingCurrentPage < onboardingImages.length) {
+        onboardingCurrentPage++;
+      } else {
+        // 마지막 페이지에서 왼쪽 스와이프 시 시작 화면으로
+        mode = 0;
+      }
     }
     
     onboardingIsDragging = false;
