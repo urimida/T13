@@ -109,9 +109,9 @@ let tagIndexMap = Object.create(null);
 let recommendedHitboxes = [];
 
 let onboardingImages = [];
-let onboardingScrollY = 0, onboardingScrollVelocity = 0;
+let onboardingCurrentPage = 0; // 현재 페이지 인덱스 (0부터 시작)
+let onboardingDragStartX = 0, onboardingLastDragX = 0;
 let onboardingIsDragging = false;
-let onboardingDragStartY = 0, onboardingLastDragY = 0;
 let bgBuffer = null;
 let spriteCache = null;
 let fpsSmoother = 60;
@@ -2321,13 +2321,13 @@ function pointerStart(x, y, id) {
   // 온보딩 화면 처리
   if (mode === 4) {
     const hit = hitTestUI(x, y);
-    if (hit === "onboarding_start") {
+    if (hit === "onboarding_start" || hit === "onboarding_left" || hit === "onboarding_right") {
       handleUI(hit);
       pointerDown = false;
       pointerId = -1;
       return;
     }
-    // 스크롤 드래그 시작
+    // 스와이프 드래그 시작
     handleOnboardingPointer(x, y, "start");
     return;
   }
@@ -2515,7 +2515,7 @@ function pointerEnd(x, y) {
     return;
   }
   
-  // 온보딩 화면 스크롤 종료 처리
+  // 온보딩 화면 스와이프 종료 처리
   if (mode === 4) {
     handleOnboardingPointer(x, y, "end");
     if (pointerDown) {
@@ -2798,6 +2798,16 @@ function handleUI(id) {
     if (id === "onboarding_start") {
       // 시작하기 버튼 클릭
       mode = 0; // 일반 모드로 전환
+    } else if (id === "onboarding_left") {
+      // 왼쪽 화살표 버튼 클릭
+      if (onboardingCurrentPage > 0) {
+        onboardingCurrentPage--;
+      }
+    } else if (id === "onboarding_right") {
+      // 오른쪽 화살표 버튼 클릭
+      if (onboardingCurrentPage < onboardingImages.length) {
+        onboardingCurrentPage++;
+      }
     }
     return;
   } else if (mode === 2) {
@@ -3225,8 +3235,7 @@ function finalizeNameInput(finalName) {
   }
   // 온보딩 화면으로 전환
   mode = 4;
-  onboardingScrollY = 0;
-  onboardingScrollVelocity = 0;
+  onboardingCurrentPage = 0;
 }
 
 // 이름 입력 모달 그리기
@@ -3677,48 +3686,7 @@ function analyzeFavoriteTags() {
 ========================= */
 
 function updateOnboarding() {
-  // 스크롤 관성 처리
-  if (!onboardingIsDragging) {
-    onboardingScrollY += onboardingScrollVelocity;
-    onboardingScrollVelocity *= 0.95; // 마찰
-    
-    // 스크롤 범위 제한 (실제 이미지 높이 기준)
-    const s = getResponsiveScale();
-    const imageHeight = height * 0.8 * s;
-    const imageWidth = width * 0.9 * s;
-    const spacing = 30 * s;
-    
-    // 실제 이미지 높이 계산
-    let totalHeight = spacing; // 첫 번째 이미지 상단 간격
-    onboardingImages.forEach((img) => {
-      if (!img) {
-        totalHeight += imageHeight + spacing;
-        return;
-      }
-      const isLoaded = img.width > 0 && img.height > 0;
-      if (!isLoaded) {
-        totalHeight += imageHeight + spacing;
-        return;
-      }
-      
-      const imgRatio = img.width / img.height;
-      
-      // 모든 이미지 너비를 imageWidth로 고정하고 높이 계산
-      const drawH = imageWidth / imgRatio;
-      totalHeight += drawH + spacing;
-    });
-    
-    const minScroll = 0;
-    const maxScroll = Math.max(0, totalHeight - height + 200 * s); // 시작하기 버튼 공간 확보
-    
-    if (onboardingScrollY < minScroll) {
-      onboardingScrollY = minScroll;
-      onboardingScrollVelocity = 0;
-    } else if (onboardingScrollY > maxScroll) {
-      onboardingScrollY = maxScroll;
-      onboardingScrollVelocity = 0;
-    }
-  }
+  // 페이지네이션 형식이므로 업데이트 로직 없음
 }
 
 function drawOnboarding() {
@@ -3734,168 +3702,201 @@ function drawOnboarding() {
   rect(0, 0, width, height);
   pop();
   
-  // 스크롤 가능한 이미지들
-  push();
-  translate(0, -onboardingScrollY);
-  
-  // 화면 크기에 맞춰 이미지 크기 계산 (반응형 스케일 적용)
-  const imageHeight = height * 0.8 * s;
-  const imageWidth = width * 0.9 * s;
-  const imageX = (width - imageWidth) / 2;
-  const imageCenterX = imageX + imageWidth / 2;
-  
-  // 이미지 끝점 기준으로 30픽셀 간격 (스케일 적용)
-  const spacing = 30 * s;
-  
-  // 먼저 모든 이미지의 실제 높이를 계산
-  const imageHeights = [];
-  onboardingImages.forEach((img) => {
-    if (!img) {
-      imageHeights.push(imageHeight);
-      return;
-    }
-    const isLoaded = img.width > 0 && img.height > 0;
-    if (!isLoaded) {
-      imageHeights.push(imageHeight);
-      return;
-    }
+  // 이미지가 있는 페이지인지 확인 (마지막 페이지는 시작하기 버튼 페이지)
+  if (onboardingCurrentPage < onboardingImages.length) {
+    const currentImg = onboardingImages[onboardingCurrentPage];
     
-    const imgRatio = img.width / img.height;
-    
-    // 모든 이미지 너비를 imageWidth로 고정하고 높이 계산
-    const drawH = imageWidth / imgRatio;
-    imageHeights.push(drawH);
-  });
-  
-  // 각 이미지의 상단 Y 위치 계산 (실제 이미지 높이 기준)
-  const imageTopYs = [];
-  let currentY = spacing; // 첫 번째 이미지 상단
-  imageHeights.forEach((h) => {
-    imageTopYs.push(currentY);
-    currentY += h + spacing; // 이미지 높이 + 간격
-  });
-  
-  // 이미지 그리기
-  onboardingImages.forEach((img, idx) => {
-    if (!img) return;
-    
-    // 이미지가 로드되었는지 확인
-    const isLoaded = img.width > 0 && img.height > 0;
-    if (!isLoaded) return;
-    
-    const imageTopY = imageTopYs[idx];
-    const actualImageHeight = imageHeights[idx];
-    const imageCenterY = imageTopY + actualImageHeight / 2;
-    
-    // 화면에 보이는 범위인지 체크
-    const visibleTop = imageTopY;
-    const visibleBottom = imageTopY + actualImageHeight;
-    const screenTop = onboardingScrollY;
-    const screenBottom = onboardingScrollY + height;
-    
-    if (visibleBottom >= screenTop && visibleTop <= screenBottom) {
+    if (currentImg && currentImg.width > 0 && currentImg.height > 0) {
+      // 이미지를 화면에 꽉 차게 표시
       push();
       imageMode(CENTER);
       
-      // 이미지 비율 계산 - 모든 이미지 너비를 동일하게
-      const imgRatio = img.width / img.height;
+      const imgRatio = currentImg.width / currentImg.height;
+      const screenRatio = width / height;
       
-      // 모든 이미지 너비를 imageWidth로 고정
-      const drawW = imageWidth;
-      const drawH = drawW / imgRatio;
+      let drawW, drawH;
+      if (imgRatio > screenRatio) {
+        // 이미지가 더 넓음 - 너비에 맞춤
+        drawW = width;
+        drawH = drawW / imgRatio;
+      } else {
+        // 이미지가 더 높음 - 높이에 맞춤
+        drawH = height;
+        drawW = imgRatio * drawH;
+      }
       
-      // 이미지 그리기
-      image(img, imageCenterX, imageCenterY, drawW, drawH);
+      // 이미지 그리기 (화면 중앙)
+      image(currentImg, width / 2, height / 2, drawW, drawH);
       pop();
     }
-  });
+  }
   
-  pop();
+  // 왼쪽 화살표 버튼 (<) - 첫 페이지가 아닐 때만 표시
+  if (onboardingCurrentPage > 0) {
+    const arrowW = 64 * s * 2; // 버튼 너비 2배
+    const arrowH = 128 * s * 2; // 버튼 높이 2배 (위아래로 더 길게)
+    const arrowR = arrowW / 2;
+    const arrowX = 100 * s; // 화면 안쪽으로 더 이동
+    const arrowY = height / 2 - 2; // 오른쪽과 동일하게 2픽셀 위로 이동
+    
+    // 버튼 뒷부분 블러 효과
+    push();
+    drawingContext.save();
+    drawingContext.filter = "blur(18px)";
+    drawingContext.globalAlpha = 0.6;
+    fill(0, 0, 0, 150);
+    roundRectPath(drawingContext, arrowX - arrowW / 2, arrowY - arrowH / 2, arrowW, arrowH, arrowR);
+    drawingContext.fill();
+    drawingContext.filter = "none";
+    drawingContext.restore();
+    pop();
+    
+    // 버튼 그리기 (태그 스타일)
+    drawGlassLabelFullscreen(arrowX - arrowW / 2, arrowY - arrowH / 2, arrowW, arrowH, arrowR, 1.0, null);
+    
+    // 벡터 화살표 그리기 (<)
+    push();
+    drawingContext.save();
+    drawingContext.imageSmoothingEnabled = true;
+    drawingContext.imageSmoothingQuality = "high";
+    noStroke();
+    fill(255, 255);
+    
+    const arrowIconW = 16 * s * 2; // 화살표 아이콘 너비 2배
+    const arrowIconH = 24 * s * 2; // 화살표 아이콘 높이 2배 (위아래로 더 길게)
+    const centerX = arrowX;
+    const centerY = arrowY;
+    
+    // 왼쪽 화살표 삼각형 그리기
+    beginShape();
+    vertex(centerX + arrowIconW / 2, centerY - arrowIconH / 2); // 오른쪽 위
+    vertex(centerX - arrowIconW / 2, centerY); // 왼쪽 중앙 (뾰족한 부분)
+    vertex(centerX + arrowIconW / 2, centerY + arrowIconH / 2); // 오른쪽 아래
+    endShape(CLOSE);
+    
+    drawingContext.restore();
+    pop();
+    
+    // 히트박스 저장
+    uiHitboxes.push({
+      id: "onboarding_left",
+      x: arrowX - arrowW / 2,
+      y: arrowY - arrowH / 2,
+      w: arrowW,
+      h: arrowH
+    });
+  }
   
-  // 시작하기 버튼 (태그 스타일)
-  const buttonW = 280 * s;
-  const buttonH = 64 * s;
-  const buttonR = buttonH / 2;
-  const buttonX = width / 2 - buttonW / 2;
-  const buttonY = height - 100 * s;
+  // 오른쪽 화살표 버튼 (>) - 시작하기 페이지가 아닐 때만 표시 (마지막 이미지 페이지에서도 표시)
+  if (onboardingCurrentPage < onboardingImages.length) {
+    const arrowW = 64 * s * 2; // 버튼 너비 2배
+    const arrowH = 128 * s * 2; // 버튼 높이 2배 (위아래로 더 길게)
+    const arrowR = arrowW / 2;
+    const arrowX = width - 100 * s; // 화면 안쪽으로 더 이동
+    const arrowY = height / 2 - 2; // 2픽셀 위로 이동
+    
+    // 버튼 그리기 (태그 스타일)
+    drawGlassLabelFullscreen(arrowX - arrowW / 2, arrowY - arrowH / 2, arrowW, arrowH, arrowR, 1.0, null);
+    
+    // 벡터 화살표 그리기 (>)
+    push();
+    drawingContext.save();
+    drawingContext.imageSmoothingEnabled = true;
+    drawingContext.imageSmoothingQuality = "high";
+    noStroke();
+    fill(255, 255);
+    
+    const arrowIconW = 16 * s * 2; // 화살표 아이콘 너비 2배
+    const arrowIconH = 24 * s * 2; // 화살표 아이콘 높이 2배 (위아래로 더 길게)
+    const centerX = arrowX;
+    const centerY = arrowY;
+    
+    // 오른쪽 화살표 삼각형 그리기
+    beginShape();
+    vertex(centerX - arrowIconW / 2, centerY - arrowIconH / 2); // 왼쪽 위
+    vertex(centerX + arrowIconW / 2, centerY); // 오른쪽 중앙 (뾰족한 부분)
+    vertex(centerX - arrowIconW / 2, centerY + arrowIconH / 2); // 왼쪽 아래
+    endShape(CLOSE);
+    
+    drawingContext.restore();
+    pop();
+    
+    // 히트박스 저장
+    uiHitboxes.push({
+      id: "onboarding_right",
+      x: arrowX - arrowW / 2,
+      y: arrowY - arrowH / 2,
+      w: arrowW,
+      h: arrowH
+    });
+  }
   
-  // 버튼 그리기 (태그 스타일)
-  drawGlassLabelFullscreen(buttonX, buttonY, buttonW, buttonH, buttonR, 1.0, null);
-  
-  // 버튼 텍스트
-  push();
-  drawingContext.save();
-  drawingContext.textBaseline = "middle";
-  drawingContext.textAlign = "center";
-  drawingContext.imageSmoothingEnabled = true;
-  drawingContext.imageSmoothingQuality = "high";
-  fill(255, 255);
-  const fontSize = 20 * s;
-  textSize(fontSize);
-  if (fontPretendard) textFont(fontPretendard);
-  drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
-  drawingContext.shadowBlur = 0;
-  text("시작하기", buttonX + buttonW / 2, buttonY + buttonH / 2 - 2);
-  drawingContext.restore();
-  pop();
-  
-  // 히트박스 저장
-  uiHitboxes.push({
-    id: "onboarding_start",
-    x: buttonX,
-    y: buttonY,
-    w: buttonW,
-    h: buttonH
-  });
+  // 시작하기 버튼 (태그 스타일) - 마지막 페이지(시작하기 페이지)에서만 화면 정중앙에 표시, 깜빡임 효과
+  if (onboardingCurrentPage === onboardingImages.length) {
+    const buttonW = 280 * s * 2; // 2배 크기
+    const buttonH = 64 * s * 2; // 2배 크기
+    const buttonR = buttonH / 2;
+    const buttonX = width / 2 - buttonW / 2;
+    const buttonY = height / 2 - buttonH / 2; // 화면 정중앙에 위치
+    
+    // 깜빡임 효과 (sin 함수 사용)
+    const blinkSpeed = 0.003; // 깜빡임 속도
+    const alpha = map(sin(millis() * blinkSpeed), -1, 1, 0.5, 1.0); // 0.5 ~ 1.0 사이 깜빡임
+    
+    // 버튼 그리기 (태그 스타일, 깜빡임 효과 적용)
+    push();
+    tint(255, alpha * 255);
+    drawGlassLabelFullscreen(buttonX, buttonY, buttonW, buttonH, buttonR, alpha, null);
+    pop();
+    
+    // 버튼 텍스트
+    push();
+    drawingContext.save();
+    drawingContext.textBaseline = "middle";
+    drawingContext.textAlign = "center";
+    drawingContext.imageSmoothingEnabled = true;
+    drawingContext.imageSmoothingQuality = "high";
+    fill(255, alpha * 255);
+    const fontSize = 20 * s * 2; // 2배 크기
+    textSize(fontSize);
+    if (fontPretendard) textFont(fontPretendard);
+    drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
+    drawingContext.shadowBlur = 0;
+    text("시작하기", buttonX + buttonW / 2, buttonY + buttonH / 2 - 2);
+    drawingContext.restore();
+    pop();
+    
+    // 히트박스 저장
+    uiHitboxes.push({
+      id: "onboarding_start",
+      x: buttonX,
+      y: buttonY,
+      w: buttonW,
+      h: buttonH
+    });
+  }
 }
 
-// 온보딩 화면 포인터 이벤트 처리
+// 온보딩 화면 포인터 이벤트 처리 (스와이프 감지)
 function handleOnboardingPointer(x, y, type) {
   if (type === "start") {
     onboardingIsDragging = true;
-    onboardingDragStartY = y;
-    onboardingLastDragY = y;
-    onboardingScrollVelocity = 0;
+    onboardingDragStartX = x;
+    onboardingLastDragX = x;
   } else if (type === "move" && onboardingIsDragging) {
-    const dy = y - onboardingLastDragY;
-    onboardingScrollY -= dy;
-    onboardingScrollVelocity = -dy;
-    onboardingLastDragY = y;
+    onboardingLastDragX = x;
+  } else if (type === "end" && onboardingIsDragging) {
+    const dx = x - onboardingDragStartX;
+    const swipeThreshold = 50; // 스와이프 감지 임계값
     
-    // 스크롤 범위 제한 (실제 이미지 높이 기준)
-    const s = getResponsiveScale();
-    const imageHeight = height * 0.8;
-    const imageWidth = width * 0.9;
-    const spacing = 30;
-    
-    // 실제 이미지 높이 계산
-    let totalHeight = spacing;
-    onboardingImages.forEach((img) => {
-      if (!img) {
-        totalHeight += imageHeight + spacing;
-        return;
-      }
-      const isLoaded = img.width > 0 && img.height > 0;
-      if (!isLoaded) {
-        totalHeight += imageHeight + spacing;
-        return;
-      }
-      
-      const imgRatio = img.width / img.height;
-      
-      // 모든 이미지 너비를 imageWidth로 고정하고 높이 계산
-      const drawH = imageWidth / imgRatio;
-      totalHeight += drawH + spacing;
-    });
-    const minScroll = 0;
-    const maxScroll = Math.max(0, totalHeight - height + 200 * s);
-    
-    if (onboardingScrollY < minScroll) {
-      onboardingScrollY = minScroll;
-    } else if (onboardingScrollY > maxScroll) {
-      onboardingScrollY = maxScroll;
+    if (dx > swipeThreshold && onboardingCurrentPage > 0) {
+      // 오른쪽으로 스와이프 -> 이전 페이지
+      onboardingCurrentPage--;
+    } else if (dx < -swipeThreshold && onboardingCurrentPage < onboardingImages.length) {
+      // 왼쪽으로 스와이프 -> 다음 페이지 (시작하기 페이지까지)
+      onboardingCurrentPage++;
     }
-  } else if (type === "end") {
+    
     onboardingIsDragging = false;
   }
 }
