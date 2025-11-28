@@ -32,59 +32,41 @@ const RENDER = {
   centerInfluenceRadius: 200,
   alphaFadeRadius: 420,
   minAlpha: 0.28,
-  maxWrapCopies: 6,
-  idleFPS: 30,         // 드래그/애니메이션 없을 때 목표 fps
+  idleFPS: 30,
 };
 
 const INTERACT = {
   panSensitivity: 0.6,
   snapSpeed: 0.14,
-  longPressDuration: 500,
   inertiaDecay: 0.94,
   dragDeadzone: 6,
-  tapMoveThreshold: 15,   // px - 탭으로 인정할 최대 이동 거리 (태블릿 터치 감도 개선)
-  tapTimeThreshold: 400,  // ms - 탭으로 인정할 최대 시간 (태블릿 터치 감도 개선)
+  tapMoveThreshold: 15,
+  tapTimeThreshold: 400,
 };
 
-// 추천 버블 설정 (고정 크기)
 const RECOMM_BUBBLE_CONFIG = {
-  radius: 61,         // 추천 버블 기본 반지름 (34 * 1.8 = 61.2, 반올림)
-  hoverScale: 1.0,    // 호버 시 스케일 (현재는 사용 안 함)
+  radius: 61,
 };
 
-const UI = {
-  navScaleRatio: 0.7,
-  leftCardsWidthRatio: 0.17,
-  leftCardsPaddingRatio: 0.02,
-  bottomArcHeightRatio: 0.28,
-  glassAlpha: 0.22,
-  searchWRatio: 0.56, // 버튼 크기용 (검색창 제거됨)
-};
-
-// 성능 최적화 설정 (전시용 최적화)
 const PERFORMANCE_CONFIG = {
-  imageCheckInterval: 150,        // 이미지 체크 간격 감소 (400ms -> 150ms) - 더 빠른 로딩
-  maxImageQueueLength: 60,        // 큐 길이 증가 (40 -> 60) - 더 많은 이미지 대기 가능
+  imageCheckInterval: 150,
+  maxImageQueueLength: 60,
   maxDraw: 140,
   tabletGCInterval: 20000,
   desktopGCInterval: 30000,
   tabletSoftReset: 120000,
   desktopSoftReset: 180000,
-  maxSimulImageLoads: 5,          // 동시 로드 수 증가 (2 -> 5) - 더 빠른 로딩
+  maxSimulImageLoads: 5,
 };
 
 
-// 버블 이미지 배열 (원본 스케치와 동일)
-let bubbleImages = []; // 버블 이미지들 (지연 로딩)
 let imageFiles = []; // 이미지 파일명 목록
-let imageLoader = null; // ImageLoader 인스턴스 (익스플로어와 동일)
+let imageLoader = null; // ImageLoader 인스턴스
 
 /* =========================
    1. GLOBAL STATE
 ========================= */
 
-// core data
-let rawData = null;
 let bubbles = null;
 let bubbleCount = 0;
 
@@ -97,67 +79,53 @@ let downX = 0, downY = 0;
 let lastX = 0, lastY = 0;
 let lastT = 0;
 let dragging = false;
-let dragMode = 0; // 0 none, 1 pan, 2 carousel (deprecated)
-let clickedBubbleAtPress = null; // 버블 클릭 정보 저장
+let dragMode = 0; // 0 none, 1 pan, 3 image drag
+let clickedBubbleAtPress = null;
 
-// grid layout panning (익스플로어와 동일한 구조)
-let panController = null; // PanController 인스턴스
-let bubbleManager = null; // BubbleManager 인스턴스
-let centerX = 0; // 화면 중심 X
-let centerY = 0; // 화면 중심 Y
-let maxDist = 0; // 최대 거리
-let scaleAll = 1; // 반응형 스케일
-let appTime = 0; // 앱 시간 (초)
+let panController = null;
+let bubbleManager = null;
+let centerX = 0, centerY = 0, maxDist = 0;
+let scaleAll = 1;
+let appTime = 0;
 
-// modes
-let mode = 0; // 0 normal, 1 fullscreen, 2 name input modal, 3 analysis result
+let mode = 0; // 0 normal, 1 fullscreen, 2 name input, 3 analysis, 4 onboarding
 let fullscreenIndex = -1;
-let fullscreenAnim = 0; // 0 -> 1
-let fullscreenTagLayout = []; // 태그 레이아웃 (랜덤 배치)
-let fullscreenStartPos = { x: 0, y: 0, r: 0 }; // 버블의 원래 위치와 크기 (확대 애니메이션용)
-let fullscreenExitAnim = 0; // 나갈 때 역방향 애니메이션 (1 -> 0)
-let fullscreenImageOffset = { x: 0, y: 0 }; // VR 모드에서 이미지 드래그 오프셋
-let fullscreenImageDragStart = { x: 0, y: 0 }; // 드래그 시작 위치
-let fullscreenImageDragging = false; // 이미지 드래그 중인지
-let selectedTag = null; // 선택된 태그 (null이면 선택 안됨)
-let recommendedBubbles = []; // 선택된 태그와 연관된 버블 3개 [{bubble, index}]
-let recommendedBubblesAnim = 0; // 연관 버블 애니메이션 (0 -> 1)
+let fullscreenAnim = 0, fullscreenExitAnim = 0;
+let fullscreenTagLayout = [];
+let fullscreenStartPos = { x: 0, y: 0, r: 0 };
+let fullscreenImageOffset = { x: 0, y: 0 };
+let fullscreenImageDragStart = { x: 0, y: 0 };
+let fullscreenImageDragging = false;
+let selectedTag = null;
+let recommendedBubbles = [];
+let recommendedBubblesAnim = 0;
 
-// UI managers
 let fontPretendard = null;
 let uiImages = {};
-let uiHitboxes = []; // {id,x,y,w,h}
-
-// sound
-let bubblePopSound = null; // 버블 터지는 소리
-
-// ----- RELATED / RECOMMENDATION -----
+let uiHitboxes = [];
+let bubblePopSound = null;
 const RECO_COUNT = 3;
-let tagIndexMap = Object.create(null); // tag -> [bubbleIndices] (VR 모드용)
+let tagIndexMap = Object.create(null);
+let recommendedHitboxes = [];
 
-let recommendedHitboxes = []; // VR 추천버블 클릭용 [{x,y,r,index}]
-
-// caches
+let onboardingImages = [];
+let onboardingScrollY = 0, onboardingScrollVelocity = 0;
+let onboardingIsDragging = false;
+let onboardingDragStartY = 0, onboardingLastDragY = 0;
 let bgBuffer = null;
 let spriteCache = null;
-
-// perf
 let fpsSmoother = 60;
 let idleFrameSkip = 0;
 let lastActiveTime = 0;
-let deltaTime = 16.666; // 프레임 간 시간 차이 (ms, 기본값 60fps)
+let deltaTime = 16.666;
 let lastDrawTime = 0;
-
-// 안내 텍스트 관련 변수
-let showInstructionText = true; // 안내 텍스트 표시 여부
-let instructionPulseTime = 0; // LED 펄스 애니메이션 시간
-
-// 취향 분석 기능 관련 변수
-let userName = ""; // 사용자 이름
-let favoriteBubbles = []; // 선택한 버블 인덱스 배열
-let nameInputElement = null; // HTML input 요소 (한글 입력 지원)
-let pendingNameConfirm = false; // IME 조합 중 Enter 입력 처리 대기
-let analysisResult = null; // 분석 결과 {topVisualTags, topEmotionalTags, commonTags}
+let showInstructionText = true;
+let instructionPulseTime = 0;
+let userName = "";
+let favoriteBubbles = [];
+let nameInputElement = null;
+let pendingNameConfirm = false;
+let analysisResult = null;
 
 /* =========================
    2. UTILS (익스플로어와 동일)
@@ -166,92 +134,57 @@ let analysisResult = null; // 분석 결과 {topVisualTags, topEmotionalTags, co
 const SQRT3 = Math.sqrt(3);
 
 function wrapDelta(d, size) {
-  // nearest torus delta (익스플로어와 동일)
   d = (d + size * 0.5) % size;
   if (d < 0) d += size;
   return d - size * 0.5;
 }
 
-// 전시용: Wake Lock API로 화면 꺼짐 방지 (6시간 이상 안정적 운영)
 let wakeLock = null;
 let wakeLockRetryCount = 0;
 const MAX_WAKE_LOCK_RETRIES = 5;
 
 async function initWakeLock() {
-  // Wake Lock API 지원 확인
-  if (!('wakeLock' in navigator)) {
-    console.log('[Gallery] Wake Lock API를 지원하지 않습니다. 메타 태그에 의존합니다.');
-    return;
-  }
-
+  if (!('wakeLock' in navigator)) return;
   try {
-    // 화면 잠금 요청
     wakeLock = await navigator.wakeLock.request('screen');
-    console.log('[Gallery] Wake Lock 활성화됨 - 화면이 꺼지지 않습니다.');
-    
-    // Wake Lock이 해제되면 자동으로 재요청 (전시용 안정성)
     wakeLock.addEventListener('release', () => {
-      console.log('[Gallery] Wake Lock이 해제되었습니다. 재요청 시도...');
       wakeLockRetryCount = 0;
       retryWakeLock();
     });
   } catch (err) {
-    console.warn('[Gallery] Wake Lock 요청 실패:', err);
-    // 실패해도 계속 진행 (메타 태그에 의존)
+    console.warn('[Gallery] Wake Lock 실패:', err);
   }
 }
 
 async function retryWakeLock() {
-  if (wakeLockRetryCount >= MAX_WAKE_LOCK_RETRIES) {
-    console.warn('[Gallery] Wake Lock 재시도 횟수 초과. 메타 태그에 의존합니다.');
-    return;
-  }
-
-  // 페이지가 보이는 상태에서만 재요청
+  if (wakeLockRetryCount >= MAX_WAKE_LOCK_RETRIES) return;
   if (document.visibilityState === 'visible') {
     try {
       wakeLock = await navigator.wakeLock.request('screen');
-      console.log('[Gallery] Wake Lock 재활성화됨');
       wakeLockRetryCount = 0;
     } catch (err) {
       wakeLockRetryCount++;
-      console.warn(`[Gallery] Wake Lock 재요청 실패 (${wakeLockRetryCount}/${MAX_WAKE_LOCK_RETRIES}):`, err);
-      // 2초 후 재시도
       setTimeout(() => retryWakeLock(), 2000);
     }
   }
 }
 
-// 페이지 가시성 변경 시 Wake Lock 재요청
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState === 'visible' && wakeLock === null) {
-      console.log('[Gallery] 페이지가 다시 보입니다. Wake Lock 재요청...');
       wakeLockRetryCount = 0;
       await retryWakeLock();
     }
   });
 }
 
-/* =========================
-   3. DATA SCHEMA ADAPTER
-   - bubbles.json 구조가 다르면 여기만 수정
-========================= */
-
 const DATA_SCHEMA_ADAPTER = {
-  // raw json -> normalized bubble objects
   normalize(raw) {
-    // expected:
-    // { imageFiles:[...], bubbles:[{title,image,attributes,visualTags,emotionalTags}] }
     const list = raw.bubbles || [];
     const out = new Array(list.length);
     for (let i = 0; i < list.length; i++) {
       const b = list[i] || {};
-      // visualTags와 emotionalTags를 합쳐서 tags로 사용
-      const allTags = [
-        ...(b.visualTags || []),
-        ...(b.emotionalTags || [])
-      ];
+      const allTags = [...(b.visualTags || []), ...(b.emotionalTags || [])];
       out[i] = {
         title: b.title || "",
         imageFile: b.image || b.imageFile || "",
@@ -885,6 +818,12 @@ function preload() {
   uiImages["background"] = loadImage(PATHS.uiImgs + "background.webp");
   uiImages["bubble-cap.png"] = loadImage(PATHS.uiImgs + "bubble-cap.png");
 
+  // 온보딩 이미지 로드
+  onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding1.webp"));
+  onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding2.webp"));
+  onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding3.webp"));
+  onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding4.webp"));
+
   // 버블 터지는 소리 로드 (p5.sound 라이브러리가 있는 경우에만)
   if (typeof loadSound !== 'undefined') {
     try {
@@ -900,53 +839,31 @@ function preload() {
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
-  // 익스플로어와 동일: 고해상도 디스플레이에서 픽셀 밀도 2배로 설정
   const isHiDpi = window.devicePixelRatio && window.devicePixelRatio > 1;
-  pixelDensity(isHiDpi ? 2 : 1); // tablet stability + retina clarity
-  // 이미지 화질 개선
+  pixelDensity(isHiDpi ? 2 : 1);
   drawingContext.imageSmoothingEnabled = true;
   drawingContext.imageSmoothingQuality = "high";
   textFont(fontPretendard);
   textAlign(CENTER, CENTER);
-
   spriteCache = new SpriteCache();
-  imageLoader = new ImageLoader(); // 익스플로어와 동일한 ImageLoader
-
-  // 익스플로어와 동일한 구조 초기화
+  imageLoader = new ImageLoader();
   panController = new PanController();
   bubbleManager = new BubbleManager();
-  
-  // 레이아웃 계산
   recalcLayout();
-
-  // JSON 비동기 로드
   loadBubbleDataFromJSON();
-  
   initBackground();
   initUI();
-
-  // Pointer Events API 설정 (익스플로어와 동일, 태블릿 지원)
   setupPointerEvents();
-
-  // 이름 입력 input 요소 생성 (한글 입력 지원)
   createNameInputElement();
-
-  // 초기 모드를 이름 입력 모달로 설정
   mode = 2;
-
   lastActiveTime = millis();
-  
-  // 전시용: Wake Lock API로 화면 꺼짐 방지 (6시간 이상 안정적 운영)
   initWakeLock();
 }
 
-// 익스플로어와 동일한 레이아웃 계산 함수
 function recalcLayout() {
   centerX = width * 0.5;
-  centerY = height * 0.5; // 정 중앙으로 변경
+  centerY = height * 0.5;
   maxDist = Math.sqrt(width * width + height * height) / 2;
-  
-  // responsive scale
   const baseW = 1920, baseH = 1080;
   const s = Math.min(width / baseW, height / baseH);
   scaleAll = clamp(s, 0.5, 1.5);
@@ -956,18 +873,13 @@ function recalcLayout() {
    5. INIT
 ========================= */
 
-// JSON 비동기 로드 함수
 async function loadBubbleDataFromJSON() {
   try {
     const response = await fetch(PATHS.bubblesJson);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    const raw = await response.json();
-    initData(raw);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    initData(await response.json());
   } catch (error) {
-    console.error("[Gallery] JSON 로드 중 오류 발생:", error);
-    // 폴백: 빈 데이터로 초기화
+    console.error("[Gallery] JSON 로드 실패:", error);
     initData({ imageFiles: [], bubbles: [] });
   }
 }
@@ -975,36 +887,15 @@ async function loadBubbleDataFromJSON() {
 function initData(raw) {
   const norm = DATA_SCHEMA_ADAPTER.normalize(raw);
   bubbleCount = norm.length || RENDER.totalBubblesFallback;
-
-  // register image keys (fallback: from imageFiles)
-  const files = raw.imageFiles || norm.map(d => d.imageFile).filter(Boolean);
-  imageFiles = files;
-
-  // 익스플로어와 동일하게 BubbleManager로 빌드
+  imageFiles = raw.imageFiles || norm.map(d => d.imageFile).filter(Boolean);
   bubbleManager.build(norm);
-  bubbles = bubbleManager.bubbles; // 호환성을 위해 전역 변수에도 저장
-
-  buildTagIndex(); // VR 모드용 태그 인덱스는 유지
-
-  // 초기 카메라 위치를 그리드 중심으로 설정 (익스플로어와 동일)
-  const spacing = RENDER.hexSpacing;
-  const fallbackGrid = Math.ceil(Math.sqrt(RENDER.totalBubblesFallback));
-  const fallbackCenterGridX = Math.floor(fallbackGrid / 2);
-  const fallbackCenterGridY = Math.floor(fallbackGrid / 2);
-  const fallbackCenter = {
-    x: fallbackCenterGridX * spacing * 1.5,
-    y: fallbackCenterGridY * spacing * SQRT3 + ((fallbackCenterGridX % 2) * spacing * SQRT3) / 2
-  };
+  bubbles = bubbleManager.bubbles;
+  buildTagIndex();
   const centerPos = bubbleManager.getCenterHexPosition();
-  const centerHexX = centerPos.x;
-  const centerHexY = centerPos.y;
-  
-  panController.camX = centerHexX;
-  panController.camY = centerHexY;
-  panController.velX = 0;
-  panController.velY = 0;
-  panController.snapTargetX = null;
-  panController.snapTargetY = null;
+  panController.camX = centerPos.x;
+  panController.camY = centerPos.y;
+  panController.velX = panController.velY = 0;
+  panController.snapTargetX = panController.snapTargetY = null;
 }
 
 function buildTagIndex() {
@@ -1075,7 +966,6 @@ function initBackground() {
 
 function initUI() {
   uiHitboxes.length = 0;
-  // hitboxes are recalculated in drawUI because responsive
 }
 
 /* =========================
@@ -1153,6 +1043,12 @@ function draw() {
   // 분석 결과 화면
   if (mode === 3) {
     drawAnalysisResult();
+  }
+
+  // 온보딩 화면
+  if (mode === 4) {
+    updateOnboarding();
+    drawOnboarding();
   }
 
   // 감각 알아보기 버튼 (일반 모드에서만, 이름이 입력된 경우)
@@ -1579,14 +1475,44 @@ function updateFullscreen() {
     fullscreenExitAnim -= 0.05; // 속도를 더 느리게 조정
     if (fullscreenExitAnim <= 0) {
       fullscreenExitAnim = 0;
+      
+      // 현재 버블의 위치로 카메라 이동
+      if (bubbles && fullscreenIndex >= 0 && fullscreenIndex < bubbles.length && bubbleManager && panController) {
+        const currentBubble = bubbles[fullscreenIndex];
+        if (currentBubble) {
+          // 현재 버블의 월드 좌표로 카메라 이동
+          const bubbleWorldX = currentBubble.x;
+          const bubbleWorldY = currentBubble.y;
+          
+          // 현재 카메라 위치에서 가장 가까운 torus wrap된 타겟 위치 계산
+          const currentCamX = panController.camX;
+          const currentCamY = panController.camY;
+          
+          // wrapDelta를 사용하여 가장 가까운 타겟 위치 찾기
+          const targetX = currentCamX + wrapDelta(bubbleWorldX - currentCamX, bubbleManager.worldW);
+          const targetY = currentCamY + wrapDelta(bubbleWorldY - currentCamY, bubbleManager.worldH);
+          
+          // 부드럽게 이동하기 위해 스냅 타겟 설정
+          panController.snapTargetX = targetX;
+          panController.snapTargetY = targetY;
+          panController.velX = 0;
+          panController.velY = 0;
+        }
+      }
+      
       // 애니메이션 완료 후 모드 전환
       mode = 0;
+      const savedIndex = fullscreenIndex; // 인덱스 저장
       fullscreenIndex = -1;
       fullscreenAnim = 0;
       fullscreenTagLayout = [];
 
-      // ✅ 무조건 초기 화면 리셋
-      resetToInitialView();
+      // 초기 상태 리셋 (카메라 이동은 위에서 처리)
+      clearSelectedTagState();
+      fullscreenImageOffset.x = 0;
+      fullscreenImageOffset.y = 0;
+      fullscreenImageDragging = false;
+      showInstructionText = true;
     }
   } else {
     // 들어가는 애니메이션 (0 -> 1)
@@ -2135,8 +2061,8 @@ function drawGlassLabelFullscreen(x, y, w, h, r, anim, tagType = null) {
       offsetY = (height - drawH) / 2;
     }
 
-    // 유리감: 블러 + 채도↑ (반투명하게)
-    ctx.filter = "blur(16px) saturate(140%)";
+    // 유리감: 블러 + 채도↑ (반투명하게) - 블러 강화
+    ctx.filter = "blur(18px) saturate(140%)";
     ctx.globalAlpha = anim; // 배경은 anim 투명도 유지
     const src = img.canvas || img.elt;
     ctx.drawImage(
@@ -2155,7 +2081,7 @@ function drawGlassLabelFullscreen(x, y, w, h, r, anim, tagType = null) {
     // 분석 결과 화면 등: 기본 배경 이미지 사용
     const bgImg = uiImages["background"];
     if (bgImg && bgImg.width > 0) {
-      ctx.filter = "blur(16px) saturate(140%)";
+      ctx.filter = "blur(32px) saturate(140%)";
       ctx.globalAlpha = anim * 0.3;
       const cover = coverRect(bgImg.width, bgImg.height, width, height);
       ctx.drawImage(
@@ -2167,9 +2093,9 @@ function drawGlassLabelFullscreen(x, y, w, h, r, anim, tagType = null) {
     }
   }
 
-  // 3) 미묘한 어두운 오버레이 (반투명 효과) - 검은색 5% 추가
+  // 3) 미묘한 어두운 오버레이 (반투명 효과) - 더 어둡게 처리하여 배경이 잘 안 보이도록
   ctx.globalAlpha = anim;
-  ctx.fillStyle = "rgba(0,0,0,0.30)"; // 기존 5% + 추가 5% = 총 10%
+  ctx.fillStyle = "rgba(0,0,0,0.50)"; // 30%에서 50%로 증가하여 배경이 더 잘 안 보이도록
   ctx.fillRect(x, y, w, h);
 
   // 4) 유리 틴트(상→하 미묘한 그라디언트) - 태그 타입에 따라 색상 적용
@@ -2392,6 +2318,20 @@ function pointerStart(x, y, id) {
   dragging = false;
   dragMode = 0;
 
+  // 온보딩 화면 처리
+  if (mode === 4) {
+    const hit = hitTestUI(x, y);
+    if (hit === "onboarding_start") {
+      handleUI(hit);
+      pointerDown = false;
+      pointerId = -1;
+      return;
+    }
+    // 스크롤 드래그 시작
+    handleOnboardingPointer(x, y, "start");
+    return;
+  }
+
   // 이름 입력 모달 또는 분석 결과 화면에서 UI 클릭 처리
   if (mode === 2 || mode === 3) {
     const hit = hitTestUI(x, y);
@@ -2466,6 +2406,14 @@ function pointerMove(x, y) {
   
   // 좌표 유효성 체크
   if (isNaN(x) || isNaN(y)) return;
+
+  // 온보딩 화면 스크롤 처리
+  if (mode === 4) {
+    handleOnboardingPointer(x, y, "move");
+    lastX = x;
+    lastY = y;
+    return;
+  }
 
   const dx = x - lastX;
   const dy = y - lastY;
@@ -2560,6 +2508,16 @@ function checkTagClick(x, y) {
 function pointerEnd(x, y) {
   // 좌표 유효성 체크
   if (isNaN(x) || isNaN(y)) {
+    if (pointerDown) {
+      pointerDown = false;
+      pointerId = -1;
+    }
+    return;
+  }
+  
+  // 온보딩 화면 스크롤 종료 처리
+  if (mode === 4) {
+    handleOnboardingPointer(x, y, "end");
     if (pointerDown) {
       pointerDown = false;
       pointerId = -1;
@@ -2835,6 +2793,13 @@ function handleUI(id) {
       toggleFavoriteBubble();
     }
     return;
+  } else if (mode === 4) {
+    // 온보딩 화면
+    if (id === "onboarding_start") {
+      // 시작하기 버튼 클릭
+      mode = 0; // 일반 모드로 전환
+    }
+    return;
   } else if (mode === 2) {
     // 이름 입력 모달
     if (id === "name_input") {
@@ -2920,6 +2885,28 @@ function enterFullscreen(idx) {
     fullscreenStartPos.r = RENDER.baseBubbleRadius;
   }
   
+  // ✅ 확대 모드 진입 시 해당 버블이 화면 중앙에 오도록 카메라 이동
+  if (clickedBubble && bubbleManager && panController) {
+    const bubbleWorldX = clickedBubble.x;
+    const bubbleWorldY = clickedBubble.y;
+    
+    // 현재 카메라 위치에서 가장 가까운 torus wrap된 타겟 위치 계산
+    const currentCamX = panController.camX;
+    const currentCamY = panController.camY;
+    
+    // wrapDelta를 사용하여 가장 가까운 타겟 위치 찾기
+    const targetX = currentCamX + wrapDelta(bubbleWorldX - currentCamX, bubbleManager.worldW);
+    const targetY = currentCamY + wrapDelta(bubbleWorldY - currentCamY, bubbleManager.worldH);
+    
+    // 즉시 카메라 위치 설정 (애니메이션 없이 바로 이동)
+    panController.camX = targetX;
+    panController.camY = targetY;
+    panController.velX = 0;
+    panController.velY = 0;
+    panController.snapTargetX = null;
+    panController.snapTargetY = null;
+  }
+  
   // 태그 레이아웃 생성 (이미지 크기 계산)
   const b = bubbles[idx];
   if (b) {
@@ -2999,20 +2986,6 @@ function hitTestGridBubble(x, y) {
    16. HELPERS (NO ALLOC)
 ========================= */
 
-function hasTag(b, tag) {
-  // visualTags 또는 emotionalTags에 태그가 포함되면 true
-  const hasVisualTag = b.visualTags && b.visualTags.includes(tag);
-  const hasEmotionalTag = b.emotionalTags && b.emotionalTags.includes(tag);
-  return hasVisualTag || hasEmotionalTag;
-}
-
-function normalizeIndex(i, n) {
-  if (n === 0) return 0; // bubbleCount가 0이면 0 반환
-  i %= n;
-  if (i < 0) i += n;
-  return i;
-}
-
 // 아크 캐러셀 관련 함수 제거됨 (그리드 레이아웃 사용)
 
 
@@ -3028,11 +3001,6 @@ function getResponsiveScale() {
   return Math.max(minScale, Math.min(maxScale, scale));
 }
 
-
-function mod(a, m) {
-  a %= m;
-  return a < 0 ? a + m : a;
-}
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : (v > hi ? hi : v);
@@ -3075,22 +3043,6 @@ function coverRect(imgW, imgH, boxW, boxH) {
   }
   return { w, h, x, y };
 }
-
-// 인덱스 순환에서 최단 거리 계산 (각도와 유사한 개념)
-function shortestIndexDelta(current, target, count) {
-  if (count === 0) return 0;
-  let diff = target - current;
-  if (diff > count / 2) diff -= count;
-  if (diff < -count / 2) diff += count;
-  return diff;
-}
-
-// 인덱스 기반 부드러운 보간 (속도 완화)
-function lerpIndex(current, target, t, count) {
-  const d = shortestIndexDelta(current, target, count);
-  return current + d * t;
-}
-
 
 /* =========================
    17. DEBUG UI
@@ -3271,7 +3223,10 @@ function finalizeNameInput(finalName) {
       nameInputElement.elt.blur();
     }
   }
-  mode = 0; // 일반 모드로 전환
+  // 온보딩 화면으로 전환
+  mode = 4;
+  onboardingScrollY = 0;
+  onboardingScrollVelocity = 0;
 }
 
 // 이름 입력 모달 그리기
@@ -3715,4 +3670,232 @@ function analyzeFavoriteTags() {
     topTags,
     totalSelected: favoriteBubbles.length
   };
+}
+
+/* =========================
+   18. ONBOARDING SCREEN
+========================= */
+
+function updateOnboarding() {
+  // 스크롤 관성 처리
+  if (!onboardingIsDragging) {
+    onboardingScrollY += onboardingScrollVelocity;
+    onboardingScrollVelocity *= 0.95; // 마찰
+    
+    // 스크롤 범위 제한 (실제 이미지 높이 기준)
+    const s = getResponsiveScale();
+    const imageHeight = height * 0.8 * s;
+    const imageWidth = width * 0.9 * s;
+    const spacing = 30 * s;
+    
+    // 실제 이미지 높이 계산
+    let totalHeight = spacing; // 첫 번째 이미지 상단 간격
+    onboardingImages.forEach((img) => {
+      if (!img) {
+        totalHeight += imageHeight + spacing;
+        return;
+      }
+      const isLoaded = img.width > 0 && img.height > 0;
+      if (!isLoaded) {
+        totalHeight += imageHeight + spacing;
+        return;
+      }
+      
+      const imgRatio = img.width / img.height;
+      
+      // 모든 이미지 너비를 imageWidth로 고정하고 높이 계산
+      const drawH = imageWidth / imgRatio;
+      totalHeight += drawH + spacing;
+    });
+    
+    const minScroll = 0;
+    const maxScroll = Math.max(0, totalHeight - height + 200 * s); // 시작하기 버튼 공간 확보
+    
+    if (onboardingScrollY < minScroll) {
+      onboardingScrollY = minScroll;
+      onboardingScrollVelocity = 0;
+    } else if (onboardingScrollY > maxScroll) {
+      onboardingScrollY = maxScroll;
+      onboardingScrollVelocity = 0;
+    }
+  }
+}
+
+function drawOnboarding() {
+  const s = getResponsiveScale();
+  uiHitboxes.length = 0;
+  
+  // 배경
+  image(bgBuffer, 0, 0);
+  
+  // 어두운 오버레이
+  push();
+  fill(0, 0, 0, 200);
+  rect(0, 0, width, height);
+  pop();
+  
+  // 스크롤 가능한 이미지들
+  push();
+  translate(0, -onboardingScrollY);
+  
+  // 화면 크기에 맞춰 이미지 크기 계산 (반응형 스케일 적용)
+  const imageHeight = height * 0.8 * s;
+  const imageWidth = width * 0.9 * s;
+  const imageX = (width - imageWidth) / 2;
+  const imageCenterX = imageX + imageWidth / 2;
+  
+  // 이미지 끝점 기준으로 30픽셀 간격 (스케일 적용)
+  const spacing = 30 * s;
+  
+  // 먼저 모든 이미지의 실제 높이를 계산
+  const imageHeights = [];
+  onboardingImages.forEach((img) => {
+    if (!img) {
+      imageHeights.push(imageHeight);
+      return;
+    }
+    const isLoaded = img.width > 0 && img.height > 0;
+    if (!isLoaded) {
+      imageHeights.push(imageHeight);
+      return;
+    }
+    
+    const imgRatio = img.width / img.height;
+    
+    // 모든 이미지 너비를 imageWidth로 고정하고 높이 계산
+    const drawH = imageWidth / imgRatio;
+    imageHeights.push(drawH);
+  });
+  
+  // 각 이미지의 상단 Y 위치 계산 (실제 이미지 높이 기준)
+  const imageTopYs = [];
+  let currentY = spacing; // 첫 번째 이미지 상단
+  imageHeights.forEach((h) => {
+    imageTopYs.push(currentY);
+    currentY += h + spacing; // 이미지 높이 + 간격
+  });
+  
+  // 이미지 그리기
+  onboardingImages.forEach((img, idx) => {
+    if (!img) return;
+    
+    // 이미지가 로드되었는지 확인
+    const isLoaded = img.width > 0 && img.height > 0;
+    if (!isLoaded) return;
+    
+    const imageTopY = imageTopYs[idx];
+    const actualImageHeight = imageHeights[idx];
+    const imageCenterY = imageTopY + actualImageHeight / 2;
+    
+    // 화면에 보이는 범위인지 체크
+    const visibleTop = imageTopY;
+    const visibleBottom = imageTopY + actualImageHeight;
+    const screenTop = onboardingScrollY;
+    const screenBottom = onboardingScrollY + height;
+    
+    if (visibleBottom >= screenTop && visibleTop <= screenBottom) {
+      push();
+      imageMode(CENTER);
+      
+      // 이미지 비율 계산 - 모든 이미지 너비를 동일하게
+      const imgRatio = img.width / img.height;
+      
+      // 모든 이미지 너비를 imageWidth로 고정
+      const drawW = imageWidth;
+      const drawH = drawW / imgRatio;
+      
+      // 이미지 그리기
+      image(img, imageCenterX, imageCenterY, drawW, drawH);
+      pop();
+    }
+  });
+  
+  pop();
+  
+  // 시작하기 버튼 (태그 스타일)
+  const buttonW = 280 * s;
+  const buttonH = 64 * s;
+  const buttonR = buttonH / 2;
+  const buttonX = width / 2 - buttonW / 2;
+  const buttonY = height - 100 * s;
+  
+  // 버튼 그리기 (태그 스타일)
+  drawGlassLabelFullscreen(buttonX, buttonY, buttonW, buttonH, buttonR, 1.0, null);
+  
+  // 버튼 텍스트
+  push();
+  drawingContext.save();
+  drawingContext.textBaseline = "middle";
+  drawingContext.textAlign = "center";
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  fill(255, 255);
+  const fontSize = 20 * s;
+  textSize(fontSize);
+  if (fontPretendard) textFont(fontPretendard);
+  drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
+  drawingContext.shadowBlur = 0;
+  text("시작하기", buttonX + buttonW / 2, buttonY + buttonH / 2 - 2);
+  drawingContext.restore();
+  pop();
+  
+  // 히트박스 저장
+  uiHitboxes.push({
+    id: "onboarding_start",
+    x: buttonX,
+    y: buttonY,
+    w: buttonW,
+    h: buttonH
+  });
+}
+
+// 온보딩 화면 포인터 이벤트 처리
+function handleOnboardingPointer(x, y, type) {
+  if (type === "start") {
+    onboardingIsDragging = true;
+    onboardingDragStartY = y;
+    onboardingLastDragY = y;
+    onboardingScrollVelocity = 0;
+  } else if (type === "move" && onboardingIsDragging) {
+    const dy = y - onboardingLastDragY;
+    onboardingScrollY -= dy;
+    onboardingScrollVelocity = -dy;
+    onboardingLastDragY = y;
+    
+    // 스크롤 범위 제한 (실제 이미지 높이 기준)
+    const s = getResponsiveScale();
+    const imageHeight = height * 0.8;
+    const imageWidth = width * 0.9;
+    const spacing = 30;
+    
+    // 실제 이미지 높이 계산
+    let totalHeight = spacing;
+    onboardingImages.forEach((img) => {
+      if (!img) {
+        totalHeight += imageHeight + spacing;
+        return;
+      }
+      const isLoaded = img.width > 0 && img.height > 0;
+      if (!isLoaded) {
+        totalHeight += imageHeight + spacing;
+        return;
+      }
+      
+      const imgRatio = img.width / img.height;
+      
+      // 모든 이미지 너비를 imageWidth로 고정하고 높이 계산
+      const drawH = imageWidth / imgRatio;
+      totalHeight += drawH + spacing;
+    });
+    const minScroll = 0;
+    const maxScroll = Math.max(0, totalHeight - height + 200 * s);
+    
+    if (onboardingScrollY < minScroll) {
+      onboardingScrollY = minScroll;
+    } else if (onboardingScrollY > maxScroll) {
+      onboardingScrollY = maxScroll;
+    }
+  } else if (type === "end") {
+    onboardingIsDragging = false;
+  }
 }
