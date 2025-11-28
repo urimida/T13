@@ -42,8 +42,8 @@ const INTERACT = {
   longPressDuration: 500,
   inertiaDecay: 0.94,
   dragDeadzone: 6,
-  tapMoveThreshold: 10,   // px - 탭으로 인정할 최대 이동 거리
-  tapTimeThreshold: 300,  // ms - 탭으로 인정할 최대 시간
+  tapMoveThreshold: 15,   // px - 탭으로 인정할 최대 이동 거리 (태블릿 터치 감도 개선)
+  tapTimeThreshold: 400,  // ms - 탭으로 인정할 최대 시간 (태블릿 터치 감도 개선)
 };
 
 // 추천 버블 설정 (고정 크기)
@@ -2004,13 +2004,14 @@ function drawHeartButton(anim) {
   text(heartSymbol, buttonX + buttonSize / 2, buttonY + buttonSize / 2 - 1); // 1픽셀 위로
   pop();
   
-  // 히트박스 저장
+  // 히트박스 저장 (태블릿 터치 감도 개선: 클릭 영역 약간 확대)
+  const hitboxPadding = 5 * responsiveScale; // 5px 여유 공간 추가
   uiHitboxes.push({
     id: "heart_button",
-    x: buttonX,
-    y: buttonY,
-    w: buttonSize,
-    h: buttonSize
+    x: buttonX - hitboxPadding,
+    y: buttonY - hitboxPadding,
+    w: buttonSize + hitboxPadding * 2,
+    h: buttonSize + hitboxPadding * 2
   });
 }
 
@@ -2564,15 +2565,22 @@ function pointerEnd(x, y) {
 
   // 전체 화면 모드에서 태그/연관 버블 클릭 처리
   if (mode === 1) {
-    // 탭으로 판정된 경우에만 클릭 처리
-    if (isTap) {
-      // 하트 버튼 클릭 확인 (가장 우선순위)
-      const hit = hitTestUI(x, y);
-      if (hit === "heart_button") {
+    // 하트 버튼 클릭 확인 (가장 우선순위, isTap 조건 완화)
+    // 태블릿에서 약간의 움직임이 있어도 하트 버튼은 클릭 가능하도록
+    const hit = hitTestUI(x, y);
+    if (hit === "heart_button") {
+      // 하트 버튼은 드래그가 아니고 약간의 움직임만 있으면 클릭으로 인정
+      const isHeartTap = !dragging && (isTap || (dt < 500 && dx * dx + dy * dy < 400)); // 20px 이내, 500ms 이내
+      if (isHeartTap) {
         toggleFavoriteBubble();
+        pointerDown = false;
+        pointerId = -1;
         return;
       }
-      
+    }
+    
+    // 탭으로 판정된 경우에만 다른 클릭 처리
+    if (isTap) {
       // VR 나가기 버튼 클릭 확인
       const clickedTag = checkTagClick(x, y);
       if (clickedTag === "VR_EXIT") {
