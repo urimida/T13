@@ -2419,8 +2419,18 @@ function pointerStart(x, y, id) {
   }
 
   // UI hit test (풀스크린 모드에서도 작동)
+  // 하트 버튼은 특히 우선순위로 처리 (기기별 터치 감도 차이 대응)
   const hit = hitTestUI(x, y);
   if (hit) {
+    // 하트 버튼은 pointerEnd에서도 처리하도록 pointerDown 유지
+    if (hit === "heart_button" && mode === 1) {
+      // pointerEnd에서 처리하도록 pointerDown 유지
+      // 하지만 즉시 처리도 가능하도록
+      handleUI(hit);
+      pointerDown = false;
+      pointerId = -1;
+      return;
+    }
     handleUI(hit);
     pointerDown = false;
     pointerId = -1;
@@ -2551,6 +2561,35 @@ function checkTagClick(x, y) {
 }
 
 function pointerEnd(x, y) {
+  // 좌표 유효성 체크
+  if (isNaN(x) || isNaN(y)) {
+    if (pointerDown) {
+      pointerDown = false;
+      pointerId = -1;
+    }
+    return;
+  }
+  
+  // 전체 화면 모드에서 하트 버튼 클릭 확인 (pointerDown 체크 전에 먼저 확인)
+  // 아이패드 엠포 등에서 pointerStart에서 감지되지 않을 수 있으므로 pointerEnd에서도 체크
+  if (mode === 1) {
+    const hit = hitTestUI(x, y);
+    if (hit === "heart_button") {
+      // 하트 버튼은 pointerDown 상태와 관계없이 클릭으로 인정
+      // 약간의 움직임이 있어도 하트 버튼은 클릭 가능하도록
+      const dt = pointerDown ? (millis() - lastT) : 0;
+      const dx = pointerDown ? (x - downX) : 0;
+      const dy = pointerDown ? (y - downY) : 0;
+      const isHeartTap = !dragging && (dt < 600 && dx * dx + dy * dy < 900); // 30px 이내, 600ms 이내
+      if (isHeartTap || !pointerDown) {
+        toggleFavoriteBubble();
+        pointerDown = false;
+        pointerId = -1;
+        return;
+      }
+    }
+  }
+  
   if (!pointerDown) return;
   
   // 드래그 vs 탭 구분
@@ -2565,19 +2604,6 @@ function pointerEnd(x, y) {
 
   // 전체 화면 모드에서 태그/연관 버블 클릭 처리
   if (mode === 1) {
-    // 하트 버튼 클릭 확인 (가장 우선순위, isTap 조건 완화)
-    // 태블릿에서 약간의 움직임이 있어도 하트 버튼은 클릭 가능하도록
-    const hit = hitTestUI(x, y);
-    if (hit === "heart_button") {
-      // 하트 버튼은 드래그가 아니고 약간의 움직임만 있으면 클릭으로 인정
-      const isHeartTap = !dragging && (isTap || (dt < 500 && dx * dx + dy * dy < 400)); // 20px 이내, 500ms 이내
-      if (isHeartTap) {
-        toggleFavoriteBubble();
-        pointerDown = false;
-        pointerId = -1;
-        return;
-      }
-    }
     
     // 탭으로 판정된 경우에만 다른 클릭 처리
     if (isTap) {
@@ -2665,10 +2691,13 @@ function setupPointerEvents() {
 
   c.style.touchAction = "none";
 
-  // 좌표 변환 헬퍼 함수 (태블릿 지원 개선)
+  // 좌표 변환 헬퍼 함수 (태블릿 지원 개선, 기기별 픽셀 밀도 고려)
   function getCanvasCoords(e) {
     const rect = c.getBoundingClientRect();
+    // devicePixelRatio 고려 (아이패드 엠포 등 고해상도 기기 대응)
+    const dpr = window.devicePixelRatio || 1;
     // 실제 캔버스 크기와 논리적 크기의 비율 계산
+    // p5.js는 이미 devicePixelRatio를 고려하므로 rect.width/height를 그대로 사용
     const scaleX = width / rect.width;
     const scaleY = height / rect.height;
     // p5.js 캔버스 좌표계로 변환 (스케일 고려)
