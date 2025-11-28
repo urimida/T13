@@ -2419,16 +2419,13 @@ function pointerStart(x, y, id) {
   }
 
   // UI hit test (풀스크린 모드에서도 작동)
-  // 하트 버튼은 특히 우선순위로 처리 (기기별 터치 감도 차이 대응)
+  // 단, 하트 버튼은 pointerEnd에서 처리하도록 pointerDown 유지
   const hit = hitTestUI(x, y);
   if (hit) {
-    // 하트 버튼은 pointerEnd에서도 처리하도록 pointerDown 유지
+    // 하트 버튼은 pointerEnd에서 처리하도록 pointerDown 유지
+    // (태블릿 터치 감도 문제 해결)
     if (hit === "heart_button" && mode === 1) {
-      // pointerEnd에서 처리하도록 pointerDown 유지
-      // 하지만 즉시 처리도 가능하도록
-      handleUI(hit);
-      pointerDown = false;
-      pointerId = -1;
+      // pointerDown은 유지하여 pointerEnd에서 처리
       return;
     }
     handleUI(hit);
@@ -2571,7 +2568,7 @@ function pointerEnd(x, y) {
   }
   
   // 전체 화면 모드에서 하트 버튼 클릭 확인 (pointerDown 체크 전에 먼저 확인)
-  // 아이패드 엠포 등에서 pointerStart에서 감지되지 않을 수 있으므로 pointerEnd에서도 체크
+  // pointerStart에서 감지되지 않았을 수도 있으므로 pointerEnd에서도 체크
   if (mode === 1) {
     const hit = hitTestUI(x, y);
     if (hit === "heart_button") {
