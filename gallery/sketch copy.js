@@ -61,16 +61,16 @@ const UI = {
   searchWRatio: 0.56, // 버튼 크기용 (검색창 제거됨)
 };
 
-// 성능 최적화 설정 (익스플로어와 동일)
+// 성능 최적화 설정 (전시용 최적화)
 const PERFORMANCE_CONFIG = {
-  imageCheckInterval: 400,
-  maxImageQueueLength: 40,
+  imageCheckInterval: 150,        // 이미지 체크 간격 감소 (400ms -> 150ms) - 더 빠른 로딩
+  maxImageQueueLength: 60,        // 큐 길이 증가 (40 -> 60) - 더 많은 이미지 대기 가능
   maxDraw: 140,
   tabletGCInterval: 20000,
   desktopGCInterval: 30000,
   tabletSoftReset: 120000,
   desktopSoftReset: 180000,
-  maxSimulImageLoads: 2,
+  maxSimulImageLoads: 5,          // 동시 로드 수 증가 (2 -> 5) - 더 빠른 로딩
 };
 
 
@@ -172,6 +172,67 @@ function wrapDelta(d, size) {
   return d - size * 0.5;
 }
 
+// 전시용: Wake Lock API로 화면 꺼짐 방지 (6시간 이상 안정적 운영)
+let wakeLock = null;
+let wakeLockRetryCount = 0;
+const MAX_WAKE_LOCK_RETRIES = 5;
+
+async function initWakeLock() {
+  // Wake Lock API 지원 확인
+  if (!('wakeLock' in navigator)) {
+    console.log('[Gallery] Wake Lock API를 지원하지 않습니다. 메타 태그에 의존합니다.');
+    return;
+  }
+
+  try {
+    // 화면 잠금 요청
+    wakeLock = await navigator.wakeLock.request('screen');
+    console.log('[Gallery] Wake Lock 활성화됨 - 화면이 꺼지지 않습니다.');
+    
+    // Wake Lock이 해제되면 자동으로 재요청 (전시용 안정성)
+    wakeLock.addEventListener('release', () => {
+      console.log('[Gallery] Wake Lock이 해제되었습니다. 재요청 시도...');
+      wakeLockRetryCount = 0;
+      retryWakeLock();
+    });
+  } catch (err) {
+    console.warn('[Gallery] Wake Lock 요청 실패:', err);
+    // 실패해도 계속 진행 (메타 태그에 의존)
+  }
+}
+
+async function retryWakeLock() {
+  if (wakeLockRetryCount >= MAX_WAKE_LOCK_RETRIES) {
+    console.warn('[Gallery] Wake Lock 재시도 횟수 초과. 메타 태그에 의존합니다.');
+    return;
+  }
+
+  // 페이지가 보이는 상태에서만 재요청
+  if (document.visibilityState === 'visible') {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      console.log('[Gallery] Wake Lock 재활성화됨');
+      wakeLockRetryCount = 0;
+    } catch (err) {
+      wakeLockRetryCount++;
+      console.warn(`[Gallery] Wake Lock 재요청 실패 (${wakeLockRetryCount}/${MAX_WAKE_LOCK_RETRIES}):`, err);
+      // 2초 후 재시도
+      setTimeout(() => retryWakeLock(), 2000);
+    }
+  }
+}
+
+// 페이지 가시성 변경 시 Wake Lock 재요청
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && wakeLock === null) {
+      console.log('[Gallery] 페이지가 다시 보입니다. Wake Lock 재요청...');
+      wakeLockRetryCount = 0;
+      await retryWakeLock();
+    }
+  });
+}
+
 /* =========================
    3. DATA SCHEMA ADAPTER
    - bubbles.json 구조가 다르면 여기만 수정
@@ -223,11 +284,21 @@ class ImageLoader {
 
   get(path){ return this.cache.get(path); }
 
-  request(path) {
+  request(path, priority = false) {
     if (!path) return;
     if (this.cache.has(path) || this.loading.has(path)) return;
-    if (this.queue.length >= PERFORMANCE_CONFIG.maxImageQueueLength) return;
-    this.queue.push(path);
+    if (this.queue.length >= PERFORMANCE_CONFIG.maxImageQueueLength) {
+      if (priority) {
+        this.queue.pop();
+      } else {
+        return;
+      }
+    }
+    if (priority) {
+      this.queue.unshift(path);
+    } else {
+      this.queue.push(path);
+    }
     this.lastSeen.set(path, millis());
   }
 
@@ -241,6 +312,7 @@ class ImageLoader {
     if (now - this.lastCheck < PERFORMANCE_CONFIG.imageCheckInterval) return;
     this.lastCheck = now;
 
+    // 전시용 최적화: 더 빠른 이미지 로딩을 위해 동시 로드 수만큼 즉시 처리
     while (this.activeLoads < PERFORMANCE_CONFIG.maxSimulImageLoads && this.queue.length > 0) {
       const path = this.queue.shift();
       if (this.cache.has(path) || this.loading.has(path)) continue;
@@ -248,16 +320,33 @@ class ImageLoader {
       this.loading.add(path);
       this.activeLoads++;
 
+      // 타임아웃 설정 (10초) - 전시용 안정성
+      const loadStartTime = now;
+      const timeoutId = setTimeout(() => {
+        if (this.loading.has(path)) {
+          console.warn(`[Gallery] 이미지 로드 타임아웃: ${path}`);
+          this.loading.delete(path);
+          this.activeLoads = Math.max(0, this.activeLoads - 1);
+        }
+      }, 10000);
+
       loadImage(
         path,
         img => {
-          this.cache.set(path, img);
-          this.lastSeen.set(path, millis());
+          clearTimeout(timeoutId);
+          if (img && img.width > 0 && img.height > 0) {
+            this.cache.set(path, img);
+            this.lastSeen.set(path, millis());
+          } else {
+            console.warn(`[Gallery] 유효하지 않은 이미지: ${path}`);
+          }
           this.loading.delete(path);
           this.activeLoads = Math.max(0, this.activeLoads - 1);
         },
-        _err => {
-          // fail silently (tablet safe)
+        err => {
+          clearTimeout(timeoutId);
+          // 전시용: 에러 로깅만 하고 계속 진행
+          console.warn(`[Gallery] 이미지 로드 실패: ${path}`, err);
           this.loading.delete(path);
           this.activeLoads = Math.max(0, this.activeLoads - 1);
         }
@@ -269,7 +358,29 @@ class ImageLoader {
     // LRU 방식: 최근 6시간 안 본 것만 삭제 (전시용 안정성 강화)
     // 확대 모드에 있는 이미지는 항상 보존
     const now = millis();
+    let deletedCount = 0;
+    const maxCacheSize = 200; // 최대 캐시 크기 제한 (메모리 관리)
     
+    // 캐시 크기가 너무 크면 오래된 것부터 삭제
+    if (this.cache.size > maxCacheSize) {
+      const entries = Array.from(this.cache.entries()).map(([path, img]) => ({
+        path,
+        img,
+        seen: this.lastSeen.get(path) || 0
+      }));
+      entries.sort((a, b) => a.seen - b.seen); // 오래된 것부터 정렬
+      
+      const toDelete = entries.slice(0, this.cache.size - maxCacheSize);
+      for (const entry of toDelete) {
+        // 보호된 이미지는 삭제하지 않음
+        if (protectedPaths && protectedPaths.has(entry.path)) continue;
+        this.cache.delete(entry.path);
+        this.lastSeen.delete(entry.path);
+        deletedCount++;
+      }
+    }
+    
+    // 6시간 이상 보지 않은 이미지 삭제
     for (const [path] of this.cache) {
       // 확대 모드에 있는 이미지는 절대 삭제하지 않음
       if (protectedPaths && protectedPaths.has(path)) {
@@ -283,7 +394,12 @@ class ImageLoader {
       if (now - seen > 21600000) { // 6시간 = 21600000ms
         this.cache.delete(path);
         this.lastSeen.delete(path);
+        deletedCount++;
       }
+    }
+    
+    if (deletedCount > 0 && DEV.logMemory) {
+      console.log(`[Gallery] GC: ${deletedCount}개 이미지 삭제, 남은 캐시: ${this.cache.size}개`);
     }
   }
 
@@ -680,7 +796,7 @@ class BubbleManager {
 
       // request visible image lazy-load
       if (b.imgPath && imageLoader) {
-        imageLoader.request(b.imgPath);
+        imageLoader.request(b.imgPath, true);
         imageLoader.markVisible(b.imgPath);
       }
 
@@ -819,6 +935,9 @@ function setup() {
   mode = 2;
 
   lastActiveTime = millis();
+  
+  // 전시용: Wake Lock API로 화면 꺼짐 방지 (6시간 이상 안정적 운영)
+  initWakeLock();
 }
 
 // 익스플로어와 동일한 레이아웃 계산 함수
@@ -1043,14 +1162,16 @@ function draw() {
 
   if (DEV.showFPS) drawFPS?.();
 
-  // --- GC 관리 (하루 종일 안정성 강화) ---
+  // --- GC 관리 (전시용 안정성 강화) ---
   const isTablet = width < 1200;
   const gcInterval = isTablet ? PERFORMANCE_CONFIG.tabletGCInterval : PERFORMANCE_CONFIG.desktopGCInterval;
   const softInterval = isTablet ? PERFORMANCE_CONFIG.tabletSoftReset : PERFORMANCE_CONFIG.desktopSoftReset;
 
   if (!window.lastGC) window.lastGC = 0;
   if (!window.lastSoftReset) window.lastSoftReset = 0;
+  if (!window.lastHealthCheck) window.lastHealthCheck = 0;
 
+  // GC 실행
   if (now - window.lastGC > gcInterval) {
     window.lastGC = now;
 
@@ -1071,9 +1192,44 @@ function draw() {
     }
   }
 
+  // 소프트 리셋 (큐 정리)
   if (now - window.lastSoftReset > softInterval) {
     window.lastSoftReset = now;
     if (imageLoader && imageLoader.softReset) imageLoader.softReset();
+  }
+
+  // 전시용 건강 체크 (5분마다) - 메모리 누수 방지
+  if (now - window.lastHealthCheck > 300000) { // 5분 = 300000ms
+    window.lastHealthCheck = now;
+    
+    // 메모리 사용량 체크 (가능한 경우)
+    if (performance.memory) {
+      const usedMB = performance.memory.usedJSHeapSize / 1048576;
+      const limitMB = performance.memory.jsHeapSizeLimit / 1048576;
+      
+      if (DEV.logMemory) {
+        console.log(`[Gallery] 메모리 사용량: ${usedMB.toFixed(1)}MB / ${limitMB.toFixed(1)}MB`);
+      }
+      
+      // 메모리 사용량이 80% 이상이면 강제 GC
+      if (usedMB / limitMB > 0.8) {
+        console.warn('[Gallery] 메모리 사용량이 높습니다. 강제 GC 실행...');
+        if (imageLoader && imageLoader.gc) {
+          imageLoader.gc(null); // 보호 없이 강제 GC
+        }
+        // 브라우저에게 GC 힌트 제공
+        if (window.gc) {
+          window.gc();
+        }
+      }
+    }
+    
+    // Wake Lock 상태 확인 및 재요청
+    if (wakeLock === null && 'wakeLock' in navigator && document.visibilityState === 'visible') {
+      console.log('[Gallery] 건강 체크: Wake Lock 재요청...');
+      wakeLockRetryCount = 0;
+      retryWakeLock();
+    }
   }
 }
 
@@ -1407,10 +1563,7 @@ function resetToInitialView() {
     panController.velY = 0;
   }
 
-  selectedTag = null;
-  recommendedBubbles.length = 0;
-  recommendedHitboxes.length = 0;
-  recommendedBubblesAnim = 0;
+  clearSelectedTagState();
 
   // 이미지 드래그 오프셋 초기화
   fullscreenImageOffset.x = 0;
@@ -1583,14 +1736,19 @@ function drawFullscreen() {
   drawVRExitButton(anim);
 }
 
+function clearSelectedTagState() {
+  selectedTag = null;
+  recommendedBubbles.length = 0;
+  recommendedHitboxes.length = 0;
+  recommendedBubblesAnim = 0;
+}
+
 function selectTag(tag) {
   if (!tag) return;
 
   if (selectedTag === tag) {
     // 같은 태그 다시 누르면 추천 숨김
-    selectedTag = null;
-    recommendedBubbles.length = 0;
-    recommendedHitboxes.length = 0;
+    clearSelectedTagState();
     return;
   }
 
@@ -1602,7 +1760,7 @@ function selectTag(tag) {
     for (let i = 0; i < recommendedBubbles.length; i++) {
       const b = recommendedBubbles[i].bubble;
       if (b && b.imgPath) {
-        imageLoader.request(b.imgPath);
+        imageLoader.request(b.imgPath, true);
         imageLoader.markVisible(b.imgPath);
       }
     }
@@ -1711,7 +1869,7 @@ function drawRecommendedBubbles(anim, isExiting = false) {
 
     // 이미지 요청 (지연 로딩)
     if (b.imgPath && imageLoader) {
-      imageLoader.request(b.imgPath);
+      imageLoader.request(b.imgPath, true);
       imageLoader.markVisible(b.imgPath);
     }
 
@@ -1833,7 +1991,7 @@ function drawHeartButton(anim) {
   const isFavorite = favoriteBubbles.includes(fullscreenIndex);
   const heartStyle = isFavorite ? "favorite" : "favorite_idle";
 
-  // 태그와 동일한 글래스모피즘 적용
+  // 태그와 동일한 글래스모피즘 적용 (단일 컴포넌트)
   drawGlassLabelFullscreen(buttonX, buttonY, buttonSize, buttonSize, buttonSize / 2, anim, heartStyle);
   
   // 하트 아이콘 (간단한 텍스트로 표현)
@@ -1841,7 +1999,7 @@ function drawHeartButton(anim) {
   textAlign(CENTER, CENTER);
   textSize(30 * responsiveScale);
   if (fontPretendard) textFont(fontPretendard);
-  fill(255, 255 * anim);
+  fill(isFavorite ? color(255, 255, 255, 255 * anim) : color(255, 255, 255, 220 * anim));
   const heartSymbol = isFavorite ? "♥" : "♡";
   text(heartSymbol, buttonX + buttonSize / 2, buttonY + buttonSize / 2 - 1); // 1픽셀 위로
   pop();
@@ -2435,6 +2593,12 @@ function pointerEnd(x, y) {
         selectTag(clickedTag);
         return;
       }
+
+      // 추천 레이어 표시 중 배경을 탭하면 해제
+      if (selectedTag !== null && clickedTag === null) {
+        clearSelectedTagState();
+        return;
+      }
     }
   }
   
@@ -2697,9 +2861,7 @@ function enterFullscreen(idx) {
   fullscreenImageDragging = false;
   
   // 선택된 태그와 연관 버블 초기화 (새 버블로 이동할 때)
-  selectedTag = null;
-  recommendedBubbles = [];
-  recommendedBubblesAnim = 0;
+  clearSelectedTagState();
   
   // 버블 터지는 소리 재생
   if (bubblePopSound && bubblePopSound.isLoaded()) {
@@ -2770,9 +2932,7 @@ function exitFullscreen() {
   // 애니메이션이 완료되면 모드 전환 (updateFullscreen에서 처리)
   
   // 초기 상태로 리셋 (VR 모드 나가기 시)
-  selectedTag = null;
-  recommendedBubbles = [];
-  recommendedBubblesAnim = 0;
+  clearSelectedTagState();
   
   lastActiveTime = millis();
 }
@@ -2939,12 +3099,25 @@ function createNameInputElement() {
   // p5 input 생성
   nameInputElement = createInput("");
   nameInputElement.attribute("placeholder", "");
+  
+  // 브라우저 확장 프로그램과의 충돌 방지 (Cursor 자동완성 등)
+  nameInputElement.attribute("autocomplete", "off");
+  nameInputElement.attribute("data-cursor-ignore", "true");
+  nameInputElement.attribute("data-no-autofill", "true");
+  nameInputElement.attribute("spellcheck", "false");
 
   // 기본 p5 스타일 제거용
   nameInputElement.addClass("gallery-name-input");
 
   // 실제 DOM 엘리먼트
   const el = nameInputElement.elt;
+  
+  // 추가 속성 설정 (확장 프로그램 충돌 방지)
+  el.setAttribute("autocomplete", "off");
+  el.setAttribute("data-cursor-ignore", "true");
+  el.setAttribute("data-no-autofill", "true");
+  el.setAttribute("spellcheck", "false");
+  el.setAttribute("data-form-type", "other"); // 확장 프로그램이 폼으로 인식하지 않도록
 
   // 화면 중앙 고정 배치 (캔버스 전체 화면이니까 viewport 기준)
   el.style.position = "absolute";
@@ -3000,14 +3173,34 @@ function createNameInputElement() {
     }
   });
   
-  // 포커스 이벤트
-  nameInputElement.elt.addEventListener("focus", () => {
-    el.style.border = "1px solid rgba(255,255,255,0.8)";
-  });
+  // 포커스 이벤트 (에러 처리 추가)
+  nameInputElement.elt.addEventListener("focus", (e) => {
+    try {
+      el.style.border = "1px solid rgba(255,255,255,0.8)";
+    } catch (err) {
+      // 확장 프로그램 충돌 시 무시
+      console.warn("[Gallery] Focus 이벤트 처리 중 오류 (무시됨):", err);
+    }
+  }, { passive: true });
   
-  nameInputElement.elt.addEventListener("blur", () => {
-    el.style.border = "1px solid rgba(255,255,255,0.4)";
-  });
+  nameInputElement.elt.addEventListener("blur", (e) => {
+    try {
+      el.style.border = "1px solid rgba(255,255,255,0.4)";
+    } catch (err) {
+      // 확장 프로그램 충돌 시 무시
+      console.warn("[Gallery] Blur 이벤트 처리 중 오류 (무시됨):", err);
+    }
+  }, { passive: true });
+  
+  // 전역 에러 핸들러로 확장 프로그램 오류 무시
+  const originalErrorHandler = window.onerror;
+  window.addEventListener('error', (event) => {
+    // Cursor 확장 프로그램 오류는 무시
+    if (event.filename && event.filename.includes('content_script.js')) {
+      event.preventDefault();
+      return true;
+    }
+  }, true);
 }
 
 function getCurrentNameInputValue() {
@@ -3117,20 +3310,23 @@ function drawNameInputModal() {
   drawingContext.restore();
   pop();
   
-  // 제목
-  push();
-  textAlign(CENTER, CENTER);
-  textSize(32 * s);
-  if (fontPretendard) textFont(fontPretendard);
-  fill(255, 255);
-  text("당신의 이름을 입력해주세요", width / 2, modalY + 80 * s);
-  pop();
-  
   // 입력 필드 (HTML input이 그려지므로 배경만 그림) - 패딩 늘림
   const inputW = modalW - 250 * s; // 200 -> 250 (패딩 늘림)
   const inputH = 60 * s;
   const inputX = modalX + (modalW - inputW) / 2; // 중앙 정렬
   const inputY = modalY + modalH / 2 - inputH / 2; // 중앙 정렬
+
+  // 제목 (입력 필드와 간격 최소화)
+  const titleOffset = 10 * s; // 입력 상단과 24px 정도만 띄움
+  const titleY = Math.max(modalY + 40 * s, inputY - inputH / 2 - titleOffset);
+  const titleLift = 20 * s;
+  push();
+  textAlign(CENTER, CENTER);
+  textSize(32 * s);
+  if (fontPretendard) textFont(fontPretendard);
+  fill(255, 255);
+  text("당신의 이름은 무엇인가요?", width / 2, titleY - titleLift);
+  pop();
   
   // 확인 / 건너뛰기 버튼 (태그와 동일한 스타일)
   const tagFontSize = 16 * 1.4 * s * 1.3;
@@ -3146,7 +3342,8 @@ function drawNameInputModal() {
   const skipW = textWidth(skipLabel) + tagPadding * 2;
   const buttonSpacing = 20 * s;
   const buttonsTotalW = confirmW + skipW + buttonSpacing;
-  const buttonY = modalY + modalH - tagH - 80 * s; // 모달 확대에 맞춰 더 아래 배치
+  const verticalGapBelowInput = 40 * s;
+  const buttonY = inputY + inputH + verticalGapBelowInput;
   const confirmButtonX = width / 2 - buttonsTotalW / 2;
   const skipButtonX = confirmButtonX + confirmW + buttonSpacing;
   const confirmAnim = inputValue.length > 0 ? 1.0 : 0.75;
