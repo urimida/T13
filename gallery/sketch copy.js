@@ -2149,7 +2149,7 @@ function drawUI() {
 
 
 // LED 안내문 텍스트 한 줄을 그리는 공통 헬퍼
-function drawLedTextLine(text, y, baseAlpha = 1, scale = null) {
+function drawLedTextLine(textStr, y, baseAlpha = 1, scale = null) {
   const responsiveScale = scale || getResponsiveScale();
 
   instructionPulseTime += 0.05;
@@ -2170,17 +2170,17 @@ function drawLedTextLine(text, y, baseAlpha = 1, scale = null) {
   ctx.shadowBlur = 15;
   ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.3})`;
   fill(255, 255, 255, alpha * 0.2 * 255);
-  text(text, width / 2, y);
+  text(textStr, width / 2, y);
 
   ctx.shadowBlur = 10;
   ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.5})`;
   fill(255, 255, 255, alpha * 0.4 * 255);
-  text(text, width / 2, y);
+  text(textStr, width / 2, y);
 
   ctx.shadowBlur = 8;
   ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.8})`;
   fill(255, 255, 255, alpha * 255);
-  text(text, width / 2, y);
+  text(textStr, width / 2, y);
 
   ctx.shadowBlur = 0;
   ctx.shadowColor = "transparent";
@@ -3313,7 +3313,7 @@ function drawAnalysisResult() {
   textSize(36 * s);
   if (fontPretendard) textFont(fontPretendard);
   fill(255, 255);
-  text(`${userName}님은 이런 태그를 좋아합니다`, width / 2, resultY + 80 * s); // 60 -> 80 (20픽셀 아래로)
+  text(`${userName}님은 이런 감각을 선호합니다.`, width / 2, resultY + 80 * s); // 60 -> 80 (20픽셀 아래로)
   pop();
   
   // 태그 컴포넌트 표시 (확대 모드 스타일)
