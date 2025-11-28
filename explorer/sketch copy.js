@@ -57,7 +57,7 @@ const ANIMATION_CONFIG = {
 
 const PATHS = {
   data: "../public/assets/data/bubbles.json",
-  bg: "../public/assets/public-imgs/bg.png",
+  bg: "../public/assets/public-imgs/background.webp",
   navBar: "../public/assets/public-imgs/navigation-bar.png",
   captureBtn: "../public/assets/public-imgs/capture-button.png",
   workroomBtn: "../public/assets/public-imgs/workroom-button.png",

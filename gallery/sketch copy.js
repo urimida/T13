@@ -156,6 +156,7 @@ let instructionPulseTime = 0; // LED 펄스 애니메이션 시간
 let userName = ""; // 사용자 이름
 let favoriteBubbles = []; // 선택한 버블 인덱스 배열
 let nameInputElement = null; // HTML input 요소 (한글 입력 지원)
+let pendingNameConfirm = false; // IME 조합 중 Enter 입력 처리 대기
 let analysisResult = null; // 분석 결과 {topVisualTags, topEmotionalTags, commonTags}
 
 /* =========================
@@ -765,7 +766,7 @@ function preload() {
   // rawData는 setup에서 로드
 
   // UI images (익스플로어와 동일하게 수정)
-  uiImages["bg.png"] = loadImage(PATHS.uiImgs + "bg.png");
+  uiImages["background"] = loadImage(PATHS.uiImgs + "background.webp");
   uiImages["bubble-cap.png"] = loadImage(PATHS.uiImgs + "bubble-cap.png");
 
   // 버블 터지는 소리 로드 (p5.sound 라이브러리가 있는 경우에만)
@@ -913,7 +914,7 @@ function initBackground() {
   bgBuffer.drawingContext.imageSmoothingEnabled = true;
   bgBuffer.drawingContext.imageSmoothingQuality = "high";
   
-  const bgImg = uiImages["bg.png"];
+  const bgImg = uiImages["background"];
   if (bgImg && bgImg.width > 0) {
     // 백그라운드 이미지 사용 (익스플로어와 동일)
     const imgRatio = bgImg.width / bgImg.height;
@@ -1830,54 +1831,10 @@ function drawHeartButton(anim) {
   const buttonY = topY + 4; // 2픽셀 아래로
   
   const isFavorite = favoriteBubbles.includes(fullscreenIndex);
-  
-  // 하트 아이콘 그리기 (간단한 원형 버튼)
-  push();
-  drawingContext.save();
-  
-  // 배경 원
-  drawingContext.beginPath();
-  drawingContext.arc(buttonX + buttonSize / 2, buttonY + buttonSize / 2, buttonSize / 2, 0, Math.PI * 2);
-  drawingContext.clip();
-  
-  // 글래스 효과 배경
-  const bgImg = uiImages["bg.png"];
-  if (bgImg && bgImg.width > 0) {
-    drawingContext.filter = "blur(10px)";
-    drawingContext.globalAlpha = 0.2 * anim;
-    const cover = coverRect(bgImg.width, bgImg.height, width, height);
-    drawingContext.drawImage(
-      bgImg.canvas || bgImg.elt,
-      0, 0, bgImg.width, bgImg.height,
-      cover.x, cover.y, cover.w, cover.h
-    );
-    drawingContext.filter = "none";
-  }
-  
-  drawingContext.globalAlpha = (isFavorite ? 0.8 : 0.5) * anim;
-  drawingContext.fillStyle = isFavorite ? "rgba(255,100,100,0.8)" : "rgba(0,0,0,0.6)";
-  drawingContext.fillRect(buttonX, buttonY, buttonSize, buttonSize);
-  
-  const tint = drawingContext.createLinearGradient(buttonX, buttonY, buttonX, buttonY + buttonSize);
-  tint.addColorStop(0, "rgba(255,255,255,0.2)");
-  tint.addColorStop(1, "rgba(255,255,255,0.05)");
-  drawingContext.fillStyle = tint;
-  drawingContext.fillRect(buttonX, buttonY, buttonSize, buttonSize);
-  
-  drawingContext.restore();
-  pop();
-  
-  // 테두리
-  push();
-  drawingContext.save();
-  drawingContext.strokeStyle = isFavorite ? "rgba(255,150,150,0.9)" : "rgba(255,255,255,0.5)";
-  drawingContext.lineWidth = 2;
-  drawingContext.globalAlpha = anim;
-  drawingContext.beginPath();
-  drawingContext.arc(buttonX + buttonSize / 2, buttonY + buttonSize / 2, buttonSize / 2 - 1, 0, Math.PI * 2);
-  drawingContext.stroke();
-  drawingContext.restore();
-  pop();
+  const heartStyle = isFavorite ? "favorite" : "favorite_idle";
+
+  // 태그와 동일한 글래스모피즘 적용
+  drawGlassLabelFullscreen(buttonX, buttonY, buttonSize, buttonSize, buttonSize / 2, anim, heartStyle);
   
   // 하트 아이콘 (간단한 텍스트로 표현)
   push();
@@ -1975,6 +1932,12 @@ function drawGlassLabelFullscreen(x, y, w, h, r, anim, tagType = null) {
   } else if (tagType === "emotional") {
     // 감정 태그: 초록빛 (더 진하게)
     tintColor = { r: 150, g: 255, b: 150, alpha: 0.2 }; // 진한 초록 틴트
+  } else if (tagType === "favorite") {
+    // 선택된 하트: 따뜻한 핑크 틴트
+    tintColor = { r: 255, g: 140, b: 180, alpha: 0.25 };
+  } else if (tagType === "favorite_idle") {
+    // 비선택 하트: 기본 글래스에 은은한 화이트 틴트
+    tintColor = { r: 255, g: 255, b: 255, alpha: 0.05 };
   }
 
   // 1) 아웃샤도우 (라벨 외곽 글로우)
@@ -2031,7 +1994,7 @@ function drawGlassLabelFullscreen(x, y, w, h, r, anim, tagType = null) {
     ctx.filter = "none";
   } else {
     // 분석 결과 화면 등: 기본 배경 이미지 사용
-    const bgImg = uiImages["bg.png"];
+    const bgImg = uiImages["background"];
     if (bgImg && bgImg.width > 0) {
       ctx.filter = "blur(16px) saturate(140%)";
       ctx.globalAlpha = anim * 0.3;
@@ -2185,114 +2148,73 @@ function drawUI() {
 }
 
 
-// 안내 텍스트 그리기 (LED 깜빡임 효과)
-function drawInstructionText() {
-  const responsiveScale = getResponsiveScale();
+// LED 안내문 텍스트 한 줄을 그리는 공통 헬퍼
+function drawLedTextLine(text, y, baseAlpha = 1, scale = null) {
+  const responsiveScale = scale || getResponsiveScale();
 
-  // LED 펄스 효과 (시간 기반) - 속도 줄임
-  instructionPulseTime += 0.05; // 0.1 -> 0.05 (속도 절반으로)
-  const pulse = (Math.sin(instructionPulseTime) + 1) * 0.5; // 0~1 사이 값
-  const alpha = 0.3 + pulse * 0.7; // 0.3~1.0 사이로 펄스 (살짝 보였다가 사라졌다가)
+  instructionPulseTime += 0.05;
+  const pulse = (Math.sin(instructionPulseTime) + 1) * 0.5;
+  const alpha = (0.3 + pulse * 0.7) * baseAlpha;
 
-  push();
   const ctx = drawingContext;
+  push();
   ctx.save();
 
-  // 텍스트 설정
   textAlign(CENTER, CENTER);
   textSize(24 * responsiveScale);
-  if (fontPretendard) {
-    textFont(fontPretendard);
-  }
-  const textY = height / 2 + 30 * responsiveScale - 150 - height * 0.05; // 주인공 버블이 올라간 만큼 위로 조정
+  if (fontPretendard) textFont(fontPretendard);
 
-  // LED 글로우 효과를 위한 여러 레이어 그리기
-  // 1단계: 뿌연 글로우 레이어들
-  ctx.shadowBlur = 15;
-  ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.3})`;
   ctx.shadowOffsetX = 0;
   ctx.shadowOffsetY = 0;
-  fill(255, 255, 255, alpha * 0.2 * 255);
-  text("버블을 터트려 채집했던 그 순간의 감각을 다시 느껴보세요.", width / 2, textY);
 
-  // 2단계: 중간 글로우 레이어
+  ctx.shadowBlur = 15;
+  ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.3})`;
+  fill(255, 255, 255, alpha * 0.2 * 255);
+  text(text, width / 2, y);
+
   ctx.shadowBlur = 10;
   ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.5})`;
   fill(255, 255, 255, alpha * 0.4 * 255);
-  text("버블을 터트려 채집했던 그 순간의 감각을 다시 느껴보세요.", width / 2, textY);
+  text(text, width / 2, y);
 
-  // 3단계: 메인 LED 텍스트
   ctx.shadowBlur = 8;
   ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.8})`;
   fill(255, 255, 255, alpha * 255);
-  text("버블을 터트려 채집했던 그 순간의 감각을 다시 느껴보세요.", width / 2, textY);
+  text(text, width / 2, y);
 
-  // 그림자 리셋
   ctx.shadowBlur = 0;
   ctx.shadowColor = "transparent";
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 0;
 
   ctx.restore();
   pop();
 }
 
+// 안내 텍스트 그리기 (LED 깜빡임 효과)
+function drawInstructionText() {
+  const responsiveScale = getResponsiveScale();
+  const textY = height / 2 + 30 * responsiveScale - 150 - height * 0.05;
+
+  drawLedTextLine(
+    "버블을 터트려 채집했던 그 순간의 감각을 다시 느껴보세요.",
+    textY,
+    1,
+    responsiveScale
+  );
+}
+
 // 풀스크린 모드 안내 텍스트 그리기 (LED 깜빡임 효과)
 function drawFullscreenInstructionText(anim) {
   const responsiveScale = getResponsiveScale();
-  
-  // LED 펄스 효과 (시간 기반) - 속도 줄임
-  instructionPulseTime += 0.05; // 0.1 -> 0.05 (속도 절반으로)
-  const pulse = (Math.sin(instructionPulseTime) + 1) * 0.5; // 0~1 사이 값
-  const alpha = (0.3 + pulse * 0.7) * anim; // 0.3~1.0 사이로 펄스, 애니메이션과 곱함
-
-  push();
-  const ctx = drawingContext;
-  ctx.save();
-
-  // 텍스트 설정
-  textAlign(CENTER, CENTER);
-  textSize(24 * responsiveScale);
-  if (fontPretendard) {
-    textFont(fontPretendard);
-  }
-  
-  // VR 나가기 버튼 아래에 배치
   const topY = 60 * responsiveScale;
   const tagH = 56 * responsiveScale * 1.3;
-  const buttonHeight = tagH;
-  const vrButtonBottom = topY + buttonHeight;
-  const textY = vrButtonBottom + 40 * responsiveScale; // VR 버튼 아래 40px
+  const textY = topY + tagH + 40 * responsiveScale;
 
-  // LED 글로우 효과를 위한 여러 레이어 그리기
-  // 1단계: 뿌연 글로우 레이어들
-  ctx.shadowBlur = 15;
-  ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.3})`;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 0;
-  fill(255, 255, 255, alpha * 0.2 * 255);
-  text("좋아하는 사진에는 하트를 눌러 내 감각을 분석해보세요.", width / 2, textY);
-
-  // 2단계: 중간 글로우 레이어
-  ctx.shadowBlur = 10;
-  ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.5})`;
-  fill(255, 255, 255, alpha * 0.4 * 255);
-  text("좋아하는 사진에는 하트를 눌러 내 감각을 분석해보세요.", width / 2, textY);
-
-  // 3단계: 메인 LED 텍스트
-  ctx.shadowBlur = 8;
-  ctx.shadowColor = `rgba(255, 255, 255, ${alpha * 0.8})`;
-  fill(255, 255, 255, alpha * 255);
-  text("좋아하는 사진에는 하트를 눌러 내 감각을 분석해보세요.", width / 2, textY);
-
-  // 그림자 리셋
-  ctx.shadowBlur = 0;
-  ctx.shadowColor = "transparent";
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 0;
-
-  ctx.restore();
-  pop();
+  drawLedTextLine(
+    "좋아하는 사진에는 하트를 눌러 내 감각을 분석해보세요.",
+    textY,
+    anim,
+    responsiveScale
+  );
 }
 
 /* =========================
@@ -2724,6 +2646,8 @@ function handleUI(id) {
       }
     } else if (id === "name_confirm") {
       confirmNameInput();
+    } else if (id === "name_skip") {
+      skipNameInput();
     }
     return;
   } else if (mode === 3) {
@@ -3014,7 +2938,7 @@ function createNameInputElement() {
 
   // p5 input 생성
   nameInputElement = createInput("");
-  nameInputElement.attribute("placeholder", "이름을 입력해 주세요");
+  nameInputElement.attribute("placeholder", "");
 
   // 기본 p5 스타일 제거용
   nameInputElement.addClass("gallery-name-input");
@@ -3054,11 +2978,25 @@ function createNameInputElement() {
   // p5에서 show/hide 컨트롤할 수 있도록 기본은 block
   nameInputElement.style("display", "block");
   
-  // 엔터 키로 확인
+  // 엔터 키로 확인 (IME 조합 중 Enter 입력 대비)
   nameInputElement.elt.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      confirmNameInput();
+    if (e.key !== "Enter") return;
+    if (e.repeat) {
       e.preventDefault();
+      return;
+    }
+    if (e.isComposing || e.keyCode === 229) {
+      pendingNameConfirm = true; // 조합 종료 후 확인
+      return;
+    }
+    e.preventDefault();
+    requestAnimationFrame(() => confirmNameInput());
+  });
+  
+  nameInputElement.elt.addEventListener("compositionend", () => {
+    if (pendingNameConfirm) {
+      pendingNameConfirm = false;
+      confirmNameInput();
     }
   });
   
@@ -3072,14 +3010,41 @@ function createNameInputElement() {
   });
 }
 
+function getCurrentNameInputValue() {
+  if (!nameInputElement) return "";
+  const el = nameInputElement.elt;
+  if (el && typeof el.value === "string") {
+    return el.value;
+  }
+  if (typeof nameInputElement.value === "function") {
+    return nameInputElement.value();
+  }
+  return "";
+}
+
 // 이름 입력 확인
 function confirmNameInput() {
-  if (nameInputElement && nameInputElement.value().trim().length > 0) {
-    userName = nameInputElement.value().trim();
+  pendingNameConfirm = false;
+  const inputValue = getCurrentNameInputValue().trim();
+  finalizeNameInput(inputValue.length > 0 ? inputValue : "사용자");
+}
+
+function skipNameInput() {
+  finalizeNameInput("사용자");
+}
+
+function finalizeNameInput(finalName) {
+  const resolvedName =
+    finalName && finalName.trim().length > 0 ? finalName.trim() : "사용자";
+  userName = resolvedName;
+  if (nameInputElement) {
     nameInputElement.value("");
     nameInputElement.style("display", "none");
-    mode = 0; // 일반 모드로 전환
+    if (nameInputElement.elt && typeof nameInputElement.elt.blur === "function") {
+      nameInputElement.elt.blur();
+    }
   }
+  mode = 0; // 일반 모드로 전환
 }
 
 // 이름 입력 모달 그리기
@@ -3098,8 +3063,8 @@ function drawNameInputModal() {
   pop();
   
   // 모달 박스 - 좌우로 더 길게
-  const modalW = 750 * s; // 600 -> 750 (더 길게)
-  const modalH = 300 * s;
+  const modalW = 820 * s; // 더 크게 확장
+  const modalH = 440 * s; // 높이 확장으로 위아래 여유 확보
   const modalX = width / 2 - modalW / 2;
   const modalY = height / 2 - modalH / 2;
   
@@ -3110,7 +3075,7 @@ function drawNameInputModal() {
   drawingContext.clip();
   
   // 배경 블러 효과
-  const bgImg = uiImages["bg.png"];
+  const bgImg = uiImages["background"];
   if (bgImg && bgImg.width > 0) {
     drawingContext.filter = "blur(20px)";
     drawingContext.globalAlpha = 0.3;
@@ -3142,8 +3107,8 @@ function drawNameInputModal() {
   push();
   drawingContext.save();
   const edge = drawingContext.createLinearGradient(modalX, modalY, modalX + modalW, modalY + modalH);
-  edge.addColorStop(0, "rgba(255,255,255,0.5)");
-  edge.addColorStop(1, "rgba(255,255,255,0.1)");
+  edge.addColorStop(0, "rgba(160,160,170,0.45)");
+  edge.addColorStop(1, "rgba(110,110,120,0.2)");
   drawingContext.strokeStyle = edge;
   drawingContext.lineWidth = 2;
   drawingContext.globalAlpha = 1;
@@ -3158,42 +3123,67 @@ function drawNameInputModal() {
   textSize(32 * s);
   if (fontPretendard) textFont(fontPretendard);
   fill(255, 255);
-  text("당신의 이름을 입력해주세요", width / 2, modalY + 60 * s);
+  text("당신의 이름을 입력해주세요", width / 2, modalY + 80 * s);
   pop();
   
   // 입력 필드 (HTML input이 그려지므로 배경만 그림) - 패딩 늘림
   const inputW = modalW - 250 * s; // 200 -> 250 (패딩 늘림)
   const inputH = 60 * s;
   const inputX = modalX + (modalW - inputW) / 2; // 중앙 정렬
-  const inputY = modalY + 120 * s;
+  const inputY = modalY + modalH / 2 - inputH / 2; // 중앙 정렬
   
-  // 확인 버튼
-  const buttonW = 200 * s;
-  const buttonH = 50 * s;
-  const buttonX = width / 2 - buttonW / 2;
-  const buttonY = modalY + modalH - 80 * s;
-  
-  // 버튼 배경
-  const inputValue = nameInputElement ? nameInputElement.value().trim() : "";
-  push();
-  fill(255, 255, 255, inputValue.length > 0 ? 100 : 30);
-  roundRectPath(drawingContext, buttonX, buttonY, buttonW, buttonH, 30 * s); // 10 -> 50
-  drawingContext.fill();
-  pop();
-  
-  // 버튼 텍스트
-  push();
-  textAlign(CENTER, CENTER);
-  textSize(26 * s); // 20 -> 26 (더 크게)
+  // 확인 / 건너뛰기 버튼 (태그와 동일한 스타일)
+  const tagFontSize = 16 * 1.4 * s * 1.3;
+  const tagPadding = 28 * s * 1.3;
+  const tagH = 56 * s * 1.3;
+  const tagR = tagH / 2;
+  const inputValue = getCurrentNameInputValue().trim();
+  const confirmLabel = "확인";
+  const skipLabel = "건너뛰기";
+  textSize(tagFontSize);
   if (fontPretendard) textFont(fontPretendard);
-  fill(255, inputValue.length > 0 ? 255 : 100);
-  text("확인", width / 2, buttonY + buttonH / 2 - 2); // 2픽셀 위로 이동
-  pop();
+  const confirmW = textWidth(confirmLabel) + tagPadding * 2;
+  const skipW = textWidth(skipLabel) + tagPadding * 2;
+  const buttonSpacing = 20 * s;
+  const buttonsTotalW = confirmW + skipW + buttonSpacing;
+  const buttonY = modalY + modalH - tagH - 80 * s; // 모달 확대에 맞춰 더 아래 배치
+  const confirmButtonX = width / 2 - buttonsTotalW / 2;
+  const skipButtonX = confirmButtonX + confirmW + buttonSpacing;
+  const confirmAnim = inputValue.length > 0 ? 1.0 : 0.75;
+  const skipAnim = 0.9;
+  
+  drawGlassLabelFullscreen(confirmButtonX, buttonY, confirmW, tagH, tagR, confirmAnim);
+  drawGlassLabelFullscreen(skipButtonX, buttonY, skipW, tagH, tagR, skipAnim);
+  
+  // 버튼 텍스트 (태그 스타일)
+  const drawButtonLabel = (textStr, centerX, anim) => {
+    push();
+    drawingContext.save();
+    drawingContext.textBaseline = "middle";
+    drawingContext.textAlign = "center";
+    drawingContext.globalAlpha = anim;
+    drawingContext.imageSmoothingEnabled = true;
+    drawingContext.imageSmoothingQuality = "high";
+    fill(255, 255);
+    textSize(tagFontSize);
+    if (fontPretendard) textFont(fontPretendard);
+    drawingContext.shadowBlur = 0;
+    drawingContext.shadowOffsetX = 0;
+    drawingContext.shadowOffsetY = 0;
+    const textY = buttonY + tagH / 2 - 2;
+    text(textStr, centerX, textY);
+    drawingContext.restore();
+    pop();
+  };
+  
+  drawButtonLabel(confirmLabel, confirmButtonX + confirmW / 2, confirmAnim);
+  drawButtonLabel(skipLabel, skipButtonX + skipW / 2, skipAnim);
   
   // 히트박스 저장
   uiHitboxes.push(
     { id: "name_input", x: inputX, y: inputY, w: inputW, h: inputH },
-    { id: "name_confirm", x: buttonX, y: buttonY, w: buttonW, h: buttonH }
+    { id: "name_confirm", x: confirmButtonX, y: buttonY, w: confirmW, h: tagH },
+    { id: "name_skip", x: skipButtonX, y: buttonY, w: skipW, h: tagH }
   );
 }
 
@@ -3268,7 +3258,7 @@ function drawAnalysisResult() {
   
   // 결과 박스
   const resultW = Math.min(800 * s, width - 60 * s);
-  const resultH = Math.min(760 * s, height - 60 * s); // 700 -> 760 (위아래 30픽셀씩 추가)
+  const resultH = Math.min(860 * s, height - 60 * s); // 760 -> 860 (위아래 50픽셀 추가)
   const resultX = width / 2 - resultW / 2;
   const resultY = height / 2 - resultH / 2;
   
@@ -3278,7 +3268,7 @@ function drawAnalysisResult() {
   roundRectPath(drawingContext, resultX, resultY, resultW, resultH, 50 * s); // 20 -> 50
   drawingContext.clip();
   
-  const bgImg = uiImages["bg.png"];
+  const bgImg = uiImages["background"];
   if (bgImg && bgImg.width > 0) {
     drawingContext.filter = "blur(20px)";
     drawingContext.globalAlpha = 0.3;
@@ -3323,7 +3313,7 @@ function drawAnalysisResult() {
   textSize(36 * s);
   if (fontPretendard) textFont(fontPretendard);
   fill(255, 255);
-  text(`${userName}님은 이런 태그를 좋아합니다`, width / 2, resultY + 60 * s); // 50 -> 60 (10픽셀 아래로)
+  text(`${userName}님은 이런 태그를 좋아합니다`, width / 2, resultY + 80 * s); // 60 -> 80 (20픽셀 아래로)
   pop();
   
   // 태그 컴포넌트 표시 (확대 모드 스타일)
@@ -3338,7 +3328,7 @@ function drawAnalysisResult() {
     textSize(fontSize);
     if (fontPretendard) textFont(fontPretendard);
     
-    let startY = resultY + 150 * s; // 120 -> 150 (위쪽 패딩 30픽셀 추가)
+    let startY = resultY + 200 * s; // 150 -> 200 (추가로 50픽셀 증가)
     const centerX = width / 2;
     
     // 태그들을 세로로 배치
@@ -3401,26 +3391,34 @@ function drawAnalysisResult() {
     });
   }
   
-  // 다시 시작하기 버튼
-  const buttonW = 300 * s;
-  const buttonH = 60 * s;
-  const buttonX = width / 2 - buttonW / 2;
-  const buttonY = resultY + resultH - 130 * s; // 100 -> 130 (아래쪽 패딩 30픽셀 추가)
-  
-  // 버튼 배경
-  push();
-  fill(255, 255, 255, 100);
-  roundRectPath(drawingContext, buttonX, buttonY, buttonW, buttonH, 30 * s); // 15 -> 30
-  drawingContext.fill();
-  pop();
-  
-  // 버튼 텍스트
-  push();
-  textAlign(CENTER, CENTER);
-  textSize(22 * s);
+  // 다시 시작하기 버튼 (태그 스타일)
+  const buttonLabel = "다시 시작 화면으로 돌아가기";
+  const tagFontSizeBtn = 16 * 1.4 * s * 1.3;
+  const tagPaddingBtn = 28 * s * 1.3;
+  const tagHBtn = 56 * s * 1.3;
+  const tagRBtn = tagHBtn / 2;
+  textSize(tagFontSizeBtn);
   if (fontPretendard) textFont(fontPretendard);
+  const buttonW = textWidth(buttonLabel) + tagPaddingBtn * 2;
+  const buttonH = tagHBtn;
+  const buttonX = width / 2 - buttonW / 2;
+  const buttonY = resultY + resultH - 170 * s; // 태그 높이에 맞춰 여백 확보
+  
+  drawGlassLabelFullscreen(buttonX, buttonY, buttonW, buttonH, tagRBtn, 1.0);
+  
+  push();
+  drawingContext.save();
+  drawingContext.textBaseline = "middle";
+  drawingContext.textAlign = "center";
+  drawingContext.globalAlpha = 1.0;
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
   fill(255, 255);
-  text("다시 시작 화면으로 돌아가기", width / 2, buttonY + buttonH / 2);
+  textSize(tagFontSizeBtn);
+  if (fontPretendard) textFont(fontPretendard);
+  const restartTextY = buttonY + buttonH / 2 - 2;
+  text(buttonLabel, width / 2, restartTextY);
+  drawingContext.restore();
   pop();
   
   // 히트박스 저장

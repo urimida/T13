@@ -1064,7 +1064,7 @@ function preload() {
   navigationBar = loadImage(
     "../public/assets/public-imgs/navigation-bar2.png"
   );
-  bgImage = loadImage("../public/assets/public-imgs/bg.png");
+  bgImage = loadImage("../public/assets/public-imgs/background.webp");
   bubbleCap = loadImage("../public/assets/public-imgs/bubble-cap.png");
 
   // Pretendard 폰트 로드
