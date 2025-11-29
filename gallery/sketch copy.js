@@ -52,6 +52,7 @@ let onboardingTargetPage = 0; // 목표 페이지
 let onboardingAnimProgress = 0; // 애니메이션 진행도 (0~1)
 let onboardingIsAnimating = false; // 애니메이션 중인지
 let onboardingAnimFromOffset = 0; // 애니메이션 시작 시 기준 오프셋
+let onboardingInputBlockUntil = 0; // 터치 입력 차단 시간 (밀리초)
 let bgBuffer = null;
 let spriteCache = null;
 let fpsSmoother = 60;
@@ -1540,6 +1541,13 @@ function pointerStart(x, y, id) {
 
   // 온보딩 화면 처리
   if (mode === 4) {
+    // 이름 입력 후 1초간 터치 입력 차단
+    if (millis() < onboardingInputBlockUntil) {
+      pointerDown = false;
+      pointerId = -1;
+      return;
+    }
+    
     const hit = hitTestUI(x, y);
     if (hit === "onboarding_start") {
       handleUI(hit);
@@ -1740,6 +1748,15 @@ function pointerEnd(x, y) {
   
   // ✅ 온보딩 모드: 터치만으로 다음 페이지로 이동
   if (mode === 4) {
+    // 이름 입력 후 1초간 터치 입력 차단
+    if (millis() < onboardingInputBlockUntil) {
+      if (pointerDown) {
+        pointerDown = false;
+        pointerId = -1;
+      }
+      return;
+    }
+    
     const hit = hitTestUI(x, y);
     if (hit === "onboarding_start") {
       handleUI(hit);
@@ -2397,6 +2414,8 @@ function finalizeNameInput(finalName) {
   onboardingTargetPage = 0;
   onboardingAnimProgress = 0;
   onboardingIsAnimating = false;
+  // 이름 입력 후 1초간 터치 입력 차단
+  onboardingInputBlockUntil = millis() + 1000;
 }
 
 // 이름 입력 모달 그리기
