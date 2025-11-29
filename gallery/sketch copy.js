@@ -53,6 +53,7 @@ let onboardingAnimProgress = 0; // 애니메이션 진행도 (0~1)
 let onboardingIsAnimating = false; // 애니메이션 중인지
 let onboardingAnimFromOffset = 0; // 애니메이션 시작 시 기준 오프셋
 let onboardingInputBlockUntil = 0; // 터치 입력 차단 시간 (밀리초)
+let onboardingLastPageChangeTime = 0; // 마지막 페이지 변경 시간 (밀리초)
 let bgBuffer = null;
 let spriteCache = null;
 let fpsSmoother = 60;
@@ -82,9 +83,6 @@ function preload() {
   onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding2.webp"));
   onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding3.webp"));
   onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding4.webp"));
-  onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding5.webp"));
-  onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding6.webp"));
-  onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding7.webp"));
   
   // 슬라이딩 손 이미지 로드
   slidingHandImage = loadImage(PATHS.uiImgs + "sliding-hand.png");
@@ -120,7 +118,13 @@ function setup() {
   initUI();
   setupPointerEvents();
   createNameInputElement();
-  mode = 2;
+  mode = 4; // 온보딩 화면부터 시작
+  onboardingCurrentPage = 0;
+  onboardingOffsetX = 0;
+  onboardingTargetPage = 0;
+  onboardingAnimProgress = 0;
+  onboardingIsAnimating = false;
+  onboardingLastPageChangeTime = millis(); // 초기 페이지 변경 시간 설정
   lastActiveTime = millis();
   initWakeLock();
 }
@@ -1757,6 +1761,16 @@ function pointerEnd(x, y) {
       return;
     }
     
+    // 페이지 전환 후 0.7초 지연 확인
+    const timeSinceLastPageChange = millis() - onboardingLastPageChangeTime;
+    if (timeSinceLastPageChange < 700) {
+      if (pointerDown) {
+        pointerDown = false;
+        pointerId = -1;
+      }
+      return;
+    }
+    
     const hit = hitTestUI(x, y);
     if (hit === "onboarding_start") {
       handleUI(hit);
@@ -2062,7 +2076,11 @@ function handleUI(id) {
     // 온보딩 화면
     if (id === "onboarding_start") {
       // 시작하기 버튼 클릭
-      mode = 0; // 일반 모드로 전환
+      mode = 2; // 이름 입력 모달로 전환
+      if (nameInputElement) {
+        nameInputElement.style("display", "block");
+        nameInputElement.elt.focus();
+      }
     }
     return;
   } else if (mode === 2) {
@@ -2407,13 +2425,8 @@ function finalizeNameInput(finalName) {
       nameInputElement.elt.blur();
     }
   }
-  // 온보딩 화면으로 전환
-  mode = 4;
-  onboardingCurrentPage = 0;
-  onboardingOffsetX = 0;
-  onboardingTargetPage = 0;
-  onboardingAnimProgress = 0;
-  onboardingIsAnimating = false;
+  // 일반 모드로 전환 (온보딩은 이미 완료됨)
+  mode = 0;
   // 이름 입력 후 1초간 터치 입력 차단
   onboardingInputBlockUntil = millis() + 1000;
 }
@@ -2499,11 +2512,20 @@ function drawNameInputModal() {
   const titleY = Math.max(modalY + 40 * s, inputY - inputH / 2 - titleOffset);
   const titleLift = 20 * s;
   push();
-  textAlign(CENTER, CENTER);
-  textSize(32 * s);
+  drawingContext.save();
+  drawingContext.textBaseline = "middle";
+  drawingContext.textAlign = "center";
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  const titleFontSize = 32 * s;
   if (fontPretendard) textFont(fontPretendard);
-  fill(255, 255);
-  text("당신의 이름은 무엇인가요?", width / 2, titleY - titleLift);
+  drawingContext.font = `600 ${titleFontSize}px "Pretendard Variable", Pretendard, sans-serif`; // 세미볼드
+  drawingContext.fillStyle = `rgba(255, 255, 255, 1.0)`;
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowOffsetX = 0;
+  drawingContext.shadowOffsetY = 0;
+  drawingContext.fillText("당신의 이름은 무엇인가요?", width / 2, titleY - titleLift);
+  drawingContext.restore();
   pop();
   
   // 확인 / 건너뛰기 버튼 (태그와 동일한 스타일)
@@ -2524,35 +2546,34 @@ function drawNameInputModal() {
   const buttonY = inputY + inputH + verticalGapBelowInput;
   const confirmButtonX = width / 2 - buttonsTotalW / 2;
   const skipButtonX = confirmButtonX + confirmW + buttonSpacing;
-  const confirmAnim = inputValue.length > 0 ? 1.0 : 0.75;
-  const skipAnim = 0.9;
+  const buttonAnim = 1.0; // 두 버튼 동일한 스타일
   
-  drawGlassLabelFullscreen(confirmButtonX, buttonY, confirmW, tagH, tagR, confirmAnim);
-  drawGlassLabelFullscreen(skipButtonX, buttonY, skipW, tagH, tagR, skipAnim);
+  drawGlassLabelFullscreen(confirmButtonX, buttonY, confirmW, tagH, tagR, buttonAnim);
+  drawGlassLabelFullscreen(skipButtonX, buttonY, skipW, tagH, tagR, buttonAnim);
   
   // 버튼 텍스트 (태그 스타일)
-  const drawButtonLabel = (textStr, centerX, anim) => {
+  const drawButtonLabel = (textStr, centerX) => {
     push();
     drawingContext.save();
     drawingContext.textBaseline = "middle";
     drawingContext.textAlign = "center";
-    drawingContext.globalAlpha = anim;
+    drawingContext.globalAlpha = buttonAnim;
     drawingContext.imageSmoothingEnabled = true;
     drawingContext.imageSmoothingQuality = "high";
-    fill(255, 255);
-    textSize(tagFontSize);
     if (fontPretendard) textFont(fontPretendard);
+    drawingContext.font = `600 ${tagFontSize}px "Pretendard Variable", Pretendard, sans-serif`; // 세미볼드
+    drawingContext.fillStyle = `rgba(255, 255, 255, ${buttonAnim})`;
     drawingContext.shadowBlur = 0;
     drawingContext.shadowOffsetX = 0;
     drawingContext.shadowOffsetY = 0;
-    const textY = buttonY + tagH / 2 - 2;
-    text(textStr, centerX, textY);
+    const textY = buttonY + tagH / 2 + 1; // 1픽셀 아래로 이동
+    drawingContext.fillText(textStr, centerX, textY);
     drawingContext.restore();
     pop();
   };
   
-  drawButtonLabel(confirmLabel, confirmButtonX + confirmW / 2, confirmAnim);
-  drawButtonLabel(skipLabel, skipButtonX + skipW / 2, skipAnim);
+  drawButtonLabel(confirmLabel, confirmButtonX + confirmW / 2);
+  drawButtonLabel(skipLabel, skipButtonX + skipW / 2);
   
   // 히트박스 저장
   uiHitboxes.push(
@@ -2600,18 +2621,18 @@ function drawTasteAnalysisButton() {
   drawingContext.imageSmoothingEnabled = true;
   drawingContext.imageSmoothingQuality = "high";
   drawingContext.globalAlpha = anim;
-  fill(255, 255); // 완전히 하얀색
-  textSize(26 * s); // 22 -> 26 (더 크게)
+  const fontSize = 26 * s; // 22 -> 26 (더 크게)
   if (fontPretendard) textFont(fontPretendard);
-  drawingContext.font = `600 ${26 * s}px "Pretendard Variable", Pretendard, sans-serif`; // 세미볼드
+  drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`; // 버블 설명란 제목과 동일한 굵기
+  drawingContext.fillStyle = `rgba(255, 255, 255, ${anim})`;
   drawingContext.shadowBlur = 0;
   drawingContext.shadowOffsetX = 0;
   drawingContext.shadowOffsetY = 0;
   const buttonText = hasFavorites 
     ? `${userName}님의 감각 알아보기 (${favoriteBubbles.length})`
     : `${userName}님의 감각 알아보기`;
-  const textY = buttonY + buttonH / 2 - 2; // 텍스트를 2픽셀 위로 이동
-  text(buttonText, buttonX + buttonW / 2, textY);
+  const textY = buttonY + buttonH / 2 + 1; // 텍스트를 중앙에서 1픽셀 아래
+  drawingContext.fillText(buttonText, buttonX + buttonW / 2, textY);
   drawingContext.restore();
   pop();
   
@@ -2684,11 +2705,20 @@ function drawAnalysisResult() {
   
   // 제목
   push();
-  textAlign(CENTER, CENTER);
-  textSize(36 * s);
+  drawingContext.save();
+  drawingContext.textBaseline = "middle";
+  drawingContext.textAlign = "center";
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  const titleFontSize = 36 * s;
   if (fontPretendard) textFont(fontPretendard);
-  fill(255, 255);
-  text(`${userName}님은 이런 감각을 선호합니다.`, width / 2, resultY + 80 * s); // 60 -> 80 (20픽셀 아래로)
+  drawingContext.font = `600 ${titleFontSize}px "Pretendard Variable", Pretendard, sans-serif`; // 세미볼드
+  drawingContext.fillStyle = `rgba(255, 255, 255, 1.0)`;
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowOffsetX = 0;
+  drawingContext.shadowOffsetY = 0;
+  drawingContext.fillText(`${userName}님은 이런 감각을 선호합니다.`, width / 2, resultY + 80 * s + 20); // 10픽셀 더 아래로
+  drawingContext.restore();
   pop();
   
   // 태그 컴포넌트 표시 (확대 모드 스타일)
@@ -2788,11 +2818,14 @@ function drawAnalysisResult() {
   drawingContext.globalAlpha = 1.0;
   drawingContext.imageSmoothingEnabled = true;
   drawingContext.imageSmoothingQuality = "high";
-  fill(255, 255);
-  textSize(tagFontSizeBtn);
   if (fontPretendard) textFont(fontPretendard);
-  const restartTextY = buttonY + buttonH / 2 - 2;
-  text(buttonLabel, width / 2, restartTextY);
+  drawingContext.font = `400 ${tagFontSizeBtn}px "Pretendard Variable", Pretendard, sans-serif`; // 일반 굵기
+  drawingContext.fillStyle = `rgba(255, 255, 255, 1.0)`;
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowOffsetX = 0;
+  drawingContext.shadowOffsetY = 0;
+  const restartTextY = buttonY + buttonH / 2; // 2픽셀 아래로 이동
+  drawingContext.fillText(buttonLabel, width / 2, restartTextY);
   drawingContext.restore();
   pop();
   
@@ -2862,8 +2895,8 @@ function analyzeFavoriteTags() {
 }
 
 function updateOnboarding() {
-  // 슬라이딩 손 애니메이션 업데이트 (1~7번 페이지일 때)
-  if (onboardingCurrentPage >= 0 && onboardingCurrentPage <= 6) {
+  // 슬라이딩 손 애니메이션 업데이트 (1~4번 페이지일 때)
+  if (onboardingCurrentPage >= 0 && onboardingCurrentPage <= 3) {
     slidingHandAnimTime += deltaTime / 1000; // 초 단위로 변환
   } else {
     slidingHandAnimTime = 0; // 다른 페이지로 이동하면 리셋
@@ -2895,6 +2928,7 @@ function updateOnboarding() {
     onboardingIsAnimating = false;
     onboardingAnimProgress = 0;
     onboardingAnimFromOffset = 0;
+    onboardingLastPageChangeTime = millis(); // 페이지 변경 시간 기록
   }
 }
 
@@ -2935,8 +2969,8 @@ function drawOnboarding() {
     }
   }
   
-  // 첫 번째부터 일곱 번째 온보딩 화면에 손 애니메이션 및 텍스트 (translate 밖에서 그리기)
-  if (onboardingCurrentPage >= 0 && onboardingCurrentPage <= 6 && slidingHandImage && slidingHandImage.width > 0) {
+  // 첫 번째부터 네 번째 온보딩 화면에 손 애니메이션 및 텍스트 (translate 밖에서 그리기)
+  if (onboardingCurrentPage >= 0 && onboardingCurrentPage <= 3 && slidingHandImage && slidingHandImage.width > 0) {
     const s = getResponsiveScale();
     
     // 손 깜빡거리는 애니메이션: 화면 중앙에서 깜빡거림
@@ -2989,18 +3023,6 @@ function drawOnboarding() {
       // 4번 페이지: 이미지의 50%, 50% 위치 (중앙)
       imageRelativeX = 0.86;
       imageRelativeY = 0.6;
-    } else if (onboardingCurrentPage === 4) {
-      // 5번 페이지: 이미지의 50%, 50% 위치 (중앙)
-      imageRelativeX = 0.75;
-      imageRelativeY = 0.6;
-    } else if (onboardingCurrentPage === 5) {
-      // 6번 페이지: 이미지의 50%, 50% 위치 (중앙)
-      imageRelativeX = 1.2;
-      imageRelativeY = 0.58;
-    } else if (onboardingCurrentPage === 6) {
-      // 7번 페이지: 이미지의 50%, 50% 위치 (중앙)
-      imageRelativeX = 0.8;
-      imageRelativeY = 1.3;
     }
     
     // 이미지 좌표계를 화면 좌표계로 변환
@@ -3068,13 +3090,15 @@ function drawOnboarding() {
     drawingContext.textAlign = "center";
     drawingContext.imageSmoothingEnabled = true;
     drawingContext.imageSmoothingQuality = "high";
-    fill(255, alpha * 255);
+    drawingContext.globalAlpha = alpha;
     const fontSize = 20 * s * 2; // 2배 크기
-    textSize(fontSize);
     if (fontPretendard) textFont(fontPretendard);
     drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
+    drawingContext.fillStyle = `rgba(255, 255, 255, ${alpha})`;
     drawingContext.shadowBlur = 0;
-    text("시작하기", buttonX + buttonW / 2, buttonY + buttonH / 2 - 2);
+    drawingContext.shadowOffsetX = 0;
+    drawingContext.shadowOffsetY = 0;
+    drawingContext.fillText("시작하기", buttonX + buttonW / 2, buttonY + buttonH / 2 + 1);
     drawingContext.restore();
     pop();
     
