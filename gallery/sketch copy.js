@@ -3944,14 +3944,14 @@ function handleOnboardingPointer(x, y, type) {
     const dt = millis() - (onboardingDragStartTime || millis());
 
     // 화면 크기에 비례한 임계값 (태블릿에서도 민감하게 반응)
-    const swipeThreshold = width * 0.08; // 화면 너비의 8%만 움직여도 인식
-    const velocityThreshold = 0.2; // 빠르게 튕긴 스와이프도 더 쉽게 인식
+    const swipeThreshold = width * 0.02; // 화면 너비의 2%만 움직여도 인식 (더 민감하게)
+    const velocityThreshold = 0.1; // 빠르게 튕긴 스와이프도 더 쉽게 인식 (더 낮은 임계값)
     const velocity = Math.abs(dx) / Math.max(dt, 1);
 
     let nextPage = onboardingCurrentPage;
 
     // 왼쪽으로 스와이프 → 다음 페이지
-    if (dx < -swipeThreshold || (dx < -10 && velocity > velocityThreshold)) {
+    if (dx < -swipeThreshold || (dx < -5 && velocity > velocityThreshold)) {
       if (onboardingCurrentPage < onboardingImages.length) {
         nextPage = onboardingCurrentPage + 1;
       } else {
@@ -3961,7 +3961,7 @@ function handleOnboardingPointer(x, y, type) {
       }
     }
     // 오른쪽으로 스와이프 → 이전 페이지
-    else if (dx > swipeThreshold || (dx > 10 && velocity > velocityThreshold)) {
+    else if (dx > swipeThreshold || (dx > 5 && velocity > velocityThreshold)) {
       nextPage = Math.max(0, onboardingCurrentPage - 1);
     }
 
