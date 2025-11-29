@@ -732,7 +732,7 @@ function resetToInitialView() {
 }
 
 function updateFullscreen() {
-  // 관성 없음 - 드래그 종료 시 즉시 정지
+  // 관성 없음 - 드래그 종료 시 즉시 정지 (드래그 중에는 부드러운 움직임 유지)
   if (!fullscreenImageDragging) {
     fullscreenImageVel.x = 0;
     fullscreenImageVel.y = 0;
@@ -1698,7 +1698,7 @@ function pointerMove(x, y) {
       panController.onDrag(dx, dy);
       lastActiveTime = millis();
     } else if (dragMode === 3) {
-      // VR 모드 이미지 드래그 (부드러운 속도 기반 이동)
+      // VR 모드 이미지 드래그 (즉각 반응, 대각선 부드럽게)
       if (!fullscreenImageDragging) {
         fullscreenImageDragging = true;
         // 드래그 시작 시 초기화
@@ -1708,17 +1708,15 @@ function pointerMove(x, y) {
       
       // 프레임 간 상대 이동 사용 (대각선 이동 부드럽게 처리)
       // dx, dy는 이미 위에서 계산됨 (x - lastX, y - lastY)
-      const sensitivity = INTERACT.panSensitivity;
+      const sensitivity = 1.2; // 약간 높은 감도
       
-      // 즉시 오프셋 적용 (탐색 모드처럼 부드럽게)
+      // 즉시 오프셋 적용 (대각선 이동도 부드럽게)
       fullscreenImageOffset.x += dx * sensitivity;
       fullscreenImageOffset.y += dy * sensitivity;
       
-      // 속도 추적 (관성용, 드래그 종료 후 사용)
-      // 부드러운 속도 추적을 위해 지수 이동 평균 사용
-      const smoothingFactor = 0.7; // 0~1, 높을수록 더 부드러움
-      fullscreenImageVel.x = fullscreenImageVel.x * smoothingFactor + (dx * sensitivity) * (1 - smoothingFactor);
-      fullscreenImageVel.y = fullscreenImageVel.y * smoothingFactor + (dy * sensitivity) * (1 - smoothingFactor);
+      // 속도 추적 (드래그 종료 시 0으로 초기화되므로 관성 없음)
+      fullscreenImageVel.x = dx * sensitivity;
+      fullscreenImageVel.y = dy * sensitivity;
       
       lastActiveTime = millis();
     }
@@ -2674,7 +2672,6 @@ function drawFavoriteGuideModal() {
   tint.addColorStop(1, "rgba(255,255,255,0.05)");
   drawingContext.fillStyle = tint;
   drawingContext.fillRect(modalX, modalY, modalW, modalH);
-  
   drawingContext.restore();
   pop();
   
