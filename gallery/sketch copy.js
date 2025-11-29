@@ -6,6 +6,9 @@ let imageLoader = null; // ImageLoader 인스턴스
 let bubbles = null;
 let bubbleCount = 0;
 
+// Pointer Events 지원 여부 체크 (중복 이벤트 방지)
+let hasPointerEvents = typeof window !== "undefined" && "PointerEvent" in window;
+
 // pooled arrays / temp buffers (no per-frame alloc)
 
 // input
@@ -30,6 +33,7 @@ let fullscreenAnim = 0, fullscreenExitAnim = 0;
 let fullscreenTagLayout = [];
 let fullscreenStartPos = { x: 0, y: 0, r: 0 };
 let fullscreenImageOffset = { x: 0, y: 0 };
+let fullscreenImageVel = { x: 0, y: 0 };
 let fullscreenImageDragStart = { x: 0, y: 0 };
 let fullscreenImageDragging = false;
 let selectedTag = null;
@@ -720,12 +724,20 @@ function resetToInitialView() {
   // 이미지 드래그 오프셋 초기화
   fullscreenImageOffset.x = 0;
   fullscreenImageOffset.y = 0;
+  fullscreenImageVel.x = 0;
+  fullscreenImageVel.y = 0;
   fullscreenImageDragging = false;
 
   showInstructionText = true;
 }
 
 function updateFullscreen() {
+  // 관성 없음 - 드래그 종료 시 즉시 정지
+  if (!fullscreenImageDragging) {
+    fullscreenImageVel.x = 0;
+    fullscreenImageVel.y = 0;
+  }
+  
   if (fullscreenExitAnim > 0) {
     // 나가는 애니메이션 (1 -> 0) - 더 부드럽고 천천히
     fullscreenExitAnim -= 0.05; // 속도를 더 느리게 조정
@@ -767,6 +779,8 @@ function updateFullscreen() {
       clearSelectedTagState();
       fullscreenImageOffset.x = 0;
       fullscreenImageOffset.y = 0;
+      fullscreenImageVel.x = 0;
+      fullscreenImageVel.y = 0;
       fullscreenImageDragging = false;
       showInstructionText = true;
     }
@@ -1626,6 +1640,9 @@ function pointerStart(x, y, id) {
     fullscreenImageDragStart.x = x;
     fullscreenImageDragStart.y = y;
     fullscreenImageDragging = false;
+    // 드래그 시작 시 속도 초기화 (부드러운 시작)
+    fullscreenImageVel.x = 0;
+    fullscreenImageVel.y = 0;
     dragMode = 3; // VR 이미지 드래그 모드
     // pointerDown은 true로 유지하여 pointerEnd에서 태그 클릭 처리 가능하도록
     return;
@@ -1681,16 +1698,28 @@ function pointerMove(x, y) {
       panController.onDrag(dx, dy);
       lastActiveTime = millis();
     } else if (dragMode === 3) {
-      // VR 모드 이미지 드래그
+      // VR 모드 이미지 드래그 (부드러운 속도 기반 이동)
       if (!fullscreenImageDragging) {
         fullscreenImageDragging = true;
+        // 드래그 시작 시 초기화
+        fullscreenImageDragStart.x = x;
+        fullscreenImageDragStart.y = y;
       }
-      const dragDx = x - fullscreenImageDragStart.x;
-      const dragDy = y - fullscreenImageDragStart.y;
-      fullscreenImageOffset.x += dragDx;
-      fullscreenImageOffset.y += dragDy;
-      fullscreenImageDragStart.x = x;
-      fullscreenImageDragStart.y = y;
+      
+      // 프레임 간 상대 이동 사용 (대각선 이동 부드럽게 처리)
+      // dx, dy는 이미 위에서 계산됨 (x - lastX, y - lastY)
+      const sensitivity = INTERACT.panSensitivity;
+      
+      // 즉시 오프셋 적용 (탐색 모드처럼 부드럽게)
+      fullscreenImageOffset.x += dx * sensitivity;
+      fullscreenImageOffset.y += dy * sensitivity;
+      
+      // 속도 추적 (관성용, 드래그 종료 후 사용)
+      // 부드러운 속도 추적을 위해 지수 이동 평균 사용
+      const smoothingFactor = 0.7; // 0~1, 높을수록 더 부드러움
+      fullscreenImageVel.x = fullscreenImageVel.x * smoothingFactor + (dx * sensitivity) * (1 - smoothingFactor);
+      fullscreenImageVel.y = fullscreenImageVel.y * smoothingFactor + (dy * sensitivity) * (1 - smoothingFactor);
+      
       lastActiveTime = millis();
     }
   }
@@ -1928,6 +1957,12 @@ function pointerEnd(x, y) {
     }
     
     clickedBubbleAtPress = null;
+  } else if (dragMode === 3) {
+    // VR 모드 이미지 드래그 종료 - 관성 없음, 즉시 정지
+    fullscreenImageDragging = false;
+    fullscreenImageVel.x = 0;
+    fullscreenImageVel.y = 0;
+    clickedBubbleAtPress = null;
   } else {
     // 다른 모드에서도 버블 클릭 감지
     if (!dragging && mode === 0) {
@@ -2053,24 +2088,10 @@ function mouseReleased() {
   if (pointerDown) pointerEnd(mouseX, mouseY); 
 }
 
-function touchStarted() {
-  if (touches.length > 0 && !pointerDown) {
-    pointerStart(touches[0].x, touches[0].y, touches[0].id || 0);
-  }
-  return false;
-}
-function touchMoved() {
-  if (touches.length > 0 && pointerDown) {
-    pointerMove(touches[0].x, touches[0].y);
-  }
-  return false;
-}
-function touchEnded() {
-  if (pointerDown) {
-    pointerEnd(lastX, lastY);
-  }
-  return false;
-}
+// 터치 이벤트 제거 - Pointer Events만 사용
+// function touchStarted() { ... }
+// function touchMoved() { ... }
+// function touchEnded() { ... }
 
 function hitTestUI(x, y) {
   for (let i = 0; i < uiHitboxes.length; i++) {
@@ -2155,6 +2176,8 @@ function enterFullscreen(idx) {
   // 이미지 드래그 오프셋 초기화
   fullscreenImageOffset.x = 0;
   fullscreenImageOffset.y = 0;
+  fullscreenImageVel.x = 0;
+  fullscreenImageVel.y = 0;
   fullscreenImageDragging = false;
   
   // 선택된 태그와 연관 버블 초기화 (새 버블로 이동할 때)
