@@ -23,6 +23,8 @@ let bubbleData = []; // 버블 제목/태그 데이터
 let imageFiles = []; // 이미지 파일명 목록 (전역으로 이동)
 let pretendardFont; // Pretendard 폰트
 let showModal = false; // 모달 표시 여부
+let showErrorMessage = null; // 에러 메시지 표시 함수 (나중에 정의)
+let errorMessage = null; // 현재 표시할 에러 메시지
 
 // 전체 화면 모드
 let fullscreenMode = false; // 전체 화면 모드 여부
@@ -449,8 +451,11 @@ function loadVisibleBubbleImages() {
   }
 }
 
-// 개별 버블 이미지 로드 함수
-function loadBubbleImage(imageIndex) {
+// 개별 버블 이미지 로드 함수 (재시도 로직 포함)
+const imageRetryCount = new Map(); // 이미지별 재시도 횟수
+const MAX_IMAGE_RETRIES = 2; // 이미지 재시도 최대 횟수
+
+function loadBubbleImage(imageIndex, retryCount = 0) {
   if (imageIndex === null || imageIndex >= imageFiles.length) {
     console.warn(`[Gallery] loadBubbleImage: 잘못된 인덱스 ${imageIndex} (imageFiles.length: ${imageFiles.length})`);
     return;
@@ -459,33 +464,62 @@ function loadBubbleImage(imageIndex) {
 
   imageLoading.add(imageIndex);
   const imagePath = `../public/assets/bubble-imgs/${imageFiles[imageIndex]}`;
-  console.log(`[Gallery] 이미지 로딩 시작: ${imagePath}`);
+  console.log(`[Gallery] 이미지 로딩 시작 (시도 ${retryCount + 1}/${MAX_IMAGE_RETRIES + 1}): ${imagePath}`);
+
+  // 타임아웃 설정 (8초)
+  const loadStartTime = millis();
+  const timeoutId = setTimeout(() => {
+    if (imageLoading.has(imageIndex)) {
+      console.warn(`[Gallery] 이미지 로드 타임아웃: ${imagePath}`);
+      imageLoading.delete(imageIndex);
+      handleImageLoadFailure(imageIndex, retryCount, 'timeout');
+    }
+  }, 8000);
 
   loadImage(
     imagePath,
     (img) => {
+      clearTimeout(timeoutId);
       // 로드 성공
       if (img && img.width > 0) {
         bubbleImages[imageIndex] = img;
         imageLoaded.add(imageIndex);
+        imageRetryCount.delete(imageIndex); // 성공 시 재시도 카운터 삭제
         console.log(`[Gallery] 이미지 로드 성공: ${imageFiles[imageIndex]}`);
         
         // 해당 이미지를 사용하는 스프라이트 캐시 무효화
         invalidateSpriteCacheForImage(imageIndex);
       } else {
         console.error(`[Gallery] 이미지 로드 실패: ${imageFiles[imageIndex]} (이미지가 유효하지 않음)`);
+        handleImageLoadFailure(imageIndex, retryCount, 'invalid');
       }
       imageLoading.delete(imageIndex);
     },
     (e) => {
+      clearTimeout(timeoutId);
       // 로드 실패
       console.error(
         `[Gallery] bubbleImage[${imageIndex}] (${imageFiles[imageIndex]}) 로딩 실패:`,
         e
       );
       imageLoading.delete(imageIndex);
+      handleImageLoadFailure(imageIndex, retryCount, 'error');
     }
   );
+}
+
+// 이미지 로드 실패 처리 함수
+function handleImageLoadFailure(imageIndex, retryCount, reason) {
+  if (retryCount < MAX_IMAGE_RETRIES) {
+    const delay = Math.min(1000 * Math.pow(2, retryCount), 3000); // 최대 3초
+    console.log(`[Gallery] 이미지 재시도 예정 (${delay}ms 후): ${imageFiles[imageIndex]}`);
+    setTimeout(() => {
+      loadBubbleImage(imageIndex, retryCount + 1);
+    }, delay);
+  } else {
+    console.warn(`[Gallery] 이미지 로드 최종 실패 (재시도 횟수 초과): ${imageFiles[imageIndex]}`);
+    imageRetryCount.delete(imageIndex);
+  }
 }
 
 // 특정 이미지를 사용하는 스프라이트 캐시 무효화
@@ -1459,16 +1493,35 @@ function assignLanguagesToBubbles() {
   }
 }
 
-// 공용 버블 데이터 JSON 비동기 로드 함수
-async function loadBubbleDataFromJSON() {
+// 공용 버블 데이터 JSON 비동기 로드 함수 (재시도 로직 포함)
+let jsonLoadRetryCount = 0;
+const MAX_JSON_RETRIES = 3;
+let isInitializing = true; // 초기화 상태 플래그
+
+async function loadBubbleDataFromJSON(retryCount = 0) {
   try {
     const jsonPath = "../public/assets/data/bubbles.json";
-    console.log(`[Gallery] JSON 로딩 시작: ${jsonPath}`);
-    const response = await fetch(jsonPath);
+    console.log(`[Gallery] JSON 로딩 시작 (시도 ${retryCount + 1}/${MAX_JSON_RETRIES + 1}): ${jsonPath}`);
+    
+    // 타임아웃 설정 (10초)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    
+    const response = await fetch(jsonPath, { 
+      signal: controller.signal,
+      cache: 'no-cache' // 캐시 문제 방지
+    });
+    clearTimeout(timeoutId);
+    
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     const bubblesJson = await response.json();
+    
+    // JSON 유효성 검사
+    if (!bubblesJson || typeof bubblesJson !== 'object') {
+      throw new Error('Invalid JSON format');
+    }
     
     console.log("[Gallery] JSON 로드 성공:", bubblesJson);
     
@@ -1478,6 +1531,7 @@ async function loadBubbleDataFromJSON() {
       console.log(`[Gallery] JSON에서 ${imageFiles.length}개의 이미지 파일 로드됨`);
     } else {
       console.error("[Gallery] JSON에서 imageFiles를 로드할 수 없습니다", bubblesJson);
+      throw new Error('imageFiles not found in JSON');
     }
     
     // 버블 데이터 (JSON에서 로드)
@@ -1492,6 +1546,7 @@ async function loadBubbleDataFromJSON() {
       console.log(`[Gallery] JSON에서 ${bubbleData.length}개의 버블 데이터 로드됨`);
       
       // 버블 이미지 배열 초기화 (지연 로딩을 위해 null로 초기화)
+      bubbleImages = []; // 기존 배열 초기화
       for (let i = 0; i < imageFiles.length; i++) {
         bubbleImages.push(null);
       }
@@ -1515,17 +1570,122 @@ async function loadBubbleDataFromJSON() {
       
       // 버블 생성 후 화면에 보이는 이미지 로드 시작
       loadVisibleBubbleImages();
+      
+      // 초기화 완료
+      isInitializing = false;
+      jsonLoadRetryCount = 0; // 성공 시 재시도 카운터 리셋
     } else {
       console.error("[Gallery] JSON에서 bubbles를 로드할 수 없습니다", bubblesJson);
+      throw new Error('bubbles array not found in JSON');
     }
   } catch (error) {
-    console.error("[Gallery] JSON 로드 중 오류 발생:", error);
-    bubbleData = [];
-    imageFiles = [];
+    console.error(`[Gallery] JSON 로드 중 오류 발생 (시도 ${retryCount + 1}/${MAX_JSON_RETRIES + 1}):`, error);
+    
+    // 재시도 로직 (지수 백오프)
+    if (retryCount < MAX_JSON_RETRIES) {
+      const delay = Math.min(1000 * Math.pow(2, retryCount), 5000); // 최대 5초
+      console.log(`[Gallery] ${delay}ms 후 재시도...`);
+      setTimeout(() => {
+        loadBubbleDataFromJSON(retryCount + 1);
+      }, delay);
+    } else {
+      // 최대 재시도 횟수 초과 시 폴백 데이터 사용
+      console.error("[Gallery] JSON 로드 실패: 최대 재시도 횟수 초과. 폴백 모드로 전환합니다.");
+      bubbleData = [];
+      imageFiles = [];
+      isInitializing = false;
+      
+      // 사용자에게 에러 표시 (간단한 메시지)
+      showErrorMessage("데이터를 불러오는 중 문제가 발생했습니다. 잠시 후 새로고침해주세요.");
+      
+      // 30초 후 자동 재시도
+      setTimeout(() => {
+        console.log("[Gallery] 자동 재시도 시작...");
+        jsonLoadRetryCount = 0;
+        loadBubbleDataFromJSON(0);
+      }, 30000);
+    }
   }
 }
 
+// 에러 메시지 표시 함수 정의
+function showErrorMessage(message) {
+  errorMessage = message;
+  // 5초 후 자동으로 사라지게 (또는 사용자가 닫을 수 있게)
+  setTimeout(() => {
+    errorMessage = null;
+  }, 5000);
+}
+
+// 로딩 화면 그리기
+function drawLoadingScreen() {
+  background(BG_COLOR);
+  push();
+  textAlign(CENTER, CENTER);
+  if (pretendardFont) {
+    textFont(pretendardFont);
+  }
+  fill(255, 255, 255, 200);
+  textSize(18);
+  text("로딩 중...", width / 2, height / 2);
+  
+  // 로딩 애니메이션 (점 3개)
+  const dots = ".".repeat((Math.floor(millis() / 500) % 3) + 1);
+  fill(255, 255, 255, 150);
+  textSize(14);
+  text(dots, width / 2, height / 2 + 40);
+  pop();
+}
+
+// 에러 메시지 그리기
+function drawErrorMessage() {
+  if (!errorMessage) return;
+  
+  push();
+  drawingContext.save();
+  
+  // 반투명 배경
+  fill(0, 0, 0, 200);
+  noStroke();
+  rect(0, 0, width, height);
+  
+  // 에러 메시지 박스
+  const boxWidth = width * 0.8;
+  const boxHeight = 120;
+  const boxX = (width - boxWidth) / 2;
+  const boxY = (height - boxHeight) / 2;
+  
+  // 글래스모피즘 스타일
+  const gradient = drawingContext.createLinearGradient(
+    boxX, boxY,
+    boxX, boxY + boxHeight
+  );
+  gradient.addColorStop(0, "rgba(255, 255, 255, 0.2)");
+  gradient.addColorStop(1, "rgba(255, 255, 255, 0.1)");
+  drawingContext.fillStyle = gradient;
+  drawingContext.shadowBlur = 20;
+  drawingContext.shadowColor = "rgba(0, 0, 0, 0.5)";
+  roundedRect(boxX, boxY, boxWidth, boxHeight, 20);
+  drawingContext.fill();
+  
+  // 텍스트
+  if (pretendardFont) {
+    textFont(pretendardFont);
+  }
+  textAlign(CENTER, CENTER);
+  fill(255, 255, 255, 255);
+  textSize(16);
+  text(errorMessage, width / 2, height / 2);
+  
+  drawingContext.restore();
+  pop();
+}
+
 function setup() {
+  // 초기화 상태 설정
+  isInitializing = true;
+  errorMessage = null;
+  
   // 태블릿/모바일 최적화
   const isMobile = isMobileOrTablet();
   
@@ -1616,8 +1776,27 @@ function setup() {
     );
   }
 
-  // 초기 화면에 보이는 버블 이미지 로드
-  loadVisibleBubbleImages();
+  // 초기 화면에 보이는 버블 이미지 로드 (초기화 완료 후에만)
+  // loadBubbleDataFromJSON에서 호출됨
+  
+  // 네트워크 상태 모니터링
+  window.addEventListener('online', () => {
+    console.log('[Gallery] 네트워크 연결 복구됨');
+    errorMessage = null;
+    // 데이터가 없으면 재시도
+    if (bubbleData.length === 0 && !isInitializing) {
+      console.log('[Gallery] 데이터 재로드 시작...');
+      jsonLoadRetryCount = 0;
+      loadBubbleDataFromJSON(0);
+    }
+  });
+  
+  window.addEventListener('offline', () => {
+    console.warn('[Gallery] 네트워크 연결 끊어짐');
+    if (!errorMessage) {
+      showErrorMessage("네트워크 연결이 끊어졌습니다.");
+    }
+  });
 
   // 모바일 스크롤 방지
   document.addEventListener(
@@ -1742,6 +1921,12 @@ function setupPointerBridges() {
 }
 
 function draw() {
+  // 초기화 중이면 로딩 화면 표시
+  if (isInitializing) {
+    drawLoadingScreen();
+    return;
+  }
+  
   // 태블릿에서 프레임 스킵 로직 (성능 개선)
   const isMobile = isMobileOrTablet();
   if (isMobile) {
@@ -1765,6 +1950,11 @@ function draw() {
     image(bgBuffer, 0, 0);
   } else {
     background(BG_COLOR);
+  }
+  
+  // 에러 메시지 표시
+  if (errorMessage) {
+    drawErrorMessage();
   }
 
 
@@ -1812,6 +2002,70 @@ function draw() {
     // 모달 표시
     if (showModal) {
       drawModal();
+    }
+  }
+  
+  // 장시간 실행 안정성을 위한 주기적 건강 체크 (10분마다)
+  if (!window.lastHealthCheck) window.lastHealthCheck = 0;
+  const now = millis();
+  if (now - window.lastHealthCheck > 600000) { // 10분 = 600000ms
+    window.lastHealthCheck = now;
+    performHealthCheck();
+  }
+}
+
+// 건강 체크 함수 (메모리 관리 및 상태 확인)
+function performHealthCheck() {
+  // 메모리 사용량 체크 (가능한 경우)
+  if (performance.memory) {
+    const usedMB = performance.memory.usedJSHeapSize / 1048576;
+    const limitMB = performance.memory.jsHeapSizeLimit / 1048576;
+    const usageRatio = usedMB / limitMB;
+    
+    console.log(`[Gallery] 건강 체크 - 메모리 사용량: ${usedMB.toFixed(1)}MB / ${limitMB.toFixed(1)}MB (${(usageRatio * 100).toFixed(1)}%)`);
+    
+    // 메모리 사용량이 75% 이상이면 경고 및 정리
+    if (usageRatio > 0.75) {
+      console.warn('[Gallery] 메모리 사용량이 높습니다. 캐시 정리 중...');
+      
+      // 스프라이트 캐시 정리 (오래된 것부터)
+      if (SPRITES.size > 100) {
+        const keysToDelete = Array.from(SPRITES.keys()).slice(0, SPRITES.size - 100);
+        keysToDelete.forEach(key => SPRITES.delete(key));
+        console.log(`[Gallery] 스프라이트 캐시 정리: ${keysToDelete.length}개 삭제`);
+      }
+      
+      // 이미지 로딩 큐 정리
+      if (imageLoading.size > 10) {
+        const loadingArray = Array.from(imageLoading);
+        const toRemove = loadingArray.slice(10);
+        toRemove.forEach(idx => imageLoading.delete(idx));
+        console.log(`[Gallery] 이미지 로딩 큐 정리: ${toRemove.length}개 제거`);
+      }
+      
+      // 브라우저에게 GC 힌트 제공 (가능한 경우)
+      if (window.gc) {
+        window.gc();
+      }
+    }
+  }
+  
+  // 네트워크 상태 확인 (온라인/오프라인)
+  if (!navigator.onLine) {
+    console.warn('[Gallery] 네트워크 연결이 끊어졌습니다.');
+    if (!errorMessage) {
+      showErrorMessage("네트워크 연결을 확인해주세요.");
+    }
+  }
+  
+  // 초기화 상태 확인 (JSON이 로드되지 않았으면 재시도)
+  if (isInitializing && bubbleData.length === 0 && imageFiles.length === 0) {
+    const timeSinceStart = millis();
+    // 30초 이상 초기화 중이면 재시도
+    if (timeSinceStart > 30000) {
+      console.log('[Gallery] 초기화가 너무 오래 걸립니다. 재시도 중...');
+      jsonLoadRetryCount = 0;
+      loadBubbleDataFromJSON(0);
     }
   }
 }

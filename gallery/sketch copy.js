@@ -2704,7 +2704,7 @@ function drawAnalysisResult() {
   drawingContext.shadowBlur = 0;
   drawingContext.shadowOffsetX = 0;
   drawingContext.shadowOffsetY = 0;
-  drawingContext.fillText(`${userName}님은 이런 감각을 선호합니다.`, width / 2, resultY + 80 * s + 20); // 10픽셀 더 아래로
+  drawingContext.fillText(`${userName}님의 감각을 분석했어요.`, width / 2, resultY + 80 * s + 20); // 10픽셀 더 아래로
   drawingContext.restore();
   pop();
   
