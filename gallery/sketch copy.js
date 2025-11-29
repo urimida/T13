@@ -83,6 +83,8 @@ function preload() {
   onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding2.webp"));
   onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding3.webp"));
   onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding4.webp"));
+  onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding6.webp"));
+  onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding7.webp"));
   
   // 슬라이딩 손 이미지 로드
   slidingHandImage = loadImage(PATHS.uiImgs + "sliding-hand.png");
@@ -1552,14 +1554,6 @@ function pointerStart(x, y, id) {
       return;
     }
     
-    const hit = hitTestUI(x, y);
-    if (hit === "onboarding_start") {
-      handleUI(hit);
-      pointerDown = false;
-      pointerId = -1;
-      return;
-    }
-    
     return;
   }
 
@@ -1771,16 +1765,17 @@ function pointerEnd(x, y) {
       return;
     }
     
-    const hit = hitTestUI(x, y);
-    if (hit === "onboarding_start") {
-      handleUI(hit);
-      pointerDown = false;
-      pointerId = -1;
-      return;
-    }
-    
     // 단순히 터치하면 다음 페이지로 이동
-    if (onboardingCurrentPage < onboardingImages.length) {
+    // 7번 페이지(마지막 페이지)에서 터치하면 이름 입력 모달로 이동
+    if (onboardingCurrentPage === onboardingImages.length - 1) {
+      // 마지막 페이지에서 터치하면 이름 입력 모달로 전환
+      mode = 2;
+      if (nameInputElement) {
+        nameInputElement.style("display", "block");
+        nameInputElement.elt.focus();
+      }
+    } else if (onboardingCurrentPage < onboardingImages.length - 1) {
+      // 마지막 페이지가 아니면 다음 페이지로 이동
       onboardingTargetPage = onboardingCurrentPage + 1;
       onboardingAnimFromOffset = 0;
       onboardingAnimProgress = 0;
@@ -2073,15 +2068,7 @@ function handleUI(id) {
     }
     return;
   } else if (mode === 4) {
-    // 온보딩 화면
-    if (id === "onboarding_start") {
-      // 시작하기 버튼 클릭
-      mode = 2; // 이름 입력 모달로 전환
-      if (nameInputElement) {
-        nameInputElement.style("display", "block");
-        nameInputElement.elt.focus();
-      }
-    }
+    // 온보딩 화면 (시작하기 버튼은 더 이상 사용하지 않음)
     return;
   } else if (mode === 2) {
     // 이름 입력 모달
@@ -2895,8 +2882,8 @@ function analyzeFavoriteTags() {
 }
 
 function updateOnboarding() {
-  // 슬라이딩 손 애니메이션 업데이트 (1~4번 페이지일 때)
-  if (onboardingCurrentPage >= 0 && onboardingCurrentPage <= 3) {
+  // 슬라이딩 손 애니메이션 업데이트 (1~4번, 6번 페이지일 때)
+  if ((onboardingCurrentPage >= 0 && onboardingCurrentPage <= 3) || onboardingCurrentPage === 4) {
     slidingHandAnimTime += deltaTime / 1000; // 초 단위로 변환
   } else {
     slidingHandAnimTime = 0; // 다른 페이지로 이동하면 리셋
@@ -2969,8 +2956,8 @@ function drawOnboarding() {
     }
   }
   
-  // 첫 번째부터 네 번째 온보딩 화면에 손 애니메이션 및 텍스트 (translate 밖에서 그리기)
-  if (onboardingCurrentPage >= 0 && onboardingCurrentPage <= 3 && slidingHandImage && slidingHandImage.width > 0) {
+  // 첫 번째부터 네 번째, 그리고 여섯 번째 온보딩 화면에 손 애니메이션 및 텍스트 (translate 밖에서 그리기)
+  if (((onboardingCurrentPage >= 0 && onboardingCurrentPage <= 3) || onboardingCurrentPage === 4) && slidingHandImage && slidingHandImage.width > 0) {
     const s = getResponsiveScale();
     
     // 손 깜빡거리는 애니메이션: 화면 중앙에서 깜빡거림
@@ -3023,6 +3010,10 @@ function drawOnboarding() {
       // 4번 페이지: 이미지의 50%, 50% 위치 (중앙)
       imageRelativeX = 0.86;
       imageRelativeY = 0.6;
+    } else if (onboardingCurrentPage === 4) {
+      // 6번 페이지: 이미지의 위치 (적절한 위치로 설정)
+      imageRelativeX = 1.15;
+      imageRelativeY = 0.58;
     }
     
     // 이미지 좌표계를 화면 좌표계로 변환
@@ -3056,59 +3047,4 @@ function drawOnboarding() {
     
   }
   
-  // 시작하기 버튼 페이지 배경 (현재 페이지가 시작하기 페이지일 때, translate 밖에서)
-  if (onboardingCurrentPage === onboardingImages.length && !onboardingIsAnimating) {
-    push();
-    fill(0, 0, 0, 200);
-    rect(0, 0, width, height);
-    pop();
-  }
-  
-  // 시작하기 버튼 (태그 스타일) - 마지막 페이지(시작하기 페이지)에서만 화면 정중앙에 표시, 깜빡임 효과
-  // translate 밖에서 그려서 항상 화면 중앙에 고정
-  if (onboardingCurrentPage === onboardingImages.length) {
-    const buttonW = 280 * s * 2; // 2배 크기
-    const buttonH = 64 * s * 2; // 2배 크기
-    const buttonR = buttonH / 2;
-    const buttonX = width / 2 - buttonW / 2;
-    const buttonY = height / 2 - buttonH / 2; // 화면 정중앙에 위치
-    
-    // 깜빡임 효과 (sin 함수 사용)
-    const blinkSpeed = 0.003; // 깜빡임 속도
-    const alpha = map(sin(millis() * blinkSpeed), -1, 1, 0.5, 1.0); // 0.5 ~ 1.0 사이 깜빡임
-    
-    // 버튼 그리기 (태그 스타일, 깜빡임 효과 적용)
-    push();
-    tint(255, alpha * 255);
-    drawGlassLabelFullscreen(buttonX, buttonY, buttonW, buttonH, buttonR, alpha, null);
-    pop();
-    
-    // 버튼 텍스트
-    push();
-    drawingContext.save();
-    drawingContext.textBaseline = "middle";
-    drawingContext.textAlign = "center";
-    drawingContext.imageSmoothingEnabled = true;
-    drawingContext.imageSmoothingQuality = "high";
-    drawingContext.globalAlpha = alpha;
-    const fontSize = 20 * s * 2; // 2배 크기
-    if (fontPretendard) textFont(fontPretendard);
-    drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`;
-    drawingContext.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-    drawingContext.shadowBlur = 0;
-    drawingContext.shadowOffsetX = 0;
-    drawingContext.shadowOffsetY = 0;
-    drawingContext.fillText("시작하기", buttonX + buttonW / 2, buttonY + buttonH / 2 + 1);
-    drawingContext.restore();
-    pop();
-    
-    // 히트박스 저장
-    uiHitboxes.push({
-      id: "onboarding_start",
-      x: buttonX,
-      y: buttonY,
-      w: buttonW,
-      h: buttonH
-    });
-  }
 }
