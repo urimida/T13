@@ -68,6 +68,10 @@ let favoriteBubbles = [];
 let nameInputElement = null;
 let pendingNameConfirm = false;
 let analysisResult = null;
+let showFavoriteGuideModal = false; // 좋아요 안내 모달 표시 여부
+let showFavoriteModal = false; // 좋아요 누름 모달 표시 여부
+let favoriteModalTitle = ""; // 좋아요 누른 버블 제목
+let favoriteModalStartTime = 0; // 모달 시작 시간
 
 function preload() {
   fontPretendard = loadFont(PATHS.font);
@@ -314,6 +318,16 @@ function draw() {
   if (mode === 4) {
     updateOnboarding();
     drawOnboarding();
+  }
+
+  // 좋아요 안내 모달 (일반 모드에서만)
+  if (mode === 0 && showFavoriteGuideModal) {
+    drawFavoriteGuideModal();
+  }
+  
+  // 좋아요 누름 모달 (풀스크린 모드에서만)
+  if (mode === 1 && showFavoriteModal) {
+    drawFavoriteModal();
   }
 
   // 감각 알아보기 버튼 (일반 모드에서만, 이름이 입력된 경우)
@@ -877,10 +891,29 @@ function drawFullscreen() {
     drawFullscreenTags(tagAlpha, isExiting, finalImageRect);
   }
   
-  // 연관 버블 표시 (태그가 선택되었을 때만)
-  if (selectedTag !== null && recommendedBubbles.length > 0 && anim > 0.5) {
-    // 어두운 오버레이 추가
-    const overlayAlpha = recommendedBubblesAnim * 0.6; // 추천 버블 애니메이션과 동기화
+  // 하트 버튼 (좋아요) - 풀스크린 모드에서만 표시 (오버레이 전에 그리기)
+  if (fullscreenIndex >= 0) {
+    drawHeartButton(anim);
+    
+    // 하트 버튼을 누르기 전까지 안내 텍스트 표시 (추천 버블이 없을 때만)
+    const hasRecommendedBubbles = selectedTag !== null && recommendedBubbles.length > 0 && anim > 0.5;
+    if (!hasRecommendedBubbles) {
+      const currentBubbleIsFavorite = favoriteBubbles.includes(fullscreenIndex);
+      if (!currentBubbleIsFavorite && !dragging && anim > 0.5) {
+        drawFullscreenInstructionText(anim);
+      }
+    }
+  }
+
+  // VR모드 나가기 버튼 (가운데 위쪽) - 오버레이 전에 그리기
+  drawVRExitButton(anim);
+  
+  // 연관 버블 표시 (태그가 선택되었을 때만) - 버튼들 뒤에 그리기
+  const hasRecommendedBubbles = selectedTag !== null && recommendedBubbles.length > 0 && anim > 0.5;
+  const overlayAlpha = hasRecommendedBubbles ? (recommendedBubblesAnim * 0.6) : 0; // 추천 버블 애니메이션과 동기화
+  
+  if (hasRecommendedBubbles) {
+    // 어두운 오버레이 추가 (버튼들 위에 그려서 가리기)
     push();
     fill(0, overlayAlpha * 255);
     rect(0, 0, width, height);
@@ -888,20 +921,6 @@ function drawFullscreen() {
     
     drawRecommendedBubbles(anim, isExiting);
   }
-
-  // 하트 버튼 (좋아요) - 풀스크린 모드에서만 표시
-  if (fullscreenIndex >= 0) {
-    drawHeartButton(anim);
-    
-    // 하트 버튼을 누르기 전까지 안내 텍스트 표시
-    const currentBubbleIsFavorite = favoriteBubbles.includes(fullscreenIndex);
-    if (!currentBubbleIsFavorite && !dragging && anim > 0.5) {
-      drawFullscreenInstructionText(anim);
-    }
-  }
-
-  // VR모드 나가기 버튼 (가운데 위쪽) - 가장 앞쪽 레이어에 표시
-  drawVRExitButton(anim);
 }
 
 function clearSelectedTagState() {
@@ -1071,8 +1090,8 @@ function drawRecommendedBubbles(anim, isExiting = false) {
   // 아래 LED 텍스트 부분은 기존 코드 그대로 유지
   if (selectedTag && a > 0.1) {
     const textY = baseY - fixedR - 40 * s - 20;
-    const particle = getKoreanParticle(selectedTag);
-    const tagText = `#${selectedTag}${particle} 유사한 레퍼런스를 가져왔어요`;
+    const conjunction = getKoreanConjunction(selectedTag);
+    const tagText = `#${selectedTag}${conjunction} 유사한 레퍼런스를 가져왔어요`;
 
     const pulseTime = millis() * 0.001;
     const pulse = (Math.sin(pulseTime * 2) + 1) * 0.5;
@@ -1869,6 +1888,12 @@ function pointerEnd(x, y) {
     }
   }
   
+  // 좋아요 안내 모달 클릭 처리 (일반 모드에서만) - 어디든 클릭하면 닫기
+  if (mode === 0 && showFavoriteGuideModal && isTap) {
+    showFavoriteGuideModal = false;
+    return;
+  }
+  
   // 이름 입력 모달 또는 분석 결과 화면에서 클릭 처리
   if (mode === 2 || mode === 3) {
     if (isTap) {
@@ -2113,8 +2138,8 @@ function handleUI(id) {
         analysisResult = analyzeFavoriteTags();
         mode = 3; // 분석 결과 화면으로
       } else {
-        // 선택한 버블이 없으면 알림 (간단히 콘솔에만)
-        console.log("먼저 하트 버튼으로 좋아하는 사진을 선택해주세요!");
+        // 선택한 버블이 없으면 안내 모달 표시
+        showFavoriteGuideModal = true;
       }
     }
     return;
@@ -2577,6 +2602,235 @@ function drawNameInputModal() {
   );
 }
 
+// 좋아요 안내 모달 그리기
+function drawFavoriteGuideModal() {
+  const s = getResponsiveScale();
+  
+  // 히트박스는 drawUI()에서 이미 초기화되었으므로 여기서는 추가만 함
+  
+  // 어두운 배경 오버레이
+  push();
+  fill(0, 0, 0, 200);
+  rect(0, 0, width, height);
+  pop();
+  
+  // 모달 박스 (크기 키움)
+  const modalW = 800 * s; // 700 → 800
+  const modalH = 350 * s; // 300 → 350
+  const modalX = width / 2 - modalW / 2;
+  const modalY = height / 2 - modalH / 2;
+  
+  // 글래스 효과 모달
+  push();
+  drawingContext.save();
+  roundRectPath(drawingContext, modalX, modalY, modalW, modalH, 50 * s);
+  drawingContext.clip();
+  
+  // 배경 블러 효과
+  const bgImg = uiImages["background"];
+  if (bgImg && bgImg.width > 0) {
+    drawingContext.filter = "blur(20px)";
+    drawingContext.globalAlpha = 0.3;
+    const cover = coverRect(bgImg.width, bgImg.height, width, height);
+    drawingContext.drawImage(
+      bgImg.canvas || bgImg.elt,
+      0, 0, bgImg.width, bgImg.height,
+      cover.x, cover.y, cover.w, cover.h
+    );
+    drawingContext.filter = "none";
+  }
+  
+  // 어두운 오버레이
+  drawingContext.globalAlpha = 0.7;
+  drawingContext.fillStyle = "rgba(0,0,0,0.8)";
+  drawingContext.fillRect(modalX, modalY, modalW, modalH);
+  
+  // 유리 틴트
+  const tint = drawingContext.createLinearGradient(modalX, modalY, modalX, modalY + modalH);
+  tint.addColorStop(0, "rgba(255,255,255,0.1)");
+  tint.addColorStop(1, "rgba(255,255,255,0.05)");
+  drawingContext.fillStyle = tint;
+  drawingContext.fillRect(modalX, modalY, modalW, modalH);
+  
+  drawingContext.restore();
+  pop();
+  
+  // 테두리
+  push();
+  drawingContext.save();
+  const edge = drawingContext.createLinearGradient(modalX, modalY, modalX + modalW, modalY + modalH);
+  edge.addColorStop(0, "rgba(160,160,170,0.45)");
+  edge.addColorStop(1, "rgba(110,110,120,0.2)");
+  drawingContext.strokeStyle = edge;
+  drawingContext.lineWidth = 2;
+  drawingContext.globalAlpha = 1;
+  roundRectPath(drawingContext, modalX, modalY, modalW, modalH, 50 * s);
+  drawingContext.stroke();
+  drawingContext.restore();
+  pop();
+  
+  // 메시지 텍스트
+  push();
+  drawingContext.save();
+  drawingContext.textBaseline = "middle";
+  drawingContext.textAlign = "center";
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  const fontSize = 24 * s * 1.5 * 0.8; // 0.8배로 줄임
+  if (fontPretendard) textFont(fontPretendard);
+  drawingContext.font = `400 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`; // 레귤러 (400)
+  drawingContext.fillStyle = `rgba(255, 255, 255, 1.0)`;
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowOffsetX = 0;
+  drawingContext.shadowOffsetY = 0;
+  
+  const message = "아직 좋아요 누른 버블이 없으니\n마음에 드는 버블에 좋아요 버튼을  눌러주세요.";
+  const lineHeight = fontSize * 1.5;
+  const lines = message.split('\n');
+  const totalHeight = lines.length * lineHeight;
+  
+  // 텍스트 위치 계산 (모달 정중앙에 배치)
+  const textY = modalY + modalH / 2 - totalHeight / 2 + lineHeight / 2;
+  
+  lines.forEach((line, idx) => {
+    drawingContext.fillText(line, width / 2, textY + idx * lineHeight);
+  });
+  
+  drawingContext.restore();
+  pop();
+}
+
+// 좋아요 누름 모달 그리기
+function drawFavoriteModal() {
+  const s = getResponsiveScale();
+  const now = millis();
+  const elapsed = now - favoriteModalStartTime;
+  const displayDuration = 1000; // 1초 표시
+  const fadeDuration = 500; // 0.5초 페이드아웃
+  
+  // 1초 후 페이드아웃 시작
+  let alpha = 1.0;
+  if (elapsed > displayDuration) {
+    const fadeProgress = (elapsed - displayDuration) / fadeDuration;
+    alpha = Math.max(0, 1 - fadeProgress);
+    if (alpha <= 0) {
+      showFavoriteModal = false;
+      return;
+    }
+  }
+  
+  // 텍스트 크기 및 폰트 설정
+  const fontSize = 22 * s * 1.5; // 1.5배 크게
+  if (fontPretendard) textFont(fontPretendard);
+  
+  const titleText = `<${favoriteModalTitle}>`; // 쌍꺾쇠를 단일 꺾쇠로 변경
+  const suffixText = "에 좋아요를 눌렀습니다.";
+  
+  // 텍스트 너비 측정을 위해 임시로 폰트 설정
+  push();
+  drawingContext.save();
+  drawingContext.textBaseline = "middle";
+  drawingContext.textAlign = "center";
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  
+  // 제목 텍스트 너비 측정 (볼드)
+  drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`; // 볼드
+  const titleWidth = drawingContext.measureText(titleText).width;
+  
+  // 나머지 텍스트 너비 측정 (라이트)
+  drawingContext.font = `300 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`; // 라이트
+  const suffixWidth = drawingContext.measureText(suffixText).width;
+  
+  const totalTextWidth = titleWidth + suffixWidth;
+  const padding = 150 * s; // 좌우 패딩 (120 → 150, 더 넓게)
+  const minWidth = 800 * s; // 최소 너비 설정 (700 → 800, 더 넓게)
+  const modalW = Math.max(minWidth, Math.min(totalTextWidth + padding, width * 0.9)); // 텍스트 길이에 맞춰 너비 설정 (최소 800px, 최대 화면의 90%)
+  const modalH = 150 * s;
+  const modalX = width / 2 - modalW / 2;
+  const modalY = height / 2 - modalH / 2;
+  
+  drawingContext.restore();
+  pop();
+  
+  // 글래스 효과 모달
+  push();
+  drawingContext.save();
+  drawingContext.globalAlpha = alpha;
+  roundRectPath(drawingContext, modalX, modalY, modalW, modalH, 50 * s);
+  drawingContext.clip();
+  
+  // 배경 블러 효과
+  const bgImg = uiImages["background"];
+  if (bgImg && bgImg.width > 0) {
+    drawingContext.filter = "blur(20px)";
+    drawingContext.globalAlpha = 0.3 * alpha;
+    const cover = coverRect(bgImg.width, bgImg.height, width, height);
+    drawingContext.drawImage(
+      bgImg.canvas || bgImg.elt,
+      0, 0, bgImg.width, bgImg.height,
+      cover.x, cover.y, cover.w, cover.h
+    );
+    drawingContext.filter = "none";
+  }
+  
+  // 어두운 오버레이
+  drawingContext.globalAlpha = 0.7 * alpha;
+  drawingContext.fillStyle = "rgba(0,0,0,0.8)";
+  drawingContext.fillRect(modalX, modalY, modalW, modalH);
+  
+  // 유리 틴트
+  const tint = drawingContext.createLinearGradient(modalX, modalY, modalX, modalY + modalH);
+  tint.addColorStop(0, "rgba(255,255,255,0.1)");
+  tint.addColorStop(1, "rgba(255,255,255,0.05)");
+  drawingContext.fillStyle = tint;
+  drawingContext.fillRect(modalX, modalY, modalW, modalH);
+  
+  drawingContext.restore();
+  pop();
+  
+  // 테두리
+  push();
+  drawingContext.save();
+  drawingContext.globalAlpha = alpha;
+  const edge = drawingContext.createLinearGradient(modalX, modalY, modalX + modalW, modalY + modalH);
+  edge.addColorStop(0, "rgba(160,160,170,0.45)");
+  edge.addColorStop(1, "rgba(110,110,120,0.2)");
+  drawingContext.strokeStyle = edge;
+  drawingContext.lineWidth = 2;
+  roundRectPath(drawingContext, modalX, modalY, modalW, modalH, 50 * s);
+  drawingContext.stroke();
+  drawingContext.restore();
+  pop();
+  
+  // 메시지 텍스트
+  push();
+  drawingContext.save();
+  drawingContext.globalAlpha = alpha;
+  drawingContext.textBaseline = "middle";
+  drawingContext.textAlign = "center";
+  drawingContext.imageSmoothingEnabled = true;
+  drawingContext.imageSmoothingQuality = "high";
+  
+  const startX = width / 2 - totalTextWidth / 2;
+  const textY = modalY + modalH / 2;
+  
+  // 제목 그리기 (볼드)
+  drawingContext.font = `700 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`; // 볼드
+  drawingContext.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+  drawingContext.shadowBlur = 0;
+  drawingContext.shadowOffsetX = 0;
+  drawingContext.shadowOffsetY = 0;
+  drawingContext.fillText(titleText, startX + titleWidth / 2, textY);
+  
+  // 나머지 텍스트 (라이트)
+  drawingContext.font = `300 ${fontSize}px "Pretendard Variable", Pretendard, sans-serif`; // 라이트
+  drawingContext.fillText(suffixText, startX + titleWidth + suffixWidth / 2, textY);
+  
+  drawingContext.restore();
+  pop();
+}
+
 // 감각 알아보기 버튼 그리기 (오른쪽) - 태그 버튼 스타일 적용
 function drawTasteAnalysisButton() {
   const s = getResponsiveScale();
@@ -2838,6 +3092,14 @@ function toggleFavoriteBubble() {
   } else {
     // 선택되어 있지 않으면 추가
     favoriteBubbles.push(fullscreenIndex);
+    
+    // 좋아요 모달 표시
+    if (bubbles && bubbles[fullscreenIndex]) {
+      const bubble = bubbles[fullscreenIndex];
+      favoriteModalTitle = bubble.name || bubble.title || "버블";
+      showFavoriteModal = true;
+      favoriteModalStartTime = millis();
+    }
   }
 }
 

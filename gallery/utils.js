@@ -59,6 +59,16 @@ function getKoreanParticle(word) {
   return hasJong ? "을" : "를";
 }
 
+// "와/과" 접속 조사 반환 함수 (받침 있으면 "과", 없으면 "와")
+function getKoreanConjunction(word) {
+  if (!word || word.length === 0) return "와";
+  const lastChar = word[word.length - 1];
+  const code = lastChar.charCodeAt(0);
+  if (code < 0xAC00 || code > 0xD7A3) return "와";
+  const hasJong = (code - 0xAC00) % 28 !== 0;
+  return hasJong ? "과" : "와";
+}
+
 function pointInCircle(px, py, cx, cy, r) {
   const dx = px - cx;
   const dy = py - cy;
