@@ -109,6 +109,8 @@ let tagIndexMap = Object.create(null);
 let recommendedHitboxes = [];
 
 let onboardingImages = [];
+let slidingHandImage = null; // 슬라이딩 손 이미지
+let slidingHandAnimTime = 0; // 슬라이딩 손 애니메이션 시간
 let onboardingCurrentPage = 0; // 현재 페이지 인덱스 (0부터 시작)
 let onboardingDragStartX = 0, onboardingLastDragX = 0;
 let onboardingIsDragging = false;
@@ -188,15 +190,25 @@ const DATA_SCHEMA_ADAPTER = {
   normalize(raw) {
     const list = raw.bubbles || [];
     const out = new Array(list.length);
+    // GC 최소화: 재사용 가능한 배열 사용
+    if (!window._tempTagsArray) window._tempTagsArray = [];
+    const tempTags = window._tempTagsArray;
+    
     for (let i = 0; i < list.length; i++) {
       const b = list[i] || {};
-      const allTags = [...(b.visualTags || []), ...(b.emotionalTags || [])];
+      // 스프레드 연산자 대신 직접 병합 (GC 감소)
+      tempTags.length = 0;
+      const visualTags = b.visualTags || [];
+      const emotionalTags = b.emotionalTags || [];
+      for (let j = 0; j < visualTags.length; j++) tempTags.push(visualTags[j]);
+      for (let j = 0; j < emotionalTags.length; j++) tempTags.push(emotionalTags[j]);
+      
       out[i] = {
         title: b.title || "",
         imageFile: b.image || b.imageFile || "",
-        tags: allTags,
-        visualTags: b.visualTags || [],
-        emotionalTags: b.emotionalTags || [],
+        tags: tempTags.slice(), // 필요한 경우에만 복사
+        visualTags: visualTags,
+        emotionalTags: emotionalTags,
         attributes: b.attributes || [],
         description: b.description || "",
       };
@@ -829,6 +841,9 @@ function preload() {
   onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding2.webp"));
   onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding3.webp"));
   onboardingImages.push(loadImage(PATHS.uiImgs + "onboarding4.webp"));
+  
+  // 슬라이딩 손 이미지 로드
+  slidingHandImage = loadImage(PATHS.uiImgs + "sliding-hand.png");
 
   // 버블 터지는 소리 로드 (p5.sound 라이브러리가 있는 경우에만)
   if (typeof loadSound !== 'undefined') {
@@ -984,12 +999,14 @@ function draw() {
   lastDrawTime = now;
   appTime = now / 1000;
 
+  // 아이들 모드 프레임 스킵 개선 (6시간 장시간 실행 최적화)
   const idle = !dragging && mode === 0 && (now - lastActiveTime) > 800;
   if (idle) {
     const targetDt = 1000 / RENDER.idleFPS;
     if (deltaTime < targetDt) {
       idleFrameSkip++;
-      if (idleFrameSkip % 2 === 1) return;
+      // 아이들 모드에서는 더 많은 프레임 스킵 (배터리 절약)
+      if (idleFrameSkip % 3 !== 0) return; // 3프레임 중 1프레임만 렌더링
     }
   } else {
     idleFrameSkip = 0;
@@ -1073,11 +1090,14 @@ function draw() {
   if (!window.lastSoftReset) window.lastSoftReset = 0;
   if (!window.lastHealthCheck) window.lastHealthCheck = 0;
 
-  // GC 실행
+  // GC 실행 (Set 재사용으로 GC 최소화)
   if (now - window.lastGC > gcInterval) {
     window.lastGC = now;
 
-    const protectedPaths = new Set();
+    if (!window._protectedPathsSet) window._protectedPathsSet = new Set();
+    const protectedPaths = window._protectedPathsSet;
+    protectedPaths.clear(); // 재사용
+    
     if (mode === 1 && bubbles && fullscreenIndex >= 0 && bubbles[fullscreenIndex]) {
       const mainImgPath = bubbles[fullscreenIndex].imgPath;
       if (mainImgPath) protectedPaths.add(mainImgPath);
@@ -1100,8 +1120,8 @@ function draw() {
     if (imageLoader && imageLoader.softReset) imageLoader.softReset();
   }
 
-  // 전시용 건강 체크 (5분마다) - 메모리 누수 방지
-  if (now - window.lastHealthCheck > 300000) { // 5분 = 300000ms
+  // 전시용 건강 체크 (10분마다) - 6시간 장시간 실행 최적화
+  if (now - window.lastHealthCheck > 600000) { // 10분 = 600000ms (5분에서 10분으로 증가)
     window.lastHealthCheck = now;
     
     // 메모리 사용량 체크 (가능한 경우)
@@ -1113,8 +1133,8 @@ function draw() {
         console.log(`[Gallery] 메모리 사용량: ${usedMB.toFixed(1)}MB / ${limitMB.toFixed(1)}MB`);
       }
       
-      // 메모리 사용량이 80% 이상이면 강제 GC
-      if (usedMB / limitMB > 0.8) {
+      // 메모리 사용량이 75% 이상이면 강제 GC (80%에서 75%로 낮춤 - 더 적극적인 관리)
+      if (usedMB / limitMB > 0.75) {
         console.warn('[Gallery] 메모리 사용량이 높습니다. 강제 GC 실행...');
         if (imageLoader && imageLoader.gc) {
           imageLoader.gc(null); // 보호 없이 강제 GC
@@ -3690,6 +3710,13 @@ function analyzeFavoriteTags() {
 ========================= */
 
 function updateOnboarding() {
+  // 슬라이딩 손 애니메이션 업데이트 (첫 번째 페이지일 때만)
+  if (onboardingCurrentPage === 0 && !onboardingIsDragging) {
+    slidingHandAnimTime += deltaTime / 1000; // 초 단위로 변환
+  } else {
+    slidingHandAnimTime = 0; // 다른 페이지로 이동하면 리셋
+  }
+  
   // 손가락으로 드래그 중일 때는 애니메이션을 전혀 돌리지 않는다.
   if (onboardingIsDragging) return;
 
@@ -3828,6 +3855,83 @@ function drawOnboarding() {
   }
   
   pop();
+  
+  // 첫 번째 온보딩 화면에 슬라이딩 손 애니메이션 및 텍스트 (translate 밖에서 그리기)
+  if (onboardingCurrentPage === 0 && slidingHandImage && slidingHandImage.width > 0) {
+    const s = getResponsiveScale();
+    
+    // 슬라이딩 손 애니메이션: 오른쪽 끝에서 중간까지 이동
+    const animDuration = 2.5; // 2.5초 주기
+    const animProgress = (slidingHandAnimTime % animDuration) / animDuration;
+    
+    // 오른쪽 끝에서 화면 중간까지 이동 (0.0 -> 1.0)
+    // 시작 위치: 화면 오른쪽 끝, 끝 위치: 화면 중간
+    const startX = width; // 화면 오른쪽 끝
+    const endX = width / 2; // 화면 중간
+    const handX = lerp(startX, endX, animProgress);
+    
+    // 손의 Y 위치 (화면 중앙 아래쪽)
+    const handY = height * 0.7;
+    
+    // 손 이미지 크기 (8배 크게 - 4배에서 2배 더 증가)
+    const handSize = 120 * s * 8; // 960 * s
+    
+    // 서서히 등장했다가 사라지는 페이드 효과 (반투명)
+    const maxAlpha = 0.5; // 최대 투명도 50% (반투명)
+    let handAlpha = 0.0;
+    if (animProgress < 0.3) {
+      // 시작 부분: 서서히 등장 (0 ~ 0.3)
+      handAlpha = (animProgress / 0.3) * maxAlpha;
+    } else if (animProgress < 0.7) {
+      // 중간 부분: 반투명하게 보임 (0.3 ~ 0.7)
+      handAlpha = maxAlpha;
+    } else {
+      // 끝 부분: 서서히 사라짐 (0.7 ~ 1.0)
+      handAlpha = ((1.0 - animProgress) / 0.3) * maxAlpha;
+    }
+    
+    // 슬라이딩 손 그리기 (반투명)
+    push();
+    drawingContext.save();
+    drawingContext.globalAlpha = handAlpha;
+    imageMode(CENTER);
+    image(slidingHandImage, handX, handY, handSize, handSize);
+    drawingContext.restore();
+    pop();
+    
+    // "옆으로 넘겨주세요" 텍스트 (손 아래쪽에 표시)
+    push();
+    drawingContext.save();
+    drawingContext.textBaseline = "middle";
+    drawingContext.textAlign = "center";
+    drawingContext.imageSmoothingEnabled = true;
+    drawingContext.imageSmoothingQuality = "high";
+    
+    if (fontPretendard) textFont(fontPretendard);
+    textAlign(CENTER, CENTER);
+    
+    // 텍스트 크기 및 스타일
+    const textSize_val = 24 * s;
+    textSize(textSize_val);
+    drawingContext.font = `500 ${textSize_val}px "Pretendard Variable", Pretendard, sans-serif`;
+    
+    // 텍스트 색상 (흰색, 약간 투명)
+    fill(255, 255, 255, 220);
+    
+    // 텍스트 위치 (손 아래 40px)
+    const textY = handY + handSize / 2 + 40 * s;
+    
+    // 그림자 효과
+    drawingContext.shadowBlur = 8;
+    drawingContext.shadowColor = "rgba(0, 0, 0, 0.5)";
+    drawingContext.shadowOffsetX = 0;
+    drawingContext.shadowOffsetY = 2;
+    
+    text("옆으로 넘겨주세요", width / 2, textY);
+    
+    drawingContext.restore();
+    pop();
+  }
   
   // 시작하기 버튼 페이지 배경 (현재 페이지가 시작하기 페이지일 때, translate 밖에서)
   if (onboardingCurrentPage === onboardingImages.length && !onboardingIsAnimating) {
