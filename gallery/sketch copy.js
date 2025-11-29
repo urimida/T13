@@ -1585,6 +1585,8 @@ function pointerStart(x, y, id) {
     // (태블릿 터치 감도 문제 해결)
     if (hit === "heart_button" && mode === 1) {
       // pointerDown은 유지하여 pointerEnd에서 처리
+      // dragMode를 특별한 값으로 설정하여 드래그로 인식되지 않도록 함
+      dragMode = 4; // 하트 버튼 클릭 모드
       return;
     }
     handleUI(hit);
@@ -1636,10 +1638,13 @@ function pointerMove(x, y) {
   const dx = x - lastX;
   const dy = y - lastY;
 
-  if (!dragging) {
-    const d2 = (x - downX) * (x - downX) + (y - downY) * (y - downY);
-    if (d2 > INTERACT.dragDeadzone * INTERACT.dragDeadzone) {
-      dragging = true;
+  // 하트 버튼 클릭 모드일 때는 드래그로 인식하지 않음
+  if (dragMode !== 4) {
+    if (!dragging) {
+      const d2 = (x - downX) * (x - downX) + (y - downY) * (y - downY);
+      if (d2 > INTERACT.dragDeadzone * INTERACT.dragDeadzone) {
+        dragging = true;
+      }
     }
   }
 
@@ -1759,21 +1764,34 @@ function pointerEnd(x, y) {
     return;
   }
   
-  // 전체 화면 모드에서 하트 버튼 클릭 확인 (pointerDown 체크 전에 먼저 확인)
-  // pointerStart에서 감지되지 않았을 수도 있으므로 pointerEnd에서도 체크
-  if (mode === 1) {
+  // 전체 화면 모드에서 하트 버튼 클릭 확인
+  // dragMode가 4이면 하트 버튼 클릭 모드로 인식
+  if (mode === 1 && dragMode === 4) {
     const hit = hitTestUI(x, y);
     if (hit === "heart_button") {
-      // 하트 버튼은 pointerDown 상태와 관계없이 클릭으로 인정
+      toggleFavoriteBubble();
+      pointerDown = false;
+      pointerId = -1;
+      dragMode = 0;
+      return;
+    }
+  }
+  
+  // pointerDown 체크 전에 하트 버튼을 다시 확인 (dragMode가 설정되지 않은 경우 대비)
+  if (mode === 1 && pointerDown) {
+    const hit = hitTestUI(x, y);
+    if (hit === "heart_button") {
       // 약간의 움직임이 있어도 하트 버튼은 클릭 가능하도록
-      const dt = pointerDown ? (millis() - lastT) : 0;
-      const dx = pointerDown ? (x - downX) : 0;
-      const dy = pointerDown ? (y - downY) : 0;
-      const isHeartTap = !dragging && (dt < 600 && dx * dx + dy * dy < 900); // 30px 이내, 600ms 이내
-      if (isHeartTap || !pointerDown) {
+      const dt = millis() - lastT;
+      const dx = x - downX;
+      const dy = y - downY;
+      const movedTooMuch = dx * dx + dy * dy > INTERACT.tapMoveThreshold * INTERACT.tapMoveThreshold;
+      const isHeartTap = dt < INTERACT.tapTimeThreshold && !movedTooMuch && !dragging;
+      if (isHeartTap) {
         toggleFavoriteBubble();
         pointerDown = false;
         pointerId = -1;
+        dragMode = 0;
         return;
       }
     }
@@ -2903,7 +2921,7 @@ function drawOnboarding() {
     const s = getResponsiveScale();
     
     // 손 깜빡거리는 애니메이션: 화면 중앙에서 깜빡거림
-    const animDuration = 3.0; // 3초 주기 (더 느리게)
+    const animDuration = 5.0; // 5초 주기 (깜빡거림 빈도 감소)
     const animProgress = (slidingHandAnimTime % animDuration) / animDuration;
     
     // 손의 위치 설정 (온보딩 이미지 좌표계 기준으로 계산하여 화면 크기가 변경되어도 일정하게 유지)
