@@ -2525,37 +2525,9 @@ function pointerEnd(x, y) {
     return;
   }
   
-  // 온보딩 화면 스와이프 종료 처리
+  // ✅ 온보딩 모드: 그냥 end 이벤트만 넘기기 (탭/스와이프 판단은 안 건드림)
   if (mode === 4) {
-    const dx = x - onboardingDragStartX;
-    const moveThreshold = 10; // 이동 거리 임계값 (단순 터치 vs 스와이프 구분)
-    
-    // 단순 터치인 경우 (이동 거리가 작음)
-    if (Math.abs(dx) < moveThreshold && !onboardingIsAnimating) {
-      const screenLeft = width * 0.3; // 왼쪽 30% 영역
-      const screenRight = width * 0.7; // 오른쪽 30% 영역
-      
-      if (x < screenLeft) {
-        // 왼쪽 터치 - 이전 페이지 (즉시 변경)
-        if (onboardingCurrentPage > 0) {
-          onboardingCurrentPage--;
-          onboardingOffsetX = 0;
-        }
-      } else if (x > screenRight) {
-        // 오른쪽 터치 - 다음 페이지 또는 시작 화면 (즉시 변경)
-        if (onboardingCurrentPage < onboardingImages.length) {
-          onboardingCurrentPage++;
-          onboardingOffsetX = 0;
-        } else {
-          // 마지막 페이지에서 오른쪽 터치 시 시작 화면으로
-          mode = 0;
-        }
-      }
-    } else {
-      // 스와이프인 경우 (애니메이션 처리)
-      handleOnboardingPointer(x, y, "end");
-    }
-    
+    handleOnboardingPointer(x, y, "end");
     if (pointerDown) {
       pointerDown = false;
       pointerId = -1;
