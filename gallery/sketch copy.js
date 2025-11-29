@@ -2942,11 +2942,11 @@ function drawOnboarding() {
       imageRelativeY = 1;
     } else if (onboardingCurrentPage === 1) {
       // 2번 페이지: 이미지의 104%, 140% 위치 (오른쪽으로 더 이동)
-      imageRelativeX = 1.04;
-      imageRelativeY = 1.4;
+      imageRelativeX = 0.84;
+      imageRelativeY = 0.79;
     } else if (onboardingCurrentPage === 2) {
       // 3번 페이지: 이미지의 68%, 135% 위치
-      imageRelativeX = 0.68;
+      imageRelativeX = 0.85;
       imageRelativeY = 1.35;
     } else if (onboardingCurrentPage === 3) {
       // 4번 페이지: 이미지의 50%, 50% 위치 (중앙)
@@ -2995,40 +2995,6 @@ function drawOnboarding() {
     drawingContext.restore();
     pop();
     
-    // "옆으로 넘겨주세요" 텍스트 (1번 페이지에만 표시)
-    if (onboardingCurrentPage === 0) {
-      push();
-      drawingContext.save();
-      drawingContext.textBaseline = "middle";
-      drawingContext.textAlign = "center";
-      drawingContext.imageSmoothingEnabled = true;
-      drawingContext.imageSmoothingQuality = "high";
-      
-      if (fontPretendard) textFont(fontPretendard);
-      textAlign(CENTER, CENTER);
-      
-      // 텍스트 크기 및 스타일
-      const textSize_val = 24 * s;
-      textSize(textSize_val);
-      drawingContext.font = `500 ${textSize_val}px "Pretendard Variable", Pretendard, sans-serif`;
-      
-      // 텍스트 색상 (흰색, 약간 투명)
-      fill(255, 255, 255, 220);
-      
-      // 텍스트 위치 (손 아래 60px)
-      const textY = handY + handSize / 2 + 60 * s;
-      
-      // 그림자 효과
-      drawingContext.shadowBlur = 8;
-      drawingContext.shadowColor = "rgba(0, 0, 0, 0.5)";
-      drawingContext.shadowOffsetX = 0;
-      drawingContext.shadowOffsetY = 2;
-      
-      text("옆으로 넘겨주세요", width / 2, textY);
-      
-      drawingContext.restore();
-      pop();
-    }
   }
   
   // 시작하기 버튼 페이지 배경 (현재 페이지가 시작하기 페이지일 때, translate 밖에서)
