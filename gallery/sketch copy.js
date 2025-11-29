@@ -2086,14 +2086,21 @@ function handleUI(id) {
   } else if (mode === 3) {
     // 분석 결과 화면
     if (id === "restart") {
-      // 다시 시작
+      // 다시 시작 - 온보딩 화면으로 돌아가기
       userName = "";
       favoriteBubbles = [];
       analysisResult = null;
-      mode = 2; // 이름 입력 모달로
+      mode = 4; // 온보딩 화면으로
+      // 온보딩 상태 초기화
+      onboardingCurrentPage = 0;
+      onboardingOffsetX = 0;
+      onboardingTargetPage = 0;
+      onboardingAnimProgress = 0;
+      onboardingIsAnimating = false;
+      onboardingLastPageChangeTime = millis();
+      onboardingInputBlockUntil = millis() + 500; // 입력 차단 시간 설정
       if (nameInputElement) {
-        nameInputElement.style("display", "block");
-        nameInputElement.elt.focus();
+        nameInputElement.style("display", "none");
       }
       resetToInitialView();
     }
