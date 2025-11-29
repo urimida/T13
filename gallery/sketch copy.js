@@ -117,6 +117,7 @@ let onboardingTargetPage = 0; // 목표 페이지
 let onboardingAnimProgress = 0; // 애니메이션 진행도 (0~1)
 let onboardingIsAnimating = false; // 애니메이션 중인지
 let onboardingDragStartTime = null; // 스와이프 시작 시간
+let onboardingAnimFromOffset = 0; // 애니메이션 시작 시 기준 오프셋
 let bgBuffer = null;
 let spriteCache = null;
 let fpsSmoother = 60;
@@ -3717,22 +3718,35 @@ function analyzeFavoriteTags() {
 ========================= */
 
 function updateOnboarding() {
-  // 스와이프 애니메이션 업데이트
-  if (onboardingIsAnimating) {
-    onboardingAnimProgress += 0.12; // 애니메이션 속도 조절 (더 부드럽게)
-    if (onboardingAnimProgress >= 1.0) {
-      // 애니메이션 완료 - 페이지 변경과 리셋을 한 번에 처리
-      onboardingCurrentPage = onboardingTargetPage;
-      onboardingOffsetX = 0;
-      onboardingAnimProgress = 0;
-      onboardingIsAnimating = false;
-    } else {
-      // easeOutQuart 함수로 더 부드러운 애니메이션 (휴대폰 갤러리 스타일)
-      const t = onboardingAnimProgress;
-      const easeProgress = 1 - Math.pow(1 - t, 4);
-      const targetOffset = (onboardingTargetPage - onboardingCurrentPage) * width;
-      onboardingOffsetX = targetOffset * (1 - easeProgress);
-    }
+  // 손가락으로 드래그 중일 때는 애니메이션을 전혀 돌리지 않는다.
+  if (onboardingIsDragging) return;
+
+  if (!onboardingIsAnimating) {
+    // 애니메이션 중이 아니면 현재 페이지 기준에서 오프셋은 0 유지
+    onboardingOffsetX = 0;
+    return;
+  }
+
+  const pageWidth = width || window.innerWidth || 1;
+
+  // 0~1 사이의 진행도 업데이트 (ease-out 느낌을 주기 위해 천천히 증가)
+  onboardingAnimProgress += 0.12;
+  if (onboardingAnimProgress > 1) onboardingAnimProgress = 1;
+
+  // ease-out cubic
+  const t = 1 - Math.pow(1 - onboardingAnimProgress, 3);
+
+  // 시작 시점의 오프셋에서 목표 페이지까지 부드럽게 이동
+  const targetOffset = -(onboardingTargetPage - onboardingCurrentPage) * pageWidth;
+  onboardingOffsetX = lerp(onboardingAnimFromOffset, targetOffset, t);
+
+  // 애니메이션이 거의 끝났으면 페이지를 확정하고 오프셋을 0으로 리셋
+  if (onboardingAnimProgress >= 0.999) {
+    onboardingCurrentPage = onboardingTargetPage;
+    onboardingOffsetX = 0;
+    onboardingIsAnimating = false;
+    onboardingAnimProgress = 0;
+    onboardingAnimFromOffset = 0;
   }
 }
 
@@ -3900,53 +3914,60 @@ function drawOnboarding() {
 
 // 온보딩 화면 포인터 이벤트 처리 (스와이프 감지)
 function handleOnboardingPointer(x, y, type) {
+  const pageCount = onboardingImages.length; // 마지막 페이지(시작 화면)까지 포함하려면 +1 고려
+
   if (type === "start") {
-    if (onboardingIsAnimating) return; // 애니메이션 중에는 스와이프 불가
+    // 스와이프 시작: 드래그 상태로 전환, 애니메이션은 즉시 중단
     onboardingIsDragging = true;
+    onboardingIsAnimating = false;
+    onboardingAnimProgress = 0;
     onboardingDragStartX = x;
     onboardingLastDragX = x;
     onboardingOffsetX = 0;
     onboardingDragStartTime = millis();
-  } else if (type === "move" && onboardingIsDragging) {
+    return;
+  }
+
+  if (type === "move") {
+    // 손가락 이동 중: 손가락 위치만큼 부드럽게 따라오기
+    if (!onboardingIsDragging) return;
     onboardingLastDragX = x;
-  } else if (type === "end" && onboardingIsDragging) {
+    onboardingOffsetX = x - onboardingDragStartX;
+    return;
+  }
+
+  if (type === "end") {
+    if (!onboardingIsDragging) return;
+    onboardingIsDragging = false;
+
     const dx = x - onboardingDragStartX;
-    const swipeThreshold = width * 0.15; // 화면 너비의 15% 이상 스와이프해야 이동 (더 민감하게)
-    const velocityThreshold = 0.3; // 속도 임계값
-    
-    // 스와이프 속도 계산
-    const swipeVelocity = Math.abs(dx) / (millis() - (onboardingDragStartTime || millis()));
-    
-    if (dx > swipeThreshold || (dx > 0 && swipeVelocity > velocityThreshold)) {
-      // 왼쪽에서 오른쪽으로 스와이프 -> 이전 페이지
-      if (onboardingCurrentPage > 0) {
-        onboardingTargetPage = onboardingCurrentPage - 1;
-        onboardingIsAnimating = true;
-        onboardingAnimProgress = 0;
-      } else {
-        // 첫 페이지에서는 원래 위치로 복귀
-        onboardingTargetPage = onboardingCurrentPage;
-        onboardingIsAnimating = true;
-        onboardingAnimProgress = 0;
-      }
-    } else if (dx < -swipeThreshold || (dx < 0 && swipeVelocity > velocityThreshold)) {
-      // 오른쪽에서 왼쪽으로 스와이프 -> 다음 페이지 또는 시작 화면
+    const dt = millis() - (onboardingDragStartTime || millis());
+
+    const swipeThreshold = 60;     // 이 이상 움직이면 스와이프로 인식
+    const velocityThreshold = 0.4; // 빠르게 튕긴 스와이프도 인식
+    const velocity = Math.abs(dx) / Math.max(dt, 1);
+
+    let nextPage = onboardingCurrentPage;
+
+    // 왼쪽으로 스와이프 → 다음 페이지
+    if (dx < -swipeThreshold || (dx < -20 && velocity > velocityThreshold)) {
       if (onboardingCurrentPage < onboardingImages.length) {
-        onboardingTargetPage = onboardingCurrentPage + 1;
-        onboardingIsAnimating = true;
-        onboardingAnimProgress = 0;
+        nextPage = onboardingCurrentPage + 1;
       } else {
         // 마지막 페이지에서 오른쪽에서 왼쪽으로 스와이프 시 시작 화면으로
         mode = 0;
+        return;
       }
-    } else {
-      // 스와이프가 충분하지 않으면 원래 위치로 복귀
-      onboardingTargetPage = onboardingCurrentPage;
-      onboardingIsAnimating = true;
-      onboardingAnimProgress = 0;
     }
-    
-    onboardingIsDragging = false;
-    onboardingDragStartTime = null;
+    // 오른쪽으로 스와이프 → 이전 페이지
+    else if (dx > swipeThreshold || (dx > 20 && velocity > velocityThreshold)) {
+      nextPage = Math.max(0, onboardingCurrentPage - 1);
+    }
+
+    // 페이지가 바뀌지 않는다면 현재 페이지로 스냅백
+    onboardingTargetPage = nextPage;
+    onboardingAnimFromOffset = onboardingOffsetX;
+    onboardingAnimProgress = 0;
+    onboardingIsAnimating = true;
   }
 }
