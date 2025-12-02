@@ -24,8 +24,8 @@ const lensRadius = lensDiameter / 2;
 let isDrawing = false;
 let drawingPath = [];
 let bubbles = []; // 저장된 버블들
-const minCircleRadius = 50; // 최소 원 반지름
-const circleTolerance = 0.3; // 원 인식 허용 오차 (0-1)
+const minCircleRadius = 20; // 최소 원 반지름 (더 작은 원 허용)
+const circleTolerance = 0.45; // 원 인식 허용 오차 (0-1, 더 관대하게)
 let fixedLensPosition = null; // 고정된 돋보기 위치 (버블 생성 시 설정) { x, y, radius, startRadius, targetRadius, progress }
 let lensAnimation = null; // 렌즈 터짐 애니메이션 상태 { x, y, scale, opacity, rotation, progress }
 let hasDragged = false; // 드래그 여부 추적
@@ -723,15 +723,18 @@ function touchMoved() {
 
 // 경로에서 원 인식
 function detectCircle(path) {
-  if (path.length < 10) return null;
+  // 경로 길이 요구사항 완화 (작은 원도 인식 가능하도록)
+  if (path.length < 8) return null;
 
   // 시작점과 끝점이 가까운지 확인
   const start = path[0];
   const end = path[path.length - 1];
   const distanceToStart = dist(end.x, end.y, start.x, start.y);
 
-  // 시작점과 끝점이 너무 멀면 원이 아님
-  if (distanceToStart > 100) return null;
+  // 시작점과 끝점이 너무 멀면 원이 아님 (더 큰 원 허용을 위해 증가)
+  // 화면 대각선 길이의 30%까지 허용 (더 관대하게)
+  const maxDistance = Math.min(width, height) * 0.3;
+  if (distanceToStart > maxDistance) return null;
 
   // 중심점 계산 (모든 점의 평균)
   let sumX = 0,
@@ -745,23 +748,40 @@ function detectCircle(path) {
 
   // 평균 반지름 계산
   let sumRadius = 0;
+  const radii = [];
   for (let p of path) {
-    sumRadius += dist(p.x, p.y, centerX, centerY);
+    const r = dist(p.x, p.y, centerX, centerY);
+    radii.push(r);
+    sumRadius += r;
   }
   const avgRadius = sumRadius / path.length;
 
   if (avgRadius < minCircleRadius) return null;
 
   // 원형인지 확인 (각 점이 중심으로부터 비슷한 거리에 있는지)
+  // Outlier 제거를 위한 중앙값 기반 계산 (더 관대한 인식)
+  radii.sort((a, b) => a - b);
+  const medianRadius = radii[Math.floor(radii.length / 2)];
+  
+  // 중앙값 기준으로 variance 계산 (outlier 영향 감소)
   let variance = 0;
+  let validPoints = 0;
   for (let p of path) {
     const r = dist(p.x, p.y, centerX, centerY);
-    variance += Math.abs(r - avgRadius);
+    // 중앙값의 50% 이상 차이나는 점은 outlier로 간주하고 제외
+    if (Math.abs(r - medianRadius) < medianRadius * 0.5) {
+      variance += Math.abs(r - medianRadius);
+      validPoints++;
+    }
   }
-  const avgVariance = variance / path.length;
-  const normalizedVariance = avgVariance / avgRadius;
+  
+  // 유효한 점이 너무 적으면 실패
+  if (validPoints < path.length * 0.7) return null;
+  
+  const avgVariance = variance / validPoints;
+  const normalizedVariance = avgVariance / (medianRadius || avgRadius);
 
-  // 허용 오차 내에 있으면 원으로 인식
+  // 허용 오차 내에 있으면 원으로 인식 (더 관대한 tolerance)
   if (normalizedVariance < circleTolerance) {
     return {
       x: centerX,
