@@ -1591,8 +1591,8 @@ async function loadBubbleDataFromJSON(retryCount = 0) {
     } else {
       // 최대 재시도 횟수 초과 시 폴백 데이터 사용
       console.error("[Gallery] JSON 로드 실패: 최대 재시도 횟수 초과. 폴백 모드로 전환합니다.");
-      bubbleData = [];
-      imageFiles = [];
+    bubbleData = [];
+    imageFiles = [];
       isInitializing = false;
       
       // 사용자에게 에러 표시 (간단한 메시지)

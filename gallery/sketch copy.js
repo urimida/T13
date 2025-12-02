@@ -912,9 +912,9 @@ function drawFullscreen() {
     // 하트 버튼을 누르기 전까지 안내 텍스트 표시 (추천 버블이 없을 때만)
     const hasRecommendedBubbles = selectedTag !== null && recommendedBubbles.length > 0 && anim > 0.5;
     if (!hasRecommendedBubbles) {
-      const currentBubbleIsFavorite = favoriteBubbles.includes(fullscreenIndex);
-      if (!currentBubbleIsFavorite && !dragging && anim > 0.5) {
-        drawFullscreenInstructionText(anim);
+    const currentBubbleIsFavorite = favoriteBubbles.includes(fullscreenIndex);
+    if (!currentBubbleIsFavorite && !dragging && anim > 0.5) {
+      drawFullscreenInstructionText(anim);
       }
     }
   }
@@ -1702,8 +1702,8 @@ function pointerMove(x, y) {
       if (!fullscreenImageDragging) {
         fullscreenImageDragging = true;
         // 드래그 시작 시 초기화
-        fullscreenImageDragStart.x = x;
-        fullscreenImageDragStart.y = y;
+      fullscreenImageDragStart.x = x;
+      fullscreenImageDragStart.y = y;
       }
       
       // 프레임 간 상대 이동 사용 (대각선 이동 부드럽게 처리)

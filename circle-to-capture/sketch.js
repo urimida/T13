@@ -24,7 +24,8 @@ const lensRadius = lensDiameter / 2;
 let isDrawing = false;
 let drawingPath = [];
 let bubbles = []; // 저장된 버블들
-const minCircleRadius = 20; // 최소 원 반지름 (더 작은 원 허용)
+// 태블릿/모바일 감지 함수가 정의되기 전에 사용할 수 있도록 전역 변수로 설정
+let minCircleRadius = 20; // 최소 원 반지름 (기본값, 태블릿에서는 더 작게 조정됨)
 const circleTolerance = 0.45; // 원 인식 허용 오차 (0-1, 더 관대하게)
 let fixedLensPosition = null; // 고정된 돋보기 위치 (버블 생성 시 설정) { x, y, radius, startRadius, targetRadius, progress }
 let lensAnimation = null; // 렌즈 터짐 애니메이션 상태 { x, y, scale, opacity, rotation, progress }
@@ -281,23 +282,30 @@ function setup() {
   // 태블릿/모바일 최적화
   const isMobile = isMobileOrTablet();
   if (isMobile) {
-    pixelDensity(1); // 태블릿에서는 pixelDensity 강제로 1
+    // 태블릿에서도 화질 유지를 위해 pixelDensity를 높게 설정
+    // displayDensity()를 사용하여 디바이스의 실제 픽셀 밀도 사용
+    const deviceDensity = displayDensity();
+    pixelDensity(Math.min(deviceDensity, 2)); // 최대 2로 제한하여 성능과 화질 균형
     frameRate(30); // 태블릿에서는 30fps로 제한
+    // 태블릿에서는 더 작은 원도 인식 가능하도록 설정
+    minCircleRadius = 12;
   } else {
+    pixelDensity(displayDensity()); // 데스크톱에서는 디바이스 밀도 사용
     frameRate(45); // 데스크톱에서는 45fps
   }
 
   overlay = createGraphics(windowWidth, windowHeight);
+  overlay.pixelDensity(pixelDensity()); // 메인 캔버스와 동일한 픽셀 밀도 사용
   overlay.clear(); // 완전 투명
 
-  // 렌즈용 오프스크린 버퍼 생성 (저해상도로 성능 최적화)
-  // 태블릿에서는 더 낮은 해상도 사용
-  const bufferScale = isMobile ? 0.4 : 0.5;
+  // 렌즈용 오프스크린 버퍼 생성 (화질 개선을 위해 해상도 증가)
+  // 태블릿에서도 더 높은 해상도 사용하여 화질 유지
+  const bufferScale = isMobile ? 0.6 : 0.7; // 0.4/0.5에서 0.6/0.7로 증가
   lensBuffer = createGraphics(
     Math.ceil(windowWidth * bufferScale),
     Math.ceil(windowHeight * bufferScale)
   );
-  lensBuffer.pixelDensity(1);
+  lensBuffer.pixelDensity(pixelDensity()); // 메인 캔버스와 동일한 픽셀 밀도 사용
 
   // 캐시 초기화
   lastCanvasSize = { w: windowWidth, h: windowHeight };
@@ -308,18 +316,27 @@ function setup() {
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
 
+  // 태블릿/모바일 감지
+  const isMobile = isMobileOrTablet();
+  if (isMobile) {
+    const deviceDensity = displayDensity();
+    pixelDensity(Math.min(deviceDensity, 2)); // 최대 2로 제한
+  } else {
+    pixelDensity(displayDensity());
+  }
+
   // overlay도 캔버스와 동일 크기로 재생성
   overlay = createGraphics(windowWidth, windowHeight);
+  overlay.pixelDensity(pixelDensity()); // 메인 캔버스와 동일한 픽셀 밀도 사용
   overlay.clear();
 
-  // 렌즈 버퍼도 재생성 (태블릿 최적화 적용)
-  const isMobile = isMobileOrTablet();
-  const bufferScale = isMobile ? 0.4 : 0.5;
+  // 렌즈 버퍼도 재생성 (화질 개선을 위해 해상도 증가)
+  const bufferScale = isMobile ? 0.6 : 0.7; // 0.4/0.5에서 0.6/0.7로 증가
   lensBuffer = createGraphics(
     Math.ceil(windowWidth * bufferScale),
     Math.ceil(windowHeight * bufferScale)
   );
-  lensBuffer.pixelDensity(1);
+  lensBuffer.pixelDensity(pixelDensity()); // 메인 캔버스와 동일한 픽셀 밀도 사용
 
   // 캐시 무효화
   lastCanvasSize = { w: windowWidth, h: windowHeight };
