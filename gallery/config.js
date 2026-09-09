@@ -26,7 +26,7 @@ const RENDER = {
   centerInfluenceRadius: 200,
   alphaFadeRadius: 420,
   minAlpha: 0.28,
-  idleFPS: 30,
+  idleFPS: 24,
 };
 
 const INTERACT = {
@@ -43,14 +43,15 @@ const RECOMM_BUBBLE_CONFIG = {
 };
 
 const PERFORMANCE_CONFIG = {
-  imageCheckInterval: 150,
-  maxImageQueueLength: 60,
-  maxDraw: 140,
+  imageCheckInterval: 200,
+  maxImageQueueLength: 40,
+  maxDraw: 60,
   tabletGCInterval: 20000,
   desktopGCInterval: 30000,
   tabletSoftReset: 120000,
   desktopSoftReset: 180000,
-  maxSimulImageLoads: 5,
+  maxSimulImageLoads: 3,
+  maxImageCacheSize: 48,
 };
 
 const RECO_COUNT = 3;

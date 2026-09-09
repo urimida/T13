@@ -10,6 +10,7 @@ class BubbleManager {
     this.worldW = 0;
     this.worldH = 0;
     this._centerBubble = null;
+    this._drawList = []; // 재사용 버퍼 (GC 방지)
   }
 
   build(dataList) {
@@ -50,23 +51,28 @@ class BubbleManager {
   updateAndDraw(panController) {
     if (!panController) return;
 
-    // culling radius
+    // culling radius (제곱 거리로 비교해 sqrt 최소화)
     const cullR = maxDist * 1.1;
     const cullR2 = cullR * cullR;
+    const invMaxDist = maxDist > 0 ? 1 / maxDist : 0;
 
-    let drawCount = 0;
     let centerCandidate = null;
     let centerBestD2 = Infinity;
+    const drawList = this._drawList;
+    drawList.length = 0;
 
-    for (let i = 0; i < this.bubbles.length; i++) {
-      const b = this.bubbles[i];
+    const camX = panController.camX;
+    const camY = panController.camY;
+    const worldW = this.worldW;
+    const worldH = this.worldH;
+    const bubbles = this.bubbles;
+    const app = { centerX, centerY };
 
-      // 항상 모든 버블 표시 (필터링 없음)
-      // filter 제거됨
+    for (let i = 0; i < bubbles.length; i++) {
+      const b = bubbles[i];
 
-      // nearest torus relative pos
-      const relX = wrapDelta(b.x - panController.camX, this.worldW);
-      const relY = wrapDelta(b.y - panController.camY, this.worldH);
+      const relX = wrapDelta(b.x - camX, worldW);
+      const relY = wrapDelta(b.y - camY, worldH);
 
       const d2 = relX * relX + relY * relY;
       if (d2 > cullR2) {
@@ -75,30 +81,27 @@ class BubbleManager {
       }
 
       const distFromCenter = Math.sqrt(d2);
-      const normalizedDist = Math.min(distFromCenter / maxDist, 1);
+      const normalizedDist = Math.min(distFromCenter * invMaxDist, 1);
 
       b.visible = true;
       b.isCenter = false;
+      b._d2 = d2;
+      b.updateDisplay(app, relX, relY, distFromCenter, normalizedDist);
 
-      b.updateDisplay({ centerX, centerY }, relX, relY, distFromCenter, normalizedDist);
-
-      // request visible image lazy-load
-      if (b.imgPath && imageLoader) {
+      // 미로드 이미지만 요청 (매 프레임 큐 오염 방지)
+      if (b.imgPath && imageLoader && !imageLoader.has(b.imgPath)) {
         imageLoader.request(b.imgPath, true);
+      }
+      if (b.imgPath && imageLoader) {
         imageLoader.markVisible(b.imgPath);
       }
 
-      // choose center bubble
       if (d2 < centerBestD2) {
         centerBestD2 = d2;
         centerCandidate = b;
       }
 
-      // draw limit
-      if (drawCount < PERFORMANCE_CONFIG.maxDraw) {
-        b.draw();
-        drawCount++;
-      }
+      drawList.push(b);
     }
 
     if (centerCandidate) {
@@ -108,7 +111,17 @@ class BubbleManager {
       this._centerBubble = null;
     }
 
-    // update loader
+    // 가까운 버블 우선 그리기 (maxDraw 한도 내)
+    const maxDraw = PERFORMANCE_CONFIG.maxDraw;
+    if (drawList.length > maxDraw) {
+      drawList.sort((a, b) => a._d2 - b._d2);
+    }
+
+    const n = Math.min(drawList.length, maxDraw);
+    for (let i = 0; i < n; i++) {
+      drawList[i].draw();
+    }
+
     if (imageLoader) imageLoader.update(performance.now());
   }
 
@@ -116,5 +129,3 @@ class BubbleManager {
     return this._centerBubble || null;
   }
 }
-
-

@@ -88,43 +88,40 @@ class ImageLoader {
   }
 
   gc(protectedPaths) {
-    // LRU 방식: 최근 6시간 안 본 것만 삭제 (전시용 안정성 강화)
-    // 확대 모드에 있는 이미지는 항상 보존
+    // LRU: 원본 이미지 캐시 상한을 낮춰 메모리 압박·GC 스파이크 완화
+    // (스프라이트 캐시에 합성본이 있으므로 원본을 오래 붙잡지 않음)
     const now = millis();
     let deletedCount = 0;
-    const maxCacheSize = 200; // 최대 캐시 크기 제한 (메모리 관리)
+    const maxCacheSize = PERFORMANCE_CONFIG.maxImageCacheSize || 48;
     
-    // 캐시 크기가 너무 크면 오래된 것부터 삭제
     if (this.cache.size > maxCacheSize) {
-      const entries = Array.from(this.cache.entries()).map(([path, img]) => ({
+      const entries = Array.from(this.cache.keys()).map((path) => ({
         path,
-        img,
         seen: this.lastSeen.get(path) || 0
       }));
-      entries.sort((a, b) => a.seen - b.seen); // 오래된 것부터 정렬
+      entries.sort((a, b) => a.seen - b.seen);
       
-      const toDelete = entries.slice(0, this.cache.size - maxCacheSize);
-      for (const entry of toDelete) {
-        // 보호된 이미지는 삭제하지 않음
-        if (protectedPaths && protectedPaths.has(entry.path)) continue;
-        this.cache.delete(entry.path);
-        this.lastSeen.delete(entry.path);
+      const overflow = this.cache.size - maxCacheSize;
+      let removed = 0;
+      for (let i = 0; i < entries.length && removed < overflow; i++) {
+        const path = entries[i].path;
+        if (protectedPaths && protectedPaths.has(path)) continue;
+        this.cache.delete(path);
+        this.lastSeen.delete(path);
         deletedCount++;
+        removed++;
       }
     }
     
-    // 6시간 이상 보지 않은 이미지 삭제
+    // 2분 이상 비가시 이미지는 원본 해제 (스프라이트는 유지)
     for (const [path] of this.cache) {
-      // 확대 모드에 있는 이미지는 절대 삭제하지 않음
       if (protectedPaths && protectedPaths.has(path)) {
-        // 확대 모드 이미지는 항상 최신으로 표시
         this.lastSeen.set(path, now);
         continue;
       }
       
       const seen = this.lastSeen.get(path) || 0;
-      // 6시간(21600000ms) 미가시 = 삭제 (전시용 안정성 강화)
-      if (now - seen > 21600000) { // 6시간 = 21600000ms
+      if (now - seen > 600000) { // 10분 비가시
         this.cache.delete(path);
         this.lastSeen.delete(path);
         deletedCount++;
