@@ -33,9 +33,10 @@ class Bubble {
     this.visible = true;
     this.filtered = true;
     
-    // 애니메이션 시드 (sin만 사용 — noise 제거로 CPU 절약)
-    this.breathSpeed = 0.6 + (i % 7) * 0.08;
-    this.pulseOffset = (i * 0.37) % (Math.PI * 2);
+    // 애니메이션 시드
+    this.breathSpeed = random(0.6, 1.2);
+    this.pulseOffset = random(0, TWO_PI);
+    this.noiseOffset = random(0, 1000);
   }
 
   updateDisplay(app, relX, relY, distFromCenter, normalizedDist) {
@@ -60,9 +61,11 @@ class Bubble {
       sizeFactor = lerp(1.36, 0.68, farProg);
     }
 
-    // breathing only (cheap sin) — Perlin noise 제거
+    // breathing + noise jitter
+    let animFactor = 1.0;
     const t = appTime;
-    const animFactor = lerp(0.96, 1.04, (Math.sin(t * this.breathSpeed + this.pulseOffset) + 1) * 0.5);
+    animFactor *= lerp(0.95, 1.05, (sin(t * this.breathSpeed + this.pulseOffset) + 1) * 0.5);
+    animFactor *= lerp(0.98, 1.02, noise(this.noiseOffset + t * 0.2));
 
     const baseR = RENDER.baseBubbleRadius;
     const r = baseR * sizeFactor * animFactor;
@@ -84,48 +87,59 @@ class Bubble {
     if (!this.visible) return;
 
     const img = this.imgPath && imageLoader ? imageLoader.get(this.imgPath) : null;
-    const capImg = uiImages ? uiImages["bubble-cap.png"] : null;
-    const drawY = this.displayY + (this.isCenter ? -20 : 0);
 
-    // 스프라이트 캐시: clip + cap을 오프스크린에서 1회만 합성
-    if (spriteCache) {
-      const sprite = spriteCache.getBubbleSprite(
-        this.imgPath,
-        img,
-        this.displayR,
-        this.hueSeed,
-        capImg
-      );
-      if (sprite) {
-        push();
-        translate(this.displayX, drawY);
-        drawingContext.globalAlpha = this.alpha;
-        imageMode(CENTER);
-        image(sprite, 0, 0, this.displayR * 2, this.displayR * 2);
-        drawingContext.globalAlpha = 1;
-
-        if (this.isCenter) {
-          this._drawCenterAccent();
-        }
-        pop();
-        return;
-      }
-    }
-
-    // 폴백 (캐시 미준비 시)
     push();
-    translate(this.displayX, drawY);
+    translate(this.displayX, this.displayY + (this.isCenter ? -20 : 0));
     noStroke();
 
+    // 주인공 버블 후광 (흰색 후광 + 반짝이는 효과)
+    if (this.isCenter) {
+      const t = appTime;
+      const glowRadius = this.displayR * 2.2;
+      const glowLayers = 5;
+      
+      // 기본 흰색 후광
+      for (let i = glowLayers; i > 0; i--) {
+        const layerRadius = glowRadius * (i / glowLayers);
+        const baseAlpha = 0.25 / glowLayers;
+        const sparkle = 0.15 * Math.sin(t * 2 + this.pulseOffset);
+        const layerAlpha = (baseAlpha + sparkle) * this.alpha;
+        fill(255, 255, 255, Math.max(0, Math.min(255, layerAlpha * 255)));
+        circle(0, 0, layerRadius * 2);
+      }
+      
+      // 추가 반짝이는 하이라이트
+      const sparkleAngle = t * 1.5 + this.pulseOffset;
+      const sparkleDist = this.displayR * 1.3;
+      const sparkleX = Math.cos(sparkleAngle) * sparkleDist;
+      const sparkleY = Math.sin(sparkleAngle) * sparkleDist;
+      const sparkleSize = this.displayR * 0.4;
+      const sparkleAlpha = (0.6 + 0.4 * Math.sin(t * 3)) * this.alpha;
+      
+      fill(255, 255, 255, sparkleAlpha * 255);
+      drawingContext.shadowBlur = sparkleSize * 2;
+      drawingContext.shadowColor = "rgba(255, 255, 255, 0.8)";
+      circle(sparkleX, sparkleY, sparkleSize);
+      
+      const sparkleX2 = Math.cos(sparkleAngle + Math.PI) * sparkleDist;
+      const sparkleY2 = Math.sin(sparkleAngle + Math.PI) * sparkleDist;
+      circle(sparkleX2, sparkleY2, sparkleSize * 0.7);
+      
+      drawingContext.shadowBlur = 0;
+    }
+
+    // base - 이미지 표시
     if (img) {
       drawingContext.save();
       drawingContext.beginPath();
       drawingContext.arc(0, 0, this.displayR, 0, Math.PI * 2);
       drawingContext.clip();
       imageMode(CENTER);
+      
       const imgRatio = img.width / img.height;
       const diameter = this.displayR * 2;
       let drawW, drawH;
+      
       if (imgRatio > 1) {
         drawH = diameter;
         drawW = imgRatio * drawH;
@@ -133,6 +147,7 @@ class Bubble {
         drawW = diameter;
         drawH = drawW / imgRatio;
       }
+      
       drawingContext.globalAlpha = this.alpha;
       image(img, 0, 0, drawW, drawH);
       drawingContext.restore();
@@ -143,34 +158,27 @@ class Bubble {
       colorMode(RGB, 255);
     }
 
-    if (capImg && capImg.width > 2) {
+    // gloss highlight - 주인공 버블만
+    if (this.isCenter) {
+      fill(255, 255 * 0.25 * this.alpha);
+      circle(-this.displayR * 0.35, -this.displayR * 0.35, this.displayR * 0.9);
+      fill(255, 255 * 0.12 * this.alpha);
+      circle(this.displayR * 0.15, this.displayR * 0.15, this.displayR * 1.2);
+    }
+
+    // 모든 버블에 캡 씌우기
+    const bubbleCapImg = uiImages["bubble-cap.png"];
+    if (bubbleCapImg && bubbleCapImg.width > 2) {
       imageMode(CENTER);
       drawingContext.globalAlpha = this.alpha;
-      image(capImg, 0, 0, this.displayR * 2, this.displayR * 2);
-      drawingContext.globalAlpha = 1;
+      const s = (this.displayR * 2) / bubbleCapImg.width;
+      push();
+      scale(s);
+      image(bubbleCapImg, 0, 0);
+      pop();
     }
 
-    if (this.isCenter) {
-      this._drawCenterAccent();
-    }
     pop();
-  }
-
-  // 센터 버블 강조 — shadowBlur 없이 저비용 하이라이트만
-  _drawCenterAccent() {
-    const t = appTime;
-    noStroke();
-    fill(255, 255 * 0.22 * this.alpha);
-    circle(-this.displayR * 0.35, -this.displayR * 0.35, this.displayR * 0.9);
-    fill(255, 255 * 0.1 * this.alpha);
-    circle(this.displayR * 0.15, this.displayR * 0.15, this.displayR * 1.15);
-
-    const sparkleAngle = t * 1.5 + this.pulseOffset;
-    const sparkleDist = this.displayR * 1.25;
-    const sparkleAlpha = (0.45 + 0.25 * Math.sin(t * 3)) * this.alpha;
-    fill(255, sparkleAlpha * 255);
-    circle(Math.cos(sparkleAngle) * sparkleDist, Math.sin(sparkleAngle) * sparkleDist, this.displayR * 0.28);
-    circle(Math.cos(sparkleAngle + Math.PI) * sparkleDist, Math.sin(sparkleAngle + Math.PI) * sparkleDist, this.displayR * 0.18);
   }
   
   // 호환성을 위한 drawAt 메서드

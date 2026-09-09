@@ -112,13 +112,10 @@ function preload() {
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
-  // HiDPI x2는 필레이트 4배 → 전시/태블릿에서 심각한 병목. 1로 고정.
-  pixelDensity(1);
+  const isHiDpi = window.devicePixelRatio && window.devicePixelRatio > 1;
+  pixelDensity(isHiDpi ? 2 : 1);
   drawingContext.imageSmoothingEnabled = true;
-  drawingContext.imageSmoothingQuality = "medium";
-  const isTablet = Math.min(windowWidth, windowHeight) < 900 || width < 1200;
-  frameRate(isTablet ? 30 : 45);
-  if (isTablet) PERFORMANCE_CONFIG.maxDraw = 45;
+  drawingContext.imageSmoothingQuality = "high";
   textFont(fontPretendard);
   textAlign(CENTER, CENTER);
   spriteCache = new SpriteCache();
@@ -199,9 +196,8 @@ function buildTagIndex() {
 
 function initBackground() {
   bgBuffer = createGraphics(width, height);
-  bgBuffer.pixelDensity(1);
   bgBuffer.drawingContext.imageSmoothingEnabled = true;
-  bgBuffer.drawingContext.imageSmoothingQuality = "medium";
+  bgBuffer.drawingContext.imageSmoothingQuality = "high";
   
   const bgImg = uiImages["background"];
   if (bgImg && bgImg.width > 0) {
@@ -2310,10 +2306,11 @@ function hitTestGridBubble(x, y) {
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
-  pixelDensity(1); // setup과 동일 — HiDPI x2 금지
-  recalcLayout();
+  // 익스플로어와 동일: 고해상도 디스플레이에서 픽셀 밀도 2배로 설정
+  const isHiDpi = window.devicePixelRatio && window.devicePixelRatio > 1;
+  pixelDensity(isHiDpi ? 2 : 1);
+  recalcLayout(); // 익스플로어와 동일
   initBackground();
-  if (spriteCache) spriteCache.invalidateAll();
   
   // 이름 입력 input 요소는 CSS transform으로 중앙 고정되어 있어서 위치 업데이트 불필요
 }
